@@ -70,8 +70,10 @@ const send = (channel: string, payload: unknown) => win?.webContents.send(channe
 // ---- Coaching overlay: a transparent, click-through window over the League replay ----
 let overlay: BrowserWindow | null = null;
 let overlayMatch: string | null = null;
+let overlayRender: Record<string, unknown> | null = null;
 
-function openOverlay(matchId: string) {
+async function openOverlay(matchId: string) {
+  overlayRender = await (await league()).getRender();
   overlay?.destroy();
   overlayMatch = matchId;
   // League runs borderless on the primary display; cover it edge to edge.
@@ -107,8 +109,13 @@ function openOverlay(matchId: string) {
   win?.minimize();
 }
 
-function closeOverlay(finished: boolean) {
+async function closeOverlay(finished: boolean) {
   const matchId = overlayMatch;
+  // Put League's camera, fog and HUD back the way they were.
+  const lc = await league();
+  await lc.setPaused(true);
+  if (overlayRender) await lc.setRender(overlayRender);
+  overlayRender = null;
   overlay?.destroy();
   overlay = null;
   overlayMatch = null;

@@ -192,6 +192,13 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     };
   }, [live, render]);
 
+  // A panel that unmounts under the pointer never sends mouseleave: start each phase clean.
+  useEffect(() => {
+    if (!live) return;
+    hits = 0;
+    coach().overlayInteractive?.(false);
+  }, [phase, idx, live]);
+
   // ---- Chapter flow ----
   const startChapter = useCallback(
     (i: number) => {
