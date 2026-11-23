@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, Notification, protocol } from "electron";
 import { promises as fs } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
@@ -6,7 +6,8 @@ import { buildReport } from "../core/analysis";
 import { applyEvent, EMPTY_PROGRESS, ProgressEvent, ProgressState } from "../core/progress";
 import { parseRiotId, RiotClient, SR_QUEUES } from "../core/riot";
 import type { GameReport } from "../core/types";
-import { LeagueClient } from "./league";
+import { gameIdOf, LeagueClient } from "./league";
+import { PostGameWatcher } from "./postgame";
 import { JsonStore, Settings } from "./store";
 import { listVods, matchVod } from "./vod";
 
@@ -15,6 +16,14 @@ let store: JsonStore;
 let reports: GameReport[] = [];
 let progressState: ProgressState = EMPTY_PROGRESS;
 let recordingCancelled = false;
+let watcher: PostGameWatcher | null = null;
+// Started at Windows sign-in: stay hidden until a review is ready.
+const startHidden = process.argv.includes("--hidden");
+
+// One copy only, so a second launch (or launch at sign-in plus a manual open) doesn't
+// run two game watchers.
+if (!app.requestSingleInstanceLock()) app.quit();
+app.on("second-instance", () => focusWindow());
 
 // Local media (recorded clips, linked VODs) is served through lcmedia://file/<encoded path>
 // so the sandboxed page never gets general file access.
@@ -38,7 +47,7 @@ function createWindow() {
     icon: path.join(__dirname, "../../build/icon.png"),
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
   });
-  win.once("ready-to-show", () => win?.show());
+  win.once("ready-to-show", () => !startHidden && win?.show());
   const dev = process.env.VITE_DEV_SERVER_URL;
   if (dev) win.loadURL(dev);
   else win.loadFile(path.join(__dirname, "../../dist-renderer/index.html"));
@@ -46,7 +55,39 @@ function createWindow() {
 
 const send = (channel: string, payload: unknown) => win?.webContents.send(channel, payload);
 
-async function sync(): Promise<GameReport[]> {
+function focusWindow() {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  // Windows may refuse to move focus from another app; flash the taskbar button instead.
+  if (!win.isFocused()) win.flashFrame(true);
+}
+
+function applyLoginItem(s: Settings) {
+  if (process.platform !== "win32" && process.platform !== "darwin") return;
+  app.setLoginItemSettings({ openAtLogin: !!s.launchAtLogin, args: ["--hidden"] });
+}
+
+let syncing: Promise<GameReport[]> | null = null;
+/** Shared so a manual sync and the post-game sync never run at the same time. */
+function sync(): Promise<GameReport[]> {
+  syncing ??= runSync().finally(() => {
+    syncing = null;
+  });
+  return syncing;
+}
+
+async function matchPublished(gameId: string): Promise<boolean> {
+  const s = await store.readSettings();
+  if (!s.apiKey) throw new Error("Add your Riot API key in Settings so games can sync.");
+  const { gameName, tagLine } = parseRiotId(s.riotId);
+  const riot = new RiotClient(s.apiKey.trim(), s.region, store.cache());
+  const ids = await riot.getMatchIds(await riot.getPuuid(gameName, tagLine), 5);
+  return ids.some((id) => gameIdOf(id) === gameId);
+}
+
+async function runSync(): Promise<GameReport[]> {
   const s = await store.readSettings();
   if (!s.apiKey) throw new Error("Add your Riot API key in Settings first.");
   const { gameName, tagLine } = parseRiotId(s.riotId);
@@ -129,7 +170,10 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("settings:get", () => store.readSettings());
-  ipcMain.handle("settings:set", (_e, s: Settings) => store.writeSettings(s));
+  ipcMain.handle("settings:set", async (_e, s: Settings) => {
+    await store.writeSettings(s);
+    applyLoginItem(s);
+  });
   ipcMain.handle("games:sync", async () => {
     try {
       return { ok: true, reports: await sync() };
@@ -185,10 +229,33 @@ app.whenReady().then(async () => {
     return res.canceled ? null : res.filePaths[0];
   });
 
+  // After each ranked game: sync, open the review, download the replay.
+  watcher = new PostGameWatcher({
+    settings: () => store.readSettings(),
+    league,
+    matchPublished,
+    sync,
+    status: (st) => send("postgame:status", st),
+    openReview: (matchId) => {
+      send("postgame:open", matchId);
+      focusWindow();
+      if (Notification.isSupported() && !win?.isFocused()) {
+        const n = new Notification({ title: "Your review is ready", body: "League Coach opened the review for the game you just played." });
+        n.on("click", focusWindow);
+        n.show();
+      }
+    },
+  });
+  handle("postgame:status", () => watcher?.status);
+  applyLoginItem(await store.readSettings());
+
   Menu.setApplicationMenu(null);
   createWindow();
+  watcher.start();
   app.on("activate", () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
+
+app.on("before-quit", () => watcher?.stop());
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

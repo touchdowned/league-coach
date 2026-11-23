@@ -1,4 +1,4 @@
-import { Film, FolderOpen, Gauge, KeyRound, Power } from "lucide-react";
+import { Film, FolderOpen, Gauge, KeyRound, Power, Zap } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { REGIONS } from "../../core/riot";
@@ -97,6 +97,29 @@ export function SettingsView({ value, onSave }: { value: Settings; onSave: (s: S
             </Button>
           </span>
           <small>If you record games with OBS or Outplayed, the app matches each video to its game.</small>
+        </label>
+
+        <h3><Zap size={14} /> After each ranked game</h3>
+        <label className="inline-action">
+          <div>
+            <strong>Open the review automatically</strong>
+            <small>When a ranked game ends, the app syncs it as soon as Riot publishes it (usually 1 to 5 minutes), opens its guided review and downloads the replay.</small>
+          </div>
+          <input type="checkbox" checked={s.autoReview} onChange={(e) => setS({ ...s, autoReview: e.target.checked })} />
+        </label>
+        <label className="inline-action">
+          <div>
+            <strong>Also open the replay in League</strong>
+            <small>Launches the replay once it has downloaded, unless you're already back in queue or champ select.</small>
+          </div>
+          <input type="checkbox" checked={s.autoLaunchReplay} disabled={!s.autoReview} onChange={(e) => setS({ ...s, autoLaunchReplay: e.target.checked })} />
+        </label>
+        <label className="inline-action">
+          <div>
+            <strong>Start with Windows</strong>
+            <small>Runs in the background from sign-in, so games are caught even if you didn't open the app. It shows itself when a review is ready.</small>
+          </div>
+          <input type="checkbox" checked={s.launchAtLogin} onChange={(e) => setS({ ...s, launchAtLogin: e.target.checked })} />
         </label>
 
         <h3><Gauge size={14} /> Review</h3>

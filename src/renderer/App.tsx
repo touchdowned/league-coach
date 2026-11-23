@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Brain, Clapperboard, Compass, LucideIcon, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
+import { Brain, CircleAlert, Clapperboard, Compass, LoaderCircle, LucideIcon, PlayCircle, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import type { GameReport } from "../core/types";
-import { coach, Settings, TaskProgress } from "./api";
+import { coach, PostGameStatus, Settings, TaskProgress } from "./api";
 import { PlayerCard, ProgressProvider, useProgress } from "./progress";
 import { Button, Skeleton } from "./ui";
 import { ChampionsView } from "./views/Champions";
@@ -38,7 +38,23 @@ function Shell() {
   const [games, setGames] = useState<GameReport[] | null>(null);
   const [reviewTarget, setReviewTarget] = useState<{ matchId: string; autoplay: boolean } | null>(null);
   const [sync, setSync] = useState<TaskProgress | null>(null);
+  const [postGame, setPostGame] = useState<PostGameStatus | null>(null);
   const { state: progress } = useProgress();
+
+  // After a ranked game the app syncs it on its own and asks to open its review.
+  useEffect(() => {
+    coach().postGameStatus().then((r) => r.ok && r.value && r.value.stage !== "idle" && setPostGame(r.value));
+    const offStatus = coach().onPostGameStatus(setPostGame);
+    const offOpen = coach().onPostGameOpen(async (matchId) => {
+      setGames(await coach().listGames());
+      openReview(matchId, true);
+      toast.success("Your review is ready", { description: "Starting with the moments that cost you the most." });
+    });
+    return () => {
+      offStatus();
+      offOpen();
+    };
+  }, []);
 
   useEffect(() => {
     Promise.all([coach().getSettings(), coach().listGames()]).then(([s, g]) => {
@@ -90,6 +106,13 @@ function Shell() {
           ))}
         </nav>
         <div className="rail-foot">
+          {postGame && postGame.stage !== "idle" && (
+            <PostGamePill
+              status={postGame}
+              onOpen={() => (postGame.matchId ? openReview(postGame.matchId, true) : undefined)}
+              onDismiss={() => setPostGame(null)}
+            />
+          )}
           {loading ? <Skeleton h={92} r={12} /> : <PlayerCard name={settings.riotId} />}
           <button className="sync" disabled={!!sync || !settings?.apiKey} onClick={runSync}>
             <span className="sync-fill" style={{ transform: `scaleX(${sync ? syncPct : 0})` }} />
@@ -126,6 +149,22 @@ function Shell() {
         )}
       </main>
     </div>
+  );
+}
+
+function PostGamePill({ status, onOpen, onDismiss }: { status: PostGameStatus; onOpen: () => void; onDismiss: () => void }) {
+  const ready = status.stage === "ready";
+  const failed = status.stage === "failed";
+  const Icon = ready ? PlayCircle : failed ? CircleAlert : LoaderCircle;
+  return (
+    <button
+      className={`postgame-pill ${status.stage}`}
+      onClick={ready ? onOpen : failed ? onDismiss : undefined}
+      title={ready ? "Open the review" : failed ? "Dismiss" : undefined}
+    >
+      <Icon size={15} className={!ready && !failed ? "spinning" : undefined} aria-hidden />
+      <span>{status.label}</span>
+    </button>
   );
 }
 

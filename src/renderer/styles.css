@@ -523,3 +523,19 @@ h4 { font-size: 11px; margin: 18px 0 8px; color: var(--muted); text-transform: u
 .moments-big b { font-size: 36px; font-weight: 800; letter-spacing: -0.03em; }
 .moments-big small { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .hero.tilt { margin-bottom: 16px; border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* Post-game status (after a ranked game ends) */
+.postgame-pill { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--hair-2); background: var(--surface-2); color: var(--text-2); font: inherit; font-size: 12.5px; text-align: left; line-height: 1.3; }
+.postgame-pill.ready { color: var(--text); border-color: var(--accent); cursor: pointer; }
+.postgame-pill.failed { cursor: pointer; }
+.postgame-pill .spinning { animation: spin 900ms linear infinite; color: var(--accent); flex: none; }
+.postgame-pill svg { flex: none; }
+label.inline-action { cursor: pointer; transition: background 160ms var(--ease-out); }
+label.inline-action:hover { background: var(--surface-3); }
+label.inline-action:has(input:disabled) { opacity: 0.5; cursor: default; }
+.inline-action input[type="checkbox"] { appearance: none; margin: 0; flex: none; width: 38px; height: 22px; border-radius: 99px; background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--hair-2); position: relative; cursor: inherit; transition: background 200ms var(--ease-out), box-shadow 200ms var(--ease-out); }
+.inline-action input[type="checkbox"]::before { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-2); transition: transform 200ms var(--ease-out), background 200ms var(--ease-out); }
+.inline-action input[type="checkbox"]:checked { background: var(--accent); box-shadow: none; }
+.inline-action input[type="checkbox"]:checked::before { transform: translateX(16px); background: var(--accent-ink); }
+.inline-action input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.form label.inline-action { display: flex; flex-direction: row; align-items: center; gap: 16px; }
