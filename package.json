@@ -12,7 +12,8 @@
     "start": "npm run build && npm run ensure-electron && electron .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "ensure-electron": "node scripts/ensure-electron.js"
+    "ensure-electron": "node scripts/ensure-electron.js",
+    "dist": "npm run build && electron-builder --win --publish never"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -23,6 +24,7 @@
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
     "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
     "typescript": "^5.9.0",
     "vite": "^7.2.0",
     "vitest": "^4.0.0",
@@ -30,10 +32,59 @@
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
+    "electron-updater": "^6.8.11",
     "lucide-react": "^1.77.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "sonner": "^2.0.8",
     "three": "^0.170.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/touchdowned/league-coach.git"
+  },
+  "author": "touchdowned",
+  "build": {
+    "appId": "com.touchdowned.leaguecoach",
+    "productName": "League Coach",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-renderer/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "League Coach",
+      "runAfterFinish": true,
+      "include": "build/installer.nsh",
+      "artifactName": "League-Coach-Setup-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "touchdowned",
+        "repo": "league-coach",
+        "releaseType": "release"
+      }
+    ]
   }
 }

@@ -1,15 +1,13 @@
-# Updates the installed League Coach (Start menu app) to the latest version of this branch.
+# Installs the latest League Coach from GitHub Releases.
+# You only need this once: after that the app updates itself every time new code is pushed.
 # Run from anywhere:  powershell -ExecutionPolicy Bypass -File C:\Users\This0\league-coach\scripts\update-installed.ps1
 $ErrorActionPreference = "Stop"
-$repo = Split-Path -Parent $PSScriptRoot
-Set-Location $repo
+$release = Invoke-RestMethod "https://api.github.com/repos/touchdowned/league-coach/releases/latest" -Headers @{ "User-Agent" = "league-coach-installer" }
+$asset = $release.assets | Where-Object { $_.name -like "League-Coach-Setup-*.exe" } | Select-Object -First 1
+if (-not $asset) { throw "No installer found on the latest release yet." }
+$setup = Join-Path $env:TEMP $asset.name
+Write-Host "Downloading $($asset.name)..."
+Invoke-WebRequest $asset.browser_download_url -OutFile $setup
 Get-Process "League Coach" -ErrorAction SilentlyContinue | Stop-Process
-git pull origin phase-1-match-review
-npm install
-npm run build
-npx --yes @electron/packager . "League Coach" --platform=win32 --arch=x64 --icon=build/icon.ico --out=release --overwrite --app-version=0.1.0 --win32metadata.ProductName="League Coach" --win32metadata.FileDescription="League Coach" --ignore="^/release" --ignore="^/src" --ignore="^/tests"
-$dest = Join-Path $env:LOCALAPPDATA "Programs\League Coach"
-New-Item -ItemType Directory -Force -Path $dest | Out-Null
-Copy-Item -Recurse -Force "release\League Coach-win32-x64\*" $dest
-Start-Process (Join-Path $dest "League Coach.exe")
-Write-Host "League Coach updated."
+Start-Process $setup -Wait
+Write-Host "League Coach $($release.tag_name) installed. It will keep itself up to date from now on."
