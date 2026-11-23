@@ -12,7 +12,8 @@ export function RoleView({ games }: { games: GameReport[] }) {
     <div className="page">
       <div className="page-head">
         <div>
-          <h1>Best role</h1>
+          <p className="eyebrow">Best role</p>
+          <h1>Where you climb best</h1>
           <p className="muted">Compared against typical Silver/Gold players in each role.</p>
         </div>
       </div>
@@ -32,7 +33,7 @@ export function RoleView({ games }: { games: GameReport[] }) {
           const p = buildProfile(games, r.role, 50);
           return (
             <div key={r.role} className={`card role-card ${r.role === v.best ? "best" : ""}`}>
-              <div className="card-head">
+              <div className="panel-head">
                 <h3>
                   {r.label} {r.role === v.best && <span className="pill good">Best</span>}
                 </h3>

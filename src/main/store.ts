@@ -7,9 +7,12 @@ export interface Settings {
   riotId: string;
   region: string;
   matchCount: number;
+  leagueDir: string;
+  vodDir: string;
+  autoAdvanceSec: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { apiKey: "", riotId: "", region: "NA", matchCount: 40 };
+export const DEFAULT_SETTINGS: Settings = { apiKey: "", riotId: "", region: "NA", matchCount: 40, leagueDir: "C:\\Riot Games\\League of Legends", vodDir: "", autoAdvanceSec: 14 };
 
 export class JsonStore {
   constructor(private dir: string) {}
@@ -43,6 +46,19 @@ export class JsonStore {
   async writeReports(reports: unknown[]): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
     await fs.writeFile(this.file("reports.json"), JSON.stringify(reports));
+  }
+
+  async readJson<T>(name: string, fallback: T): Promise<T> {
+    try {
+      return { ...fallback, ...JSON.parse(await fs.readFile(this.file(name), "utf8")) };
+    } catch {
+      return fallback;
+    }
+  }
+
+  async writeJson(name: string, value: unknown): Promise<void> {
+    await fs.mkdir(this.dir, { recursive: true });
+    await fs.writeFile(this.file(name), JSON.stringify(value));
   }
 
   /** Disk cache for match and timeline JSON. Matches never change, so no expiry. */

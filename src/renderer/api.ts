@@ -1,3 +1,4 @@
+import type { ProgressEvent, ProgressResult, ProgressState } from "../core/progress";
 import type { GameReport } from "../core/types";
 
 export interface Settings {
@@ -5,6 +6,31 @@ export interface Settings {
   riotId: string;
   region: string;
   matchCount: number;
+  leagueDir: string;
+  vodDir: string;
+  autoAdvanceSec: number;
+}
+
+export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+
+export type ReplayState =
+  | { kind: "client-closed" }
+  | { kind: "api-disabled" }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "can-download" }
+  | { kind: "downloading"; progress: number }
+  | { kind: "ready" }
+  | { kind: "open"; time: number; length: number; paused: boolean };
+
+export interface Vod {
+  url: string;
+  name: string;
+}
+
+export interface TaskProgress {
+  done: number;
+  total: number;
+  label: string;
 }
 
 export interface CoachApi {
@@ -12,7 +38,25 @@ export interface CoachApi {
   setSettings(s: Settings): Promise<void>;
   sync(): Promise<{ ok: true; reports: GameReport[] } | { ok: false; error: string }>;
   listGames(): Promise<GameReport[]>;
-  onProgress(cb: (p: { done: number; total: number; label: string }) => void): () => void;
+  onProgress(cb: (p: TaskProgress) => void): () => void;
+
+  getProgress(): Promise<ProgressState>;
+  progressEvent(e: ProgressEvent): Promise<ProgressResult>;
+
+  replayState(matchId: string): Promise<Result<ReplayState>>;
+  replayDownload(matchId: string): Promise<Result<void>>;
+  replayWatch(matchId: string): Promise<Result<void>>;
+  replaySeek(sec: number, paused: boolean): Promise<Result<boolean>>;
+  replayFollow(champion: string): Promise<Result<void>>;
+  replayEnableApi(): Promise<Result<void>>;
+  clipsList(matchId: string): Promise<Result<Record<string, string>>>;
+  clipsRecord(matchId: string, moments: number[]): Promise<Result<Record<string, string>>>;
+  clipsCancel(): Promise<Result<void>>;
+  onClipsProgress(cb: (p: TaskProgress) => void): () => void;
+
+  vodFind(matchId: string): Promise<Result<Vod | null>>;
+  vodPick(matchId: string): Promise<Result<Vod | null>>;
+  folderPick(): Promise<Result<string | null>>;
 }
 
 declare global {

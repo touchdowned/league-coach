@@ -5,7 +5,8 @@ teaches me league
 A personal, post-game League of Legends coach for Windows. It doesn't ask you to set goals: it reads your recent games, decides which single problem is costing you the most, tells you exactly what to do about it, and moves you to the next problem once your games show it's fixed. It's blunt on purpose.
 
 - **Coach**: your next step with evidence from your games, in-game rules and a pass/fail check per game; the full plan (now / next / fixed); a skill profile (farming, laning, survival, fighting, vision) scored against Silver/Gold; trends.
-- **Game reviews**: gold lead over time vs your lane opponent, where you died, and each mistake with what you were probably thinking and why that was wrong.
+- **Guided review**: press play and it walks through every mistake in a game (what happened, what you were probably thinking, why that was wrong), then rolls into the next unreviewed game. It downloads and opens the game's replay through the League client, jumps the replay to each moment, and can record each moment as a clip that plays inside the app. Linked mp4 recordings (OBS, Outplayed) play inline too.
+- **Feedback loop**: XP and levels, a daily streak, daily targets (3 moments, 10 puzzles), level-up and toast feedback.
 - **Puzzles**: endless decision puzzles. First the moments right before your own deaths, then generated drills.
 - **Champions**: your pool with win rate, gold lead and matchups, and a keep/drop verdict for each.
 - **Best role**: compares your roles and recommends one.
@@ -24,6 +25,10 @@ Everything runs after the game. The app never reads game memory or draws over a 
    ```
 3. In **Settings**, enter your Riot ID (`Name#TAG`), region and a Riot API key from [developer.riotgames.com](https://developer.riotgames.com). Development keys expire every 24 hours. Your key is stored only on your PC (in the app's user data folder), never in this repo.
 4. Press **Sync games**.
+
+### Replays
+
+Replay control uses League's built-in Replay API. Turn it on once from Settings or the review screen (adds `EnableReplayApi=1` to `Config/game.cfg`, keeping a backup). The League client must be open to download or open a replay; Riot only keeps replays for the current patch.
 
 For development with hot reload: `npm run dev`. Tests: `npm test`.
 

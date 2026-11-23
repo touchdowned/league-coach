@@ -23,14 +23,15 @@ export function ChampionsView({ games }: { games: GameReport[] }) {
     <div className="page">
       <div className="page-head">
         <div>
-          <h1>Champion pool</h1>
+          <p className="eyebrow">Champions</p>
+          <h1>Your champion pool</h1>
           <p className="muted">
             {stats.length} champions over {games.length} games. Most climbers stick to 2 or 3 per role.
           </p>
         </div>
       </div>
       <div className="grid-2 wide-left">
-        <div className="card flush">
+        <div className="panel flush">
           <table className="table">
             <thead>
               <tr>
@@ -81,8 +82,8 @@ export function ChampionsView({ games }: { games: GameReport[] }) {
           </table>
         </div>
         {sel && (
-          <div className="card">
-            <div className="card-head">
+          <div className="panel">
+            <div className="panel-head">
               <span className="cell-champ">
                 <ChampIcon name={sel.champion} size={40} />
                 <h3>{sel.champion}</h3>

@@ -248,12 +248,12 @@ export function ResultDots({ results, labels }: { results: (boolean | null)[]; l
 
 export function MapBackdrop({ size }: { size: number }) {
   const k = size / 100;
-  const lane = { fill: "none", stroke: "#3a4658", strokeWidth: 3 * k, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  const lane = { fill: "none", stroke: "#2c3646", strokeWidth: 2 * k, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   return (
     <g className="rift">
       <rect width={size} height={size} fill="#132019" />
       {/* river */}
-      <path d={`M${4 * k},${4 * k} L${96 * k},${96 * k}`} stroke="#1d3a4a" strokeWidth={6 * k} strokeLinecap="round" />
+      <path d={`M${4 * k},${4 * k} L${96 * k},${96 * k}`} stroke="#173140" strokeWidth={4.5 * k} strokeLinecap="round" />
       {/* lanes */}
       <path d={`M${10 * k},${90 * k} L${8 * k},${8 * k} L${90 * k},${10 * k}`} {...lane} />
       <path d={`M${10 * k},${90 * k} L${92 * k},${92 * k} L${90 * k},${10 * k}`} {...lane} />

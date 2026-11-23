@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CHOICES, Choice, puzzleAt, puzzlesFromGames } from "../../core/puzzles";
 import type { GameReport } from "../../core/types";
 import { ChampIcon, MapBackdrop } from "../charts";
+import { useProgress } from "../progress";
+import { Button, Kbd } from "../ui";
 
 const KEY = "lc.puzzles";
 interface Stats {
@@ -25,8 +27,11 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
   const own = useMemo(() => puzzlesFromGames(games), [games]);
   const [stats, setStats] = useState<Stats>(load);
   const [picked, setPicked] = useState<Choice | null>(null);
+  const { award } = useProgress();
   const main = games[0]?.metrics;
   const p = puzzleAt(stats.index, own, main?.champion, main?.role);
+  const currentId = useRef(p.id);
+  currentId.current = p.id;
 
   useEffect(() => {
     try {
@@ -40,6 +45,11 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
     if (picked) return;
     setPicked(c);
     const right = c === p.answer;
+    award({ type: "puzzle", right });
+    if (right) {
+      const id = p.id;
+      setTimeout(() => currentId.current === id && next(), 1500);
+    }
     setStats((s) => {
       const streak = right ? s.streak + 1 : 0;
       return { ...s, attempted: s.attempted + 1, solved: s.solved + (right ? 1 : 0), streak, best: Math.max(s.best, streak) };
@@ -47,8 +57,10 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
   }
 
   function next() {
-    setPicked(null);
-    setStats((s) => ({ ...s, index: s.index + 1 }));
+    setPicked((cur) => {
+      if (cur !== null) setStats((s) => ({ ...s, index: s.index + 1 }));
+      return null;
+    });
   }
 
   useEffect(() => {
@@ -67,9 +79,10 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
     <div className="page">
       <div className="page-head">
         <div>
-          <h1>Decision puzzles</h1>
+          <p className="eyebrow">Puzzles</p>
+          <h1>What's the right play?</h1>
           <p className="muted">
-            {own.length} from your own deaths, then endless drills. Keys 1-4 to answer, Enter for next.
+            {own.length} from your own deaths, then endless drills. <Kbd>1</Kbd>–<Kbd>4</Kbd> to answer, <Kbd>Enter</Kbd> for next.
           </p>
         </div>
         <div className="puzzle-stats">
@@ -79,7 +92,7 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
           </div>
           <div>
             <small>Streak</small>
-            <strong>{stats.streak}</strong>
+            <strong className={stats.streak >= 3 ? "hot" : ""} key={stats.streak}>{stats.streak}</strong>
           </div>
           <div>
             <small>Best</small>
@@ -93,12 +106,12 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
       </div>
 
       <div className="puzzle">
-        <div className="card puzzle-map-card">
+        <div className="panel puzzle-map-card">
           <PuzzleMap position={p.position} threats={p.threats} teamId={p.teamId} champion={p.champion} />
         </div>
-        <div className="card puzzle-body">
+        <div className={`panel puzzle-body ${picked ? (right ? "is-right" : "is-wrong") : ""}`} key={p.id}>
           <div className="puzzle-tag">
-            <span className={`pill ${p.source === "your-game" ? "bad" : "ok"}`}>{p.source === "your-game" ? "From your game" : "Drill"}</span>
+            <span className={`tag ${p.source === "your-game" ? "tag-hot" : ""}`}>{p.source === "your-game" ? "From your game" : "Drill"}</span>
             <span className="cell-champ">
               <ChampIcon name={p.champion} size={28} />
               {p.champion}
@@ -134,9 +147,9 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
               <strong>{right ? "Correct." : `Wrong. The answer is: ${CHOICES[p.answer]}.`}</strong>
               <p>{p.explanation}</p>
               {p.outcome && <p className="muted small">What actually happened: {p.outcome}</p>}
-              <button className="primary" onClick={next}>
-                Next puzzle →
-              </button>
+              <Button variant="primary" onClick={next}>
+                {right ? "Next (auto)" : "Next puzzle"} →
+              </Button>
             </div>
           )}
         </div>
