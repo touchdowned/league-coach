@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Crosshair, Keyboard, Shield, Sparkles } from "lucide-react";
+import { Crosshair, Keyboard, Shield, Sparkles, Swords } from "lucide-react";
 import type { Kit } from "../../core/mechanics/kits";
 import { CURATED_CHAMPIONS, isSkillshot } from "../../core/mechanics/kits";
 import {
@@ -21,16 +21,16 @@ import type { GameReport } from "../../core/types";
 import { ChampIcon } from "../charts";
 import { useProgress } from "../progress";
 import { Button, Ring, Skeleton } from "../ui";
-import { AimDrill } from "./mechanics/AimDrill";
 import { ComboDrill } from "./mechanics/ComboDrill";
-import { DodgeDrill } from "./mechanics/DodgeDrill";
+import { LaneDrill, LaneSettings } from "./mechanics/LaneDrill";
 import type { SetSummary } from "./mechanics/types";
-import { loadKit, spellIcon, useDdVersion, useKit } from "./mechanics/useKit";
+import { spellIcon, useDdVersion, useKit } from "./mechanics/useKit";
 
 const KEY = "lc.mechanics";
-const ICON = { aim: Crosshair, dodge: Shield, combo: Keyboard };
-/** Casters used for dodging when you have no lane opponents with skillshots on record. */
-const FALLBACK_CASTERS = ["Lux", "Ahri", "Xerath", "Morgana"];
+const SETTINGS_KEY = "lc.mechanics.settings";
+const ICON = { aim: Crosshair, dodge: Shield, trade: Swords, combo: Keyboard };
+/** Opponents used when you have no lane matchups on record. */
+const FALLBACK_OPPONENTS = ["Lux", "Ahri", "Xerath", "Morgana", "Syndra"];
 
 function load(): MechanicsState {
   try {
@@ -40,10 +40,20 @@ function load(): MechanicsState {
   }
 }
 
+function loadSettings(): LaneSettings {
+  const d: LaneSettings = { indicator: false, realCooldowns: false, sound: true };
+  try {
+    return { ...d, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") };
+  } catch {
+    return d;
+  }
+}
+
 export function MechanicsView({ games }: { games: GameReport[] }) {
   const pool = useMemo(() => trainingPool(games), [games]);
   const [champion, setChampion] = useState(pool[0]?.champion ?? "Ahri");
   const [state, setState] = useState<MechanicsState>(load);
+  const [settings, setSettings] = useState<LaneSettings>(loadSettings);
   const [active, setActive] = useState<Drill | null>(null);
   const [summary, setSummary] = useState<SetSummary | null>(null);
   const [runId, setRunId] = useState(0);
@@ -52,12 +62,14 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
   const suggested = useMemo(() => suggestedDrill(games), [games]);
 
   const entry = pool.find((p) => p.champion === champion);
-  const opponentNames = useMemo(() => {
+  const opponents = useMemo(() => {
     const own = entry?.opponents ?? [];
     const all = commonOpponents(games);
-    return [...new Set([...own, ...all, ...FALLBACK_CASTERS])].slice(0, 8);
-  }, [entry, games]);
-  const casters = useCasters(opponentNames, active === "dodge");
+    return [...new Set([...own, ...all, ...FALLBACK_OPPONENTS])].filter((c) => c !== champion).slice(0, 6);
+  }, [entry, games, champion]);
+  const [opponent, setOpponent] = useState<string | null>(null);
+  const opp = opponent && opponents.includes(opponent) ? opponent : opponents[0];
+  const { kit: oppKit, loading: oppLoading } = useKit(opp ?? null);
 
   useEffect(() => {
     try {
@@ -66,6 +78,13 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
       /* storage unavailable: progress just won't persist */
     }
   }, [state]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+      /* ignore */
+    }
+  }, [settings]);
 
   function start(d: Drill) {
     setSummary(null);
@@ -82,15 +101,22 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
 
   const stair = (d: Drill) => state.stairs[stairKey(d, champion)] ?? START;
   const today = setsToday(state);
-  const noSkillshots = kit && !kit.abilities.some(isSkillshot);
+  const noSkillshots = !!kit && !kit.abilities.some(isSkillshot);
+  const oppNoSkillshots = !!oppKit && !oppKit.abilities.some(isSkillshot);
+  const why = (d: Drill): string | null =>
+    (d === "aim" || d === "trade") && noSkillshots
+      ? `${champion} has no skillshots to aim. Try dodging or combos.`
+      : (d === "dodge" || d === "trade") && oppNoSkillshots
+        ? `${opp} has no skillshots to dodge. Pick another opponent.`
+        : null;
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <p className="eyebrow">Mechanics</p>
-          <h1>Train your champions' hands</h1>
-          <p className="muted">Short sets that get harder as you hit them. Do {DAILY_SETS} as a warm-up before you queue.</p>
+          <h1>Lane lab</h1>
+          <p className="muted">A real lane with your champion, your lane opponents and live minion waves. The enemy laner gets sharper as you beat it.</p>
         </div>
         <div className="mech-daily">
           <Ring value={today / DAILY_SETS} size={52} tone={today >= DAILY_SETS ? "good" : "accent"}>
@@ -103,44 +129,56 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
         </div>
       </div>
 
-      <div className="champ-chips mech-pool">
-        {pool.map((p) => (
-          <button key={p.champion} className={`champ-chip ${p.champion === champion ? "active" : ""}`} disabled={!!active} onClick={() => setChampion(p.champion)}>
-            <ChampIcon name={p.champion} size={28} />
-            <span>{p.champion}</span>
-            {p.games > 0 && <span className="muted small">{p.games} games</span>}
-          </button>
-        ))}
-        <select className="mech-other" value={pool.some((p) => p.champion === champion) ? "" : champion} disabled={!!active} onChange={(e) => e.target.value && setChampion(e.target.value)}>
-          <option value="">Other champion…</option>
-          {CURATED_CHAMPIONS.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
+      <div className="mech-pick">
+        <div>
+          <p className="eyebrow">You play</p>
+          <div className="champ-chips mech-pool">
+            {pool.map((p) => (
+              <button key={p.champion} className={`champ-chip ${p.champion === champion ? "active" : ""}`} disabled={!!active} onClick={() => setChampion(p.champion)}>
+                <ChampIcon name={p.champion} size={28} />
+                <span>{p.champion}</span>
+                {p.games > 0 && <span className="muted small">{p.games} games</span>}
+              </button>
+            ))}
+            <select className="mech-other" value={pool.some((p) => p.champion === champion) ? "" : champion} disabled={!!active} onChange={(e) => e.target.value && setChampion(e.target.value)}>
+              <option value="">Other champion…</option>
+              {CURATED_CHAMPIONS.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div>
+          <p className="eyebrow">Into</p>
+          <div className="champ-chips mech-pool">
+            {opponents.map((o) => (
+              <button key={o} className={`champ-chip ${o === opp ? "active enemy" : ""}`} disabled={!!active} onClick={() => setOpponent(o)}>
+                <ChampIcon name={o} size={28} />
+                <span>{o}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {active ? (
-        <div className="panel">
+        <div className="panel lane-panel">
           <div className="panel-head">
             <h2>
-              {DRILLS.find((d) => d.id === active)!.label} · {champion}
+              {DRILLS.find((d) => d.id === active)!.label} · {champion} vs {opp}
             </h2>
             <Button variant="ghost" size="sm" onClick={() => setActive(null)}>
               Stop set
             </Button>
           </div>
-          {!kit ? (
-            <Skeleton h={420} r={12} />
-          ) : active === "aim" ? (
-            <AimDrill key={runId} kit={kit} stair={stair("aim")} onDone={finished} />
+          {!kit || (active !== "combo" && !oppKit) ? (
+            <Skeleton h={520} r={12} />
           ) : active === "combo" ? (
             <ComboDrill key={runId} kit={kit} stair={stair("combo")} onDone={finished} />
-          ) : casters === null ? (
-            <Skeleton h={420} r={12} />
           ) : (
-            <DodgeDrill key={runId} you={kit} casters={casters} stair={stair("dodge")} onDone={finished} />
+            <LaneDrill key={runId} mode={active} you={kit} enemy={oppKit!} stair={stair(active)} settings={settings} onDone={finished} />
           )}
         </div>
       ) : (
@@ -165,12 +203,12 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
             </div>
           )}
 
-          <div className="grid-3">
+          <div className="mech-drills">
             {DRILLS.map((d) => {
               const Icon = ICON[d.id];
               const t = trend(state, d.id, champion);
               const last = t[t.length - 1];
-              const blocked = d.id === "aim" && noSkillshots;
+              const blocked = why(d.id);
               return (
                 <div key={d.id} className="tile mech-tile">
                   <div className="tile-top">
@@ -178,14 +216,19 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
                     <h3>{d.label}</h3>
                     {d.id === suggested && <span className="pill mech-suggest">Suggested</span>}
                   </div>
-                  <p className="muted small">{blocked ? `${champion} has no skillshots to aim. Try combos or dodging.` : d.cue}</p>
+                  <p className="muted small">{blocked ?? d.cue}</p>
                   <Spark values={t.map((h) => h.score)} />
                   <div className="mech-tile-foot">
                     <span className="muted small">
                       Level {stair(d.id).level}
                       {last ? ` · last ${Math.round(last.score * 100)}%` : ""}
                     </span>
-                    <Button variant={d.id === suggested ? "primary" : "secondary"} size="sm" disabled={loading || !kit || !!blocked} onClick={() => start(d.id)}>
+                    <Button
+                      variant={d.id === suggested ? "primary" : "secondary"}
+                      size="sm"
+                      disabled={loading || !kit || !!blocked || (d.id !== "combo" && (oppLoading || !oppKit))}
+                      onClick={() => start(d.id)}
+                    >
                       Start
                     </Button>
                   </div>
@@ -194,13 +237,38 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
             })}
           </div>
 
+          <div className="panel mech-settings">
+            <h3>Controls</h3>
+            <label className="mech-toggle">
+              <input type="checkbox" checked={settings.indicator} onChange={(e) => setSettings({ ...settings, indicator: e.target.checked })} />
+              <span>
+                <b>Quick cast with indicator</b>
+                <small className="muted">Hold the key to see the spell's shape, release to cast. Match what you use in game.</small>
+              </span>
+            </label>
+            <label className="mech-toggle">
+              <input type="checkbox" checked={settings.realCooldowns} onChange={(e) => setSettings({ ...settings, realCooldowns: e.target.checked })} />
+              <span>
+                <b>Real cooldowns</b>
+                <small className="muted">Off: practice-tool short cooldowns for more reps. On: every cast counts, like in lane.</small>
+              </span>
+            </label>
+            <label className="mech-toggle">
+              <input type="checkbox" checked={settings.sound} onChange={(e) => setSettings({ ...settings, sound: e.target.checked })} />
+              <span>
+                <b>Sound</b>
+                <small className="muted">Different sounds for a hit, a minion block and getting hit.</small>
+              </span>
+            </label>
+          </div>
+
           <KitPanel kit={kit} loading={loading} champion={champion} />
 
           <div className="panel mech-why">
             <Sparkles size={16} />
             <p className="small muted">
-              Each set adapts so you land about 7 in 10: easy enough to keep going, hard enough to learn from. Drills and spell angles are mixed rather than repeated, and you
-              only get a correction when a miss isn't close. Short daily sets beat one long session.
+              The enemy reacts to your cast animation after a human reaction time, can't dodge while it's mid auto-attack, favours one dodge side, and Flashes when it's low.
+              Those are the habits you exploit in real lanes. It adapts so you land about 7 in 10.
             </p>
           </div>
         </>
@@ -209,27 +277,7 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
   );
 }
 
-const nextDrill = (d: Drill): Drill => (d === "aim" ? "dodge" : d === "dodge" ? "combo" : "aim");
-
-function useCasters(names: string[], enabled: boolean): Kit[] | null {
-  const [kits, setKits] = useState<Kit[] | null>(null);
-  const key = names.join(",");
-  useEffect(() => {
-    if (!enabled) return;
-    let live = true;
-    setKits(null);
-    Promise.all(names.map(loadKit)).then((ks) => {
-      if (!live) return;
-      const usable = ks.filter((k): k is Kit => !!k && k.abilities.some(isSkillshot)).slice(0, 4);
-      setKits(usable);
-    });
-    return () => {
-      live = false;
-    };
-    // names is derived from key
-  }, [key, enabled]);
-  return kits;
-}
+const nextDrill = (d: Drill): Drill => (d === "aim" ? "dodge" : d === "dodge" ? "trade" : d === "trade" ? "combo" : "aim");
 
 function Spark({ values }: { values: number[] }) {
   if (!values.length) return <div className="mech-spark is-empty small muted">No sets yet</div>;

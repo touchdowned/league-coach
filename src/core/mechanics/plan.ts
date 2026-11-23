@@ -12,16 +12,17 @@ import type { GameReport, Position } from "../types";
 import type { Combo, ComboInput } from "./kits";
 import { STARTER_CHAMPIONS } from "./kits";
 
-export type Drill = "aim" | "dodge" | "combo";
+export type Drill = "aim" | "dodge" | "trade" | "combo";
 
 export const DRILLS: { id: Drill; label: string; cue: string }[] = [
-  { id: "aim", label: "Skillshot aim", cue: "Land your skillshots on a target that moves and jukes." },
-  { id: "dodge", label: "Dodging", cue: "Stay out of your lane opponents' skillshots." },
+  { id: "aim", label: "Land skillshots", cue: "Hit a laner who farms, trades and side-steps your casts, through a live minion wave." },
+  { id: "dodge", label: "Dodge", cue: "Your lane opponent throws its real skillshots at you, aiming where you walk." },
+  { id: "trade", label: "Trade", cue: "90 seconds of laning: land yours, dodge theirs, both at once." },
   { id: "combo", label: "Combos", cue: "Hit your champion's combos in order, faster each set." },
 ];
 
-/** Shots, casts or combos per set. Short enough to keep focus, long enough to adapt. */
-export const SET_LENGTH: Record<Drill, number> = { aim: 20, dodge: 20, combo: 12 };
+/** Shots, casts or combos per set (trade is timed). Short enough to keep focus, long enough to adapt. */
+export const SET_LENGTH: Record<Drill, number> = { aim: 20, dodge: 20, trade: 90, combo: 12 };
 
 // ---------------------------------------------------------------------------
 // Adaptive difficulty

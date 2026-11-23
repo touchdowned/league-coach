@@ -45,7 +45,7 @@ export function loadKit(champion: string): Promise<Kit | null> {
   if (p) return p;
   p = (async () => {
     const v = await ddVersion();
-    const key = `lc.kit.${v}.${champion}`;
+    const key = `lc.kit2.${v}.${champion}`;
     const hit = stored(key);
     if (hit) return hit;
     try {

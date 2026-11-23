@@ -27,11 +27,15 @@ export interface Ability {
   delay: number;
   cooldown: number;
   icon?: string; // Data Dragon spell image file
+  /** Units the spell can hit before it stops: 1 = blocked by the first minion, 0 = passes through everything. */
+  stopsAfter?: number;
 }
 
 export interface Kit {
   champion: string;
   moveSpeed: number;
+  /** Auto-attack range in game units (melee ~125-175, ranged ~500-650). */
+  attackRange?: number;
   abilities: Ability[];
   combos: Combo[];
   /** "curated" when shapes come from this table, "guessed" when inferred from text. */
@@ -66,7 +70,7 @@ const RAW: Record<string, string> = {
   Katarina: "Q:target 625|W:self 0|E:dash 725|R:self 550",
   Leblanc: "Q:target 700|W:dash 600|E:line 865 55 1750 .25|R:self 0",
   Lissandra: "Q:line 725 75 2200 .25|W:self 450|E:line 1050 125 850 .25|R:target 550",
-  Lux: "Q:line 1240 70 1200 .25|W:line 1175 110 1400 .25|E:circle 1100 310 1200 .25|R:line 3400 100 0 1",
+  Lux: "Q:line 1240 70 1200 .25|W:self 1175|E:circle 1100 310 1200 .25|R:line 3400 100 0 1",
   Malzahar: "Q:circle 900 200 0 .5|W:self 0|E:target 650|R:target 700",
   Morgana: "Q:line 1300 70 1200 .25|W:circle 900 275 0 .25|E:self 800|R:self 625",
   Neeko: "Q:circle 800 200 1500 .25|W:self 0|E:line 1000 70 1300 .25|R:self 600",
@@ -126,6 +130,33 @@ const RAW: Record<string, string> = {
   Urgot: "Q:circle 800 180 0 .6|W:self 0|E:dash 450|R:line 2500 80 3200 .4",
   Volibear: "Q:self 0|W:target 325|E:circle 1200 325 0 2|R:dash 700",
   Yorick: "Q:self 0|W:circle 600 300 0 .25|E:line 700 160 1800 .33|R:self 0",
+};
+
+/**
+ * Line skillshots that stop on the first unit they hit (1) or after two (2).
+ * Everything else passes through minions. Only lines are listed; circles never block.
+ */
+const STOPS: Record<string, Partial<Record<AbilityKey, number>>> = {
+  Ahri: { E: 1 },
+  Aatrox: { W: 1 },
+  Brand: { Q: 1 },
+  Illaoi: { E: 1 },
+  Jayce: { Q: 1 },
+  Kayle: { Q: 1 },
+  Kennen: { Q: 1 },
+  Lissandra: { Q: 1 },
+  Lux: { Q: 2 },
+  Morgana: { Q: 1 },
+  Quinn: { Q: 1 },
+  Rumble: { E: 1 },
+  Ryze: { Q: 1 },
+  Sion: { E: 1 },
+  Sylas: { E: 1 },
+  Taliyah: { Q: 1 },
+  Veigar: { Q: 2 },
+  Velkoz: { Q: 1 },
+  Xerath: { E: 1 },
+  Zoe: { E: 1 },
 };
 
 /** Combos per champion: the key sequences that win trades and all-ins. */
@@ -199,7 +230,8 @@ function parseSpec(champion: string, spec: string): Omit<Ability, "name" | "cool
     const [shape, ...nums] = rest.split(" ");
     const [range = 0, width = 0, speed = 0, delay = 0] = nums.map(Number);
     if (!"QWER".includes(key) || !SHAPES.includes(shape as Shape)) throw new Error(`Bad kit spec for ${champion}: ${part}`);
-    return { key: key as AbilityKey, shape: shape as Shape, range, width, speed, delay };
+    const stopsAfter = STOPS[champion]?.[key as AbilityKey] ?? 0;
+    return { key: key as AbilityKey, shape: shape as Shape, range, width, speed, delay, stopsAfter };
   });
 }
 
