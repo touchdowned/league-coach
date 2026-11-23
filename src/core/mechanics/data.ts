@@ -4,7 +4,7 @@ import { Ability, AbilityKey, curatedCombos, curatedKit, defaultCombos, Kit, Sha
 export interface DdChampion {
   id: string;
   name: string;
-  stats: { movespeed: number };
+  stats: { movespeed: number; attackrange?: number };
   spells: {
     id: string;
     name: string;
@@ -35,7 +35,7 @@ export function kitFromDdragon(dd: DdChampion, extra?: Partial<Record<AbilityKey
   const abilities: Ability[] = dd.spells.slice(0, 4).map((s, i) => {
     const key = KEYS[i];
     const range = s.range[0] ?? 0;
-    const shape = curated?.find((c) => c.key === key) ?? { key, range, ...guessShape(s.description, range) };
+    const shape = curated?.find((c) => c.key === key) ?? { key, range, stopsAfter: 0, ...guessShape(s.description, range) };
     const a: Ability = {
       ...shape,
       key,
@@ -54,6 +54,7 @@ export function kitFromDdragon(dd: DdChampion, extra?: Partial<Record<AbilityKey
   return {
     champion: dd.id,
     moveSpeed: dd.stats.movespeed || 340,
+    attackRange: dd.stats.attackrange || 525,
     abilities,
     combos: combos.length ? combos : defaultCombos(abilities),
     source: curated ? "curated" : "guessed",

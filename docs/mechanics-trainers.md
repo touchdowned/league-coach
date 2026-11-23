@@ -1,7 +1,8 @@
 # Mechanics trainers
 
-The Mechanics view trains three skills on your own champions: landing skillshots,
-dodging your lane opponents' skillshots, and executing combos.
+The Mechanics view ("Lane lab") trains landing skillshots, dodging your lane opponents'
+skillshots, trading (both at once) and combos, on your own champions in a three.js lane.
+See `mechanics-design.md` for how each feature was argued for and against.
 
 ## Where the data comes from
 
