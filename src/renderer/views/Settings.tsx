@@ -1,3 +1,4 @@
+import { Film, FolderOpen, Gauge, KeyRound, Power } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { REGIONS } from "../../core/riot";
@@ -33,7 +34,7 @@ export function SettingsView({ value, onSave }: { value: Settings; onSave: (s: S
           setSaving(false);
         }}
       >
-        <h3>Riot account</h3>
+        <h3><KeyRound size={14} /> Riot account</h3>
         <div className="row-2">
           <label>
             Riot ID
@@ -59,13 +60,13 @@ export function SettingsView({ value, onSave }: { value: Settings; onSave: (s: S
           <small>50+ gives a more reliable plan and role verdict.</small>
         </label>
 
-        <h3>Replays and recordings</h3>
+        <h3><Film size={14} /> Replays and recordings</h3>
         <label>
           League install folder
           <span className="input-row">
             <input value={s.leagueDir} onChange={(e) => setS({ ...s, leagueDir: e.target.value })} />
             <Button type="button" size="sm" onClick={() => pick("leagueDir")}>
-              Browse
+              <FolderOpen size={14} /> Browse
             </Button>
           </span>
           <small>Used to download replays and jump to each moment. Default: C:\Riot Games\League of Legends</small>
@@ -84,7 +85,7 @@ export function SettingsView({ value, onSave }: { value: Settings; onSave: (s: S
               else toast.error("Couldn't change game.cfg", { description: r.error });
             }}
           >
-            Turn on
+            <Power size={14} /> Turn on
           </Button>
         </div>
         <label>
@@ -92,13 +93,13 @@ export function SettingsView({ value, onSave }: { value: Settings; onSave: (s: S
           <span className="input-row">
             <input value={s.vodDir} placeholder="e.g. C:\Users\you\Videos\Outplayed" onChange={(e) => setS({ ...s, vodDir: e.target.value })} />
             <Button type="button" size="sm" onClick={() => pick("vodDir")}>
-              Browse
+              <FolderOpen size={14} /> Browse
             </Button>
           </span>
           <small>If you record games with OBS or Outplayed, the app matches each video to its game.</small>
         </label>
 
-        <h3>Review</h3>
+        <h3><Gauge size={14} /> Review</h3>
         <label>
           Seconds per moment
           <input type="number" min={6} max={60} value={s.autoAdvanceSec} onChange={(e) => setS({ ...s, autoAdvanceSec: Number(e.target.value) })} />

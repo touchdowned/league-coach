@@ -1,3 +1,4 @@
+import { Brain, Clapperboard, Crosshair, ListChecks, Play, TrendingUp, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ROLE_LABEL } from "../../core/benchmarks";
 import { coachPlan, CoachPlan } from "../../core/coach";
@@ -81,7 +82,7 @@ export function CoachView({
       <section className="grid-3">
         <div className="tile action" onClick={() => nextReview && onReview(nextReview.metrics.matchId, true)} data-disabled={!nextReview || undefined}>
           <div className="tile-top">
-            <p className="eyebrow">Review</p>
+            <p className="eyebrow icon-eyebrow"><Clapperboard size={13} /> Review</p>
             <Ring value={today.moments / DAILY.moments} size={34} stroke={3} tone={today.moments >= DAILY.moments ? "good" : "accent"}>
               <small>
                 {Math.min(today.moments, DAILY.moments)}/{DAILY.moments}
@@ -101,7 +102,7 @@ export function CoachView({
                   </small>
                 </div>
               </div>
-              <span className="tile-cta">Start guided review →</span>
+              <span className="tile-cta"><Play size={13} fill="currentColor" /> Start guided review</span>
             </>
           ) : (
             <>
@@ -113,7 +114,7 @@ export function CoachView({
 
         <div className="tile action" onClick={onPuzzles}>
           <div className="tile-top">
-            <p className="eyebrow">Puzzles</p>
+            <p className="eyebrow icon-eyebrow"><Brain size={13} /> Puzzles</p>
             <Ring value={today.puzzles / DAILY.puzzles} size={34} stroke={3} tone={today.puzzles >= DAILY.puzzles ? "good" : "accent"}>
               <small>
                 {Math.min(today.puzzles, DAILY.puzzles)}/{DAILY.puzzles}
@@ -122,15 +123,15 @@ export function CoachView({
           </div>
           <strong>Train your decisions</strong>
           <small className="muted">Real moments from your deaths, then endless drills.</small>
-          <span className="tile-cta">Play →</span>
+          <span className="tile-cta"><Zap size={13} fill="currentColor" /> Play</span>
         </div>
 
         <div className="tile">
           <div className="tile-top">
-            <p className="eyebrow">Last 10 games</p>
+            <p className="eyebrow icon-eyebrow"><TrendingUp size={13} /> Last 10 games</p>
             <span className={`delta ${wins >= 5 ? "up" : "down"}`}>{wins * 10}% WR</span>
           </div>
-          <div className="form">
+          <div className="form-strip">
             {last10
               .slice()
               .reverse()
@@ -195,7 +196,7 @@ function NextStep({ plan }: { plan: CoachPlan }) {
   return (
     <section className="hero">
       <div className="hero-main">
-        <p className="eyebrow accent">Your focus</p>
+        <p className="eyebrow accent icon-eyebrow"><Crosshair size={13} /> Your focus</p>
         <h2>{c.title}</h2>
         <p className="hero-evidence">{c.evidence}</p>
         <ol className="rules">
@@ -208,7 +209,7 @@ function NextStep({ plan }: { plan: CoachPlan }) {
         </ol>
       </div>
       <aside className="hero-side">
-        <p className="eyebrow">Passing means</p>
+        <p className="eyebrow icon-eyebrow"><ListChecks size={13} /> Passing means</p>
         <strong>{c.passRule}</strong>
         <ResultDots results={c.results} />
         <small className="muted">

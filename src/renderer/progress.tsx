@@ -1,4 +1,5 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useState } from "react";
+import { Flame } from "lucide-react";
 import { toast } from "sonner";
 import { DAILY, dayKey, EMPTY_PROGRESS, levelOf, liveStreak, ProgressEvent, ProgressState } from "../core/progress";
 import { coach } from "./api";
@@ -87,9 +88,7 @@ export function PlayerCard({ name }: { name: string }) {
           </small>
         </div>
         <span className={`streak ${streak > 0 ? "on" : ""}`} title={`${streak} day streak`}>
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
-            <path d="M8 1c1 3 4 4.5 4 8.2A4 4 0 0 1 8 15a4 4 0 0 1-4-5.8C4.6 7.8 6 7 6 5c1 .7 1.6 1.6 1.7 2.6C8.6 6 8.5 3.5 8 1Z" fill="currentColor" />
-          </svg>
+          <Flame size={14} strokeWidth={2.2} aria-hidden />
           {streak}
         </span>
       </div>

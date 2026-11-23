@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol } from "electron";
 import { promises as fs } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
@@ -34,6 +34,8 @@ function createWindow() {
     backgroundColor: "#0a0d13",
     title: "League Coach",
     show: false,
+    autoHideMenuBar: true,
+    icon: path.join(__dirname, "../../build/icon.png"),
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
   });
   win.once("ready-to-show", () => win?.show());
@@ -183,6 +185,7 @@ app.whenReady().then(async () => {
     return res.canceled ? null : res.filePaths[0];
   });
 
+  Menu.setApplicationMenu(null);
   createWindow();
   app.on("activate", () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });

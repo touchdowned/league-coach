@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Brain, Clapperboard, Compass, LucideIcon, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import type { GameReport } from "../core/types";
 import { coach, Settings, TaskProgress } from "./api";
@@ -13,13 +14,13 @@ import { SettingsView } from "./views/Settings";
 
 export type Tab = "coach" | "review" | "puzzles" | "champions" | "role" | "settings";
 
-const NAV: { id: Tab; label: string; icon: string }[] = [
-  { id: "coach", label: "Coach", icon: "M3 12h4l3-8 4 16 3-8h4" },
-  { id: "review", label: "Review", icon: "M5 4l14 8-14 8z" },
-  { id: "puzzles", label: "Puzzles", icon: "M12 3l9 9-9 9-9-9z" },
-  { id: "champions", label: "Champions", icon: "M4 20l4-12 4 6 4-10 4 16" },
-  { id: "role", label: "Best role", icon: "M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" },
-  { id: "settings", label: "Settings", icon: "M12 8a4 4 0 100 8 4 4 0 000-8zM4 12h2m12 0h2M12 4v2m0 12v2" },
+const NAV: { id: Tab; label: string; icon: LucideIcon }[] = [
+  { id: "coach", label: "Coach", icon: Target },
+  { id: "review", label: "Review", icon: Clapperboard },
+  { id: "puzzles", label: "Puzzles", icon: Brain },
+  { id: "champions", label: "Champions", icon: Swords },
+  { id: "role", label: "Best role", icon: Compass },
+  { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
 export function App() {
@@ -82,9 +83,7 @@ function Shell() {
         <nav>
           {NAV.map((n) => (
             <button key={n.id} className={`nav ${tab === n.id ? "active" : ""}`} onClick={() => setTab(n.id)}>
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-                <path d={n.icon} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <n.icon size={18} strokeWidth={1.8} aria-hidden />
               {n.label}
               {n.id === "review" && games && <UnreviewedBadge games={games} reviewed={progress.reviewedGames} />}
             </button>
@@ -94,6 +93,7 @@ function Shell() {
           {loading ? <Skeleton h={92} r={12} /> : <PlayerCard name={settings.riotId} />}
           <button className="sync" disabled={!!sync || !settings?.apiKey} onClick={runSync}>
             <span className="sync-fill" style={{ transform: `scaleX(${sync ? syncPct : 0})` }} />
+            <RefreshCw size={15} className={`sync-icon ${sync ? "spinning" : ""}`} aria-hidden />
             <span className="sync-label">{sync ? sync.label : "Sync games"}</span>
             {sync && <span className="sync-pct">{Math.round(syncPct * 100)}%</span>}
           </button>

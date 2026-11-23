@@ -1,3 +1,4 @@
+import { Crosshair, Flame } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CHOICES, Choice, puzzleAt, puzzlesFromGames } from "../../core/puzzles";
 import type { GameReport } from "../../core/types";
@@ -91,7 +92,7 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
             <strong>{stats.attempted ? Math.round((stats.solved / stats.attempted) * 100) : 0}%</strong>
           </div>
           <div>
-            <small>Streak</small>
+            <small><Flame size={11} /> Streak</small>
             <strong className={stats.streak >= 3 ? "hot" : ""} key={stats.streak}>{stats.streak}</strong>
           </div>
           <div>
@@ -129,7 +130,7 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
               <li key={f}>{f}</li>
             ))}
           </ul>
-          <h3>What do you do?</h3>
+          <h3 className="icon-eyebrow"><Crosshair size={16} /> What do you do?</h3>
           <div className="choices">
             {p.options.map((o, i) => {
               const state = !picked ? "" : o === p.answer ? "correct" : o === picked ? "wrong" : "dim";

@@ -1,3 +1,4 @@
+import { Check, ChevronLeft, ChevronRight, Clapperboard, MonitorPlay, Pause, Play, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { fmtTime } from "../../core/analysis";
@@ -280,7 +281,8 @@ function ReviewPlayer({
               <video ref={videoRef} src={media.vod.url} controls preload="auto" />
             ) : media.kind === "replay" ? (
               <div className="stage-replay">
-                <span className="live-dot" /> Playing in your League replay window
+                <MonitorPlay size={28} className="muted" />
+                <span><span className="live-dot" /> Playing in your League replay window</span>
                 <small className="muted">The camera jumps to 12s before each moment.</small>
               </div>
             ) : moment ? (
@@ -310,13 +312,13 @@ function ReviewPlayer({
             </div>
             <div className="controls">
               <Button variant="ghost" size="sm" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>
-                ← Prev
+                <ChevronLeft size={16} /> Prev
               </Button>
               <Button variant="primary" size="sm" onClick={() => setPlaying((p) => !p)}>
-                {playing ? "Pause" : "Play review"}
+                {playing ? <><Pause size={14} fill="currentColor" /> Pause</> : <><Play size={14} fill="currentColor" /> Play review</>}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => go(idx + 1)}>
-                {idx + 1 >= moments.length ? "Finish" : "Next →"}
+                {idx + 1 >= moments.length ? <><Check size={16} /> Finish</> : <>Next <ChevronRight size={16} /></>}
               </Button>
               <span className="hint">
                 <Kbd>Space</Kbd> <Kbd>←</Kbd> <Kbd>→</Kbd>
@@ -473,7 +475,7 @@ function SourceBar(props: {
   return (
     <section className="sources">
       <div className="source">
-        <span className="source-icon replay" />
+        <span className="source-icon"><Clapperboard size={16} /></span>
         <div className="source-body">
           <strong>League replay</strong>
           <small>{status}</small>
@@ -481,7 +483,7 @@ function SourceBar(props: {
         {action}
       </div>
       <div className="source">
-        <span className="source-icon vod" />
+        <span className="source-icon"><Video size={16} /></span>
         <div className="source-body">
           <strong>Your recording</strong>
           <small>{vod === undefined ? "Looking…" : vod ? vod.name : "No recording linked. Optional, if you record with OBS or Outplayed."}</small>
@@ -508,7 +510,7 @@ function Summary({ r, reviewed, next, onNext, onPuzzles, onRestart }: { r: GameR
 
   return (
     <section className="summary">
-      <div className="summary-badge">✓</div>
+      <div className="summary-badge"><Check size={28} strokeWidth={3} /></div>
       <h2>Game reviewed</h2>
       <p className="muted">{reviewed ? "XP added." : ""} Take this into your next game:</p>
       <p className="summary-focus">{r.focus}</p>
