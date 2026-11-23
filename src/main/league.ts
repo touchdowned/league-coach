@@ -245,6 +245,31 @@ export class LeagueClient {
   }
 
   /**
+   * Starts Riot's recorder writing PNG frames of [startSec, endSec] at `fps`, one file per
+   * game frame step (frame k is game time startSec + k / fps). Riot puts the frames in a new
+   * subfolder of `dir`. The caller drives playback. True when the recorder accepted it.
+   */
+  async startFrameRecording(dir: string, startSec: number, endSec: number, fps: number): Promise<boolean> {
+    await fs.mkdir(dir, { recursive: true });
+    const r = await request("https://127.0.0.1:2999/replay/recording", {
+      method: "POST",
+      body: { recording: true, path: dir, codec: "png", startTime: startSec, endTime: endSec, currentTime: startSec, framesPerSecond: fps, enforceFrameRate: true, lossless: true, replaySpeed: 1 },
+      timeoutMs: 3000,
+    }).catch(() => null);
+    return !!r && r.status < 400;
+  }
+
+  async stopRecording(): Promise<void> {
+    await request("https://127.0.0.1:2999/replay/recording", { method: "POST", body: { recording: false }, timeoutMs: 3000 }).catch(() => null);
+  }
+
+  /** The recorder's state, or null when the Replay API doesn't answer. */
+  async recordingState(): Promise<{ recording: boolean; currentTime?: number; path?: string; width?: number; height?: number } | null> {
+    const r = await request<{ recording: boolean; currentTime?: number; path?: string; width?: number; height?: number }>("https://127.0.0.1:2999/replay/recording", { timeoutMs: 1500 }).catch(() => null);
+    return r?.status === 200 ? r.data : null;
+  }
+
+  /**
    * Records [startSec, endSec] of the open replay to a .webm in `dir` using the
    * Replay API's built-in recorder. Resolves with the new file's path, or null.
    */

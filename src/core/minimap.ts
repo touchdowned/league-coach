@@ -117,7 +117,15 @@ export interface DotOpts {
   /** Blob size limits as a fraction of the minimap's width (diameter). */
   minD?: number;
   maxD?: number;
+  /** Champion rings: anything inside one is part of the icon, not a minion. */
+  exclude?: { cx: number; cy: number; r: number }[];
 }
+
+/** Fountains, where champion icons sit and no minion ever is (game units). */
+export const FOUNTAINS = [
+  { x: 400, y: 420, r: 1500 },
+  { x: 14340, y: 14390, r: 1500 },
+];
 
 /** Minion dots in a cropped minimap frame, given the empty map behind it. */
 export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
@@ -127,8 +135,16 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
   const maxD = (o.maxD ?? 0.032) * w;
   const maxA = Math.round(maxD ** 2);
   const label = new Uint8Array(w * h);
+  const masked = new Uint8Array(w * h);
+  for (const f of FOUNTAINS) {
+    const c = gameToPixel(f.x, f.y, w);
+    const r = (f.r / (RIFT.maxX - RIFT.minX)) * w;
+    markDisc(masked, w, h, c.px, c.py, r);
+  }
+  for (const e of o.exclude ?? []) markDisc(masked, w, h, e.cx, e.cy, e.r + 2);
   for (let p = 0; p < w * h; p++) {
     const i = p * 4;
+    if (masked[p]) continue;
     if (diffAt(data, bg.data, i) < diff) continue;
     const t = teamColor(data[i], data[i + 1], data[i + 2]);
     if (t) label[p] = t === 100 ? 1 : 2;
@@ -166,11 +182,20 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
       }
     }
     if (area < minA || area > maxA) continue;
-    if (maxX - minX + 1 > maxD || maxY - minY + 1 > maxD) continue; // a ring or bar, not a dot
+    const bw = maxX - minX + 1;
+    const bh = maxY - minY + 1;
+    if (bw > maxD || bh > maxD) continue; // a ring or bar, not a dot
+    // Minion dots are filled; a thin arc (a ring edge, an ability circle) is not.
+    if (bw * bh >= 9 && area / (bw * bh) < 0.45) continue;
     const g = pixelToGame(sx / area + 0.5, sy / area + 0.5, w);
     dots.push({ team: l === 1 ? 100 : 200, x: Math.round(g.x), y: Math.round(g.y), area });
   }
   return dots;
+}
+
+function markDisc(m: Uint8Array, w: number, h: number, cx: number, cy: number, r: number) {
+  for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(h - 1, Math.ceil(cy + r)); y++)
+    for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(w - 1, Math.ceil(cx + r)); x++) if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r) m[y * w + x] = 1;
 }
 
 /** BGRA (what Electron's NativeImage.toBitmap gives on Windows) to RGBA, in place. */
@@ -243,11 +268,18 @@ function gridDiff(a: number[], b: number[]): number {
   return s / a.length;
 }
 
-/**
- * Champion icons on a cropped minimap: team-coloured rings, identified by matching the
- * portrait inside against the ten champions in the game.
- */
-export function detectChampions(frame: Frame, refs: PortraitRef[], maxScore = 38): ChampDot[] {
+/** A champion icon's ring on the minimap, in minimap pixels. */
+export interface Ring {
+  team: 100 | 200;
+  cx: number;
+  cy: number;
+  r: number;
+  /** Share of the ring's circumference that shows (1 = whole ring; lower when another icon covers it). */
+  cover: number;
+}
+
+/** Team-coloured pixels: 1 blue, 2 red. */
+function teamLabels(frame: Frame): Uint8Array {
   const { w, h, data } = frame;
   const label = new Uint8Array(w * h);
   for (let p = 0; p < w * h; p++) {
@@ -255,60 +287,205 @@ export function detectChampions(frame: Frame, refs: PortraitRef[], maxScore = 38
     const t = teamColor(data[i], data[i + 1], data[i + 2]);
     if (t) label[p] = t === 100 ? 1 : 2;
   }
+  return label;
+}
+
+interface Blob {
+  l: number;
+  px: number[];
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+function blobs(label: Uint8Array, w: number, h: number): Blob[] {
   const seen = new Uint8Array(w * h);
-  const rings: { team: 100 | 200; cx: number; cy: number; r: number }[] = [];
+  const out: Blob[] = [];
   const stack: number[] = [];
-  const minD = w * 0.045;
-  const maxD = w * 0.13;
   for (let p = 0; p < w * h; p++) {
     if (!label[p] || seen[p]) continue;
-    const l = label[p];
-    let area = 0;
-    let minX = w;
-    let maxX = 0;
-    let minY = h;
-    let maxY = 0;
+    const b: Blob = { l: label[p], px: [], minX: w, maxX: 0, minY: h, maxY: 0 };
     stack.push(p);
     seen[p] = 1;
     while (stack.length) {
       const q = stack.pop()!;
       const x = q % w;
       const y = (q - x) / w;
-      area++;
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
+      b.px.push(q);
+      if (x < b.minX) b.minX = x;
+      if (x > b.maxX) b.maxX = x;
+      if (y < b.minY) b.minY = y;
+      if (y > b.maxY) b.maxY = y;
       for (const k of [x > 0 ? q - 1 : -1, x < w - 1 ? q + 1 : -1, y > 0 ? q - w : -1, y < h - 1 ? q + w : -1])
-        if (k >= 0 && !seen[k] && label[k] === l) {
+        if (k >= 0 && !seen[k] && label[k] === b.l) {
           seen[k] = 1;
           stack.push(k);
         }
     }
-    const bw = maxX - minX + 1;
-    const bh = maxY - minY + 1;
-    if (bw < minD || bh < minD || bw > maxD || bh > maxD) continue;
-    if (bw / bh > 1.35 || bh / bw > 1.35) continue;
-    if (area / (bw * bh) > 0.6) continue; // a filled shape, not a ring
-    rings.push({ team: l === 1 ? 100 : 200, cx: minX + bw / 2 - 0.5, cy: minY + bh / 2 - 0.5, r: Math.min(bw, bh) / 2 });
+    out.push(b);
   }
-  // Match each ring to the best unused champion of its team.
+  return out;
+}
+
+/** How much of a circle of radius r at (cx, cy) the pixels trace, in 24 sectors. */
+function coverage(px: number[], w: number, cx: number, cy: number, r: number, tol = 2.2): { cover: number; on: number[] } {
+  const sectors = new Uint8Array(24);
+  const on: number[] = [];
+  for (const q of px) {
+    const x = q % w;
+    const y = (q - x) / w;
+    const d = Math.hypot(x - cx, y - cy);
+    if (Math.abs(d - r) > tol) continue;
+    on.push(q);
+    const a = Math.atan2(y - cy, x - cx);
+    sectors[Math.min(23, Math.floor(((a + Math.PI) / (2 * Math.PI)) * 24))] = 1;
+  }
+  return { cover: sectors.reduce((s, x) => s + x, 0) / 24, on };
+}
+
+/**
+ * Circles of radius r traced by a blob's pixels, strongest first. Used where icons overlap:
+ * two rings that touch are one blob, and a ring under another icon is only an arc.
+ */
+function houghRings(b: Blob, w: number, r: number, minCover: number): { cx: number; cy: number; cover: number }[] {
+  const pad = Math.ceil(r) + 2;
+  const ox = b.minX - pad;
+  const oy = b.minY - pad;
+  const aw = b.maxX - b.minX + 1 + pad * 2;
+  const ah = b.maxY - b.minY + 1 + pad * 2;
+  const steps = Math.max(24, Math.round(2 * Math.PI * r));
+  const cos = Array.from({ length: steps }, (_, k) => Math.cos((k / steps) * 2 * Math.PI) * r);
+  const sin = Array.from({ length: steps }, (_, k) => Math.sin((k / steps) * 2 * Math.PI) * r);
+  let left = b.px;
+  const found: { cx: number; cy: number; cover: number }[] = [];
+  for (let iter = 0; iter < 6 && left.length > r * 2; iter++) {
+    const acc = new Float32Array(aw * ah);
+    for (const q of left) {
+      const x = q % w;
+      const y = (q - x) / w;
+      let prev = -1;
+      for (let k = 0; k < steps; k++) {
+        const ax = Math.round(x - cos[k]) - ox;
+        const ay = Math.round(y - sin[k]) - oy;
+        if (ax < 0 || ay < 0 || ax >= aw || ay >= ah) continue;
+        const c = ay * aw + ax;
+        if (c !== prev) acc[c]++;
+        prev = c;
+      }
+    }
+    // 3x3 sum, so a centre between pixels still peaks.
+    let best = -1;
+    let bestV = 0;
+    for (let y = 1; y < ah - 1; y++)
+      for (let x = 1; x < aw - 1; x++) {
+        let v = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) v += acc[(y + dy) * aw + x + dx];
+        if (v > bestV) {
+          bestV = v;
+          best = y * aw + x;
+        }
+      }
+    if (best < 0) break;
+    // Refine to the vote-weighted centre of the 3x3 peak.
+    const bx = best % aw;
+    const by = (best - bx) / aw;
+    let sx = 0;
+    let sy = 0;
+    let sv = 0;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const v = acc[(by + dy) * aw + bx + dx];
+        sx += (bx + dx) * v;
+        sy += (by + dy) * v;
+        sv += v;
+      }
+    const cx = sx / sv + ox;
+    const cy = sy / sv + oy;
+    const { cover, on } = coverage(left, w, cx, cy, r);
+    // Enough of the ring, and enough pixels on it (portrait art scattered around a centre isn't a ring).
+    if (cover < minCover || on.length < 2 * Math.PI * r * cover * 0.8) break;
+    // Leftovers of a ring already found: the same circle, slightly off.
+    if (found.some((f) => Math.hypot(f.cx - cx, f.cy - cy) < r * 0.75)) break;
+    found.push({ cx, cy, cover });
+    const used = new Set(on);
+    left = left.filter((q) => !used.has(q));
+  }
+  return found;
+}
+
+/**
+ * Champion icon rings on a cropped minimap. Clean rings come straight from blob shape;
+ * blobs that are several touching rings, or a ring partly under another icon, are split
+ * with a circle search at the ring size the clean ones show.
+ */
+export function findRings(frame: Frame): Ring[] {
+  const { w, h } = frame;
+  const all = blobs(teamLabels(frame), w, h);
+  const minD = w * 0.045;
+  const maxD = w * 0.13;
+  const rings: Ring[] = [];
+  const rest: Blob[] = [];
+  for (const b of all) {
+    const bw = b.maxX - b.minX + 1;
+    const bh = b.maxY - b.minY + 1;
+    const clean = bw >= minD && bh >= minD && bw <= maxD && bh <= maxD && bw / bh <= 1.2 && bh / bw <= 1.2 && b.px.length / (bw * bh) <= 0.6;
+    if (clean) {
+      const cx = b.minX + bw / 2 - 0.5;
+      const cy = b.minY + bh / 2 - 0.5;
+      const r = Math.min(bw, bh) / 2;
+      const { cover } = coverage(b.px, w, cx, cy, r - 1, 2.2);
+      if (cover >= 0.75) {
+        rings.push({ team: b.l === 1 ? 100 : 200, cx, cy, r, cover });
+        continue;
+      }
+    }
+    rest.push(b);
+  }
+  // Ring size on this minimap: from the clean rings, else the usual share of the width.
+  const rs = rings.map((x) => x.r).sort((a, b) => a - b);
+  const r0 = rs.length ? rs[Math.floor(rs.length / 2)] : w * 0.04;
+  for (const b of rest) {
+    const bw = b.maxX - b.minX + 1;
+    const bh = b.maxY - b.minY + 1;
+    // Too small to hold an arc of a ring, or too big to be a few icons.
+    if (Math.max(bw, bh) < r0 * 1.1 || bw > r0 * 9 || bh > r0 * 9 || b.px.length < r0 * 2.5) continue;
+    if (b.px.length / (bw * bh) > 0.6) continue; // filled: a structure, not icons
+    for (const c of houghRings(b, w, r0 - 1, 0.42)) rings.push({ team: b.l === 1 ? 100 : 200, cx: c.cx, cy: c.cy, r: r0, cover: c.cover });
+  }
+  return rings;
+}
+
+/**
+ * Champion icons on a cropped minimap: team-coloured rings, identified by matching the
+ * portrait inside against the ten champions in the game. Rings that match no one well
+ * enough come back with id 0, so tracking can still name them.
+ */
+export function detectChampions(frame: Frame, refs: PortraitRef[], maxScore = 38, rings = findRings(frame)): (ChampDot & { team: 100 | 200 })[] {
+  const w = frame.w;
   const pairs: { ring: number; ref: PortraitRef; score: number }[] = [];
   rings.forEach((ring, i) => {
+    // A covered ring's portrait is partly someone else's: judge it more loosely.
     const g = portraitGrid(frame, ring.cx, ring.cy, ring.r);
-    for (const ref of refs) if (ref.team === ring.team) pairs.push({ ring: i, ref, score: gridDiff(g, ref.grid) });
+    const slack = ring.cover < 0.9 ? 1 + (0.9 - ring.cover) : 1;
+    for (const ref of refs) if (ref.team === ring.team) pairs.push({ ring: i, ref, score: gridDiff(g, ref.grid) / slack });
   });
   pairs.sort((a, b) => a.score - b.score);
   const usedRing = new Set<number>();
   const usedRef = new Set<number>();
-  const out: ChampDot[] = [];
+  const out: (ChampDot & { team: 100 | 200 })[] = [];
   for (const p of pairs) {
     if (p.score > maxScore || usedRing.has(p.ring) || usedRef.has(p.ref.id)) continue;
     usedRing.add(p.ring);
     usedRef.add(p.ref.id);
     const ring = rings[p.ring];
     const g = pixelToGame(ring.cx + 0.5, ring.cy + 0.5, w);
-    out.push({ id: p.ref.id, x: Math.round(g.x), y: Math.round(g.y), score: Math.round(p.score) });
+    out.push({ id: p.ref.id, team: ring.team, x: Math.round(g.x), y: Math.round(g.y), score: Math.round(p.score) });
   }
+  rings.forEach((ring, i) => {
+    if (usedRing.has(i)) return;
+    const g = pixelToGame(ring.cx + 0.5, ring.cy + 0.5, w);
+    out.push({ id: 0, team: ring.team, x: Math.round(g.x), y: Math.round(g.y), score: 999 });
+  });
   return out;
 }

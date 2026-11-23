@@ -66,6 +66,8 @@ export interface ChampSample {
   /** "team": your team's fog of war, what you could see. "off": everything. */
   fog: "team" | "off";
   at: { id: number; x: number; y: number }[];
+  /** Rings seen but not matched to a champion (named later by tracking, if they can be). */
+  unk?: { team: 100 | 200; x: number; y: number }[];
 }
 
 export interface WaveTrack {
@@ -79,7 +81,21 @@ export interface WaveTrack {
   /** Live Client Data polls taken during the pass (only the ones around a change). */
   live?: import("./telemetry").LivePoll[];
   /** How the pass ran: capture cost, sample counts, calibration. */
-  scanInfo?: { captureMsMedian: number; captureMsP90: number; samples: number; polls: number; minimap: { x: number; y: number; w: number; h: number }; screen: { w: number; h: number }; until: number };
+  scanInfo?: {
+    /** "recorder": Riot's own frame recorder. "screenshot": desktop screenshots (the slow fallback). */
+    method?: "recorder" | "screenshot";
+    captureMsMedian: number;
+    captureMsP90: number;
+    samples: number;
+    polls: number;
+    minimap: { x: number; y: number; w: number; h: number };
+    screen: { w: number; h: number };
+    until: number;
+    /** Game ms of the last frame read: checks only cover up to here. */
+    lastFrame?: number;
+    /** Each pass: frames read, frames per game second, wall time. */
+    passes?: { fog: "off" | "team"; method: "recorder" | "screenshot"; frames: number; fps: number; wallMs: number }[];
+  };
 }
 
 export function sampleFromDots(t: number, dots: Dot[]): WaveSample {

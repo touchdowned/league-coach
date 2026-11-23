@@ -127,8 +127,8 @@ describe("wave state from the replay", () => {
 });
 
 // ---- champions and vision ----
-import { detectChampions, iconGrid } from "../src/core/minimap";
-import { hasVision, lastSeen, mergeReplayPositions, truthAt, visibleAt } from "../src/core/vision";
+import { detectChampions, findRings, iconGrid } from "../src/core/minimap";
+import { hasVision, lastSeen, mergeReplayPositions, nameRings, truthAt, visibleAt } from "../src/core/vision";
 import type { ChampSample } from "../src/core/waves";
 
 function icon(seed: number): Frame {
@@ -228,5 +228,67 @@ describe("what you could see vs what was true", () => {
     const d = readGame(g.match, g.timeline, buildTrack(g.match, g.timeline), me, findOpponent(g.match, me), w).find((l) => l.kind === "death")!;
     expect(d.nextTime).toMatch(/^You couldn't see Champ6 coming/);
     expect(d.evidence.join(" ")).toMatch(/With fog off, 20s before you died Champ6 was/);
+  });
+});
+
+describe("champion rings that touch or overlap", () => {
+  it("splits two touching same-team rings and keeps a half-covered one", () => {
+    const icons = [1, 2, 3, 4].map(icon);
+    const refs = [
+      { id: 1, team: 100 as const, grid: iconGrid(icons[0]) },
+      { id: 2, team: 100 as const, grid: iconGrid(icons[1]) },
+      { id: 6, team: 200 as const, grid: iconGrid(icons[2]) },
+      { id: 7, team: 200 as const, grid: iconGrid(icons[3]) },
+    ];
+    const f = blank(300, 300, 9);
+    // Two allies side by side (rings touch, one blob), and a red ring a third under a blue one.
+    stamp(f, icons[0], 100, 100, 11, BLUE);
+    stamp(f, icons[1], 121, 100, 11, BLUE);
+    stamp(f, icons[2], 200, 200, 11, RED);
+    stamp(f, icons[3], 214, 205, 11, RED);
+    const rings = findRings(f);
+    const near = (x: number, y: number, team: number) => rings.some((r) => r.team === team && Math.hypot(r.cx - x, r.cy - y) < 2.5);
+    expect(near(100, 100, 100)).toBe(true);
+    expect(near(121, 100, 100)).toBe(true);
+    expect(near(200, 200, 200)).toBe(true);
+    expect(near(214, 205, 200)).toBe(true);
+    expect(rings.length).toBe(4);
+    // The fully visible ones are still named; the covered ones come back named or as unknown, never as someone else.
+    const found = detectChampions(f, refs, 38, rings);
+    const at = (id: number) => found.find((c) => c.id === id);
+    expect(at(2)).toBeTruthy();
+    expect(at(7)).toBeTruthy();
+    for (const c of found) if (c.id === 1) expect(Math.hypot(gameToPixel(c.x, c.y, 300).px - 100, gameToPixel(c.x, c.y, 300).py - 100)).toBeLessThan(3);
+  });
+
+  it("doesn't count minion dots inside a champion ring, or fountain icons, as minions", () => {
+    const size = 300;
+    const empty = medianFrame([blank(size, size, 5)]);
+    const f = clone(empty);
+    stamp(f, icon(1), 150, 150, 11, BLUE);
+    paint(f, 150, 150, 2.5, BLUE); // a blue spot in the portrait art
+    const fountain = gameToPixel(500, 500, size);
+    paint(f, fountain.px, fountain.py, 2.5, BLUE);
+    const lane = gameToPixel(pointOnLane("MIDDLE", 0.3).x, pointOnLane("MIDDLE", 0.3).y, size);
+    paint(f, lane.px, lane.py, 2.5, RED);
+    const dots = detectDots(f, empty, { exclude: findRings(f) });
+    expect(dots.length).toBe(1);
+    expect(dots[0].team).toBe(200);
+  });
+});
+
+describe("naming rings by tracking", () => {
+  it("names an unmatched ring after the missing champion who was just there, and leaves ties alone", () => {
+    const champs: ChampSample[] = [
+      { t: 1000, fog: "off", at: [{ id: 6, x: 5000, y: 5000 }, { id: 7, x: 9000, y: 9000 }] },
+      { t: 2000, fog: "off", at: [{ id: 7, x: 9000, y: 9000 }], unk: [{ team: 200, x: 5200, y: 5100 }] },
+      { t: 3000, fog: "off", at: [{ id: 6, x: 5400, y: 5200 }, { id: 8, x: 5500, y: 5200 }] },
+      { t: 4000, fog: "off", at: [], unk: [{ team: 200, x: 5450, y: 5200 }] },
+    ];
+    const n = nameRings(champs, (id) => (id >= 6 ? 200 : 100));
+    expect(n).toBe(1);
+    expect(champs[1].at.find((a) => a.id === 6)).toEqual({ id: 6, x: 5200, y: 5100 });
+    expect(champs[1].unk).toBeUndefined();
+    expect(champs[3].unk?.length).toBe(1);
   });
 });

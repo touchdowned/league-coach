@@ -283,7 +283,8 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
   const waves = await scanReplay(lc, matchId, (p) => console.log(p.label), () => false, players, me, untilSec, debugDir);
   const wallSec = Math.round((Date.now() - t0) / 1000);
   await store.writeJson(wavesFile(matchId), waves);
-  const until = untilSec * 1000;
+  // Only judge what was actually read: a pass that stopped early shouldn't fail on frames it never saw.
+  const until = Math.min(untilSec * 1000, waves.scanInfo?.lastFrame || untilSec * 1000);
   const events = timeline.info.frames.flatMap((f) => f.events ?? []);
   const champOf = (id: number) => players.find((p) => p.id === id)?.champion ?? "";
   const polls = waves.live ?? [];
@@ -306,6 +307,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
     matchId,
     me,
     until: untilSec,
+    checkedUntil: until,
     wallSec,
     viewTeam: waves.viewTeam,
     scanInfo: waves.scanInfo,

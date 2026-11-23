@@ -1,5 +1,7 @@
-import { desktopCapturer, nativeImage, net, screen } from "electron";
-import { bgraToRgba, crop, detectChampions, detectDots, findMinimap, Frame, iconGrid, medianFrame, PortraitRef, Rect } from "../core/minimap";
+import { app, desktopCapturer, nativeImage, net, screen } from "electron";
+import { bgraToRgba, crop, detectChampions, detectDots, findMinimap, findRings, Frame, iconGrid, medianFrame, PortraitRef, Rect } from "../core/minimap";
+import { cameraLookingAt } from "../core/camera";
+import { nameRings } from "../core/vision";
 import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
 import { gameIdOf, LeagueClient } from "./league";
 import { parseLive, type LivePoll } from "../core/telemetry";
@@ -108,6 +110,152 @@ async function dumpFrame(dir: string, name: string, f: Frame, info: unknown) {
   await fsp.writeFile(pathMod.join(dir, `${name}.json`), JSON.stringify(info));
 }
 
+/** A fixed free camera over mid river, so the minimap's camera box never moves. */
+const SCAN_CAMERA = { cameraMode: "fps", cameraAttached: false, ...cameraLookingAt({ x: 7400, y: 7400 }, 2400, 56, 0), fieldOfView: 40 };
+
+function imageToFrame(img: Electron.NativeImage): Frame {
+  const { width, height } = img.getSize();
+  const data = new Uint8ClampedArray(img.toBitmap());
+  bgraToRgba(data);
+  return { w: width, h: height, data };
+}
+
+/** The minimap rect, scaled from the calibration capture's size to a frame of another size. */
+function scaleRect(r: Rect, from: { w: number; h: number }, to: { w: number; h: number }): Rect {
+  if (from.w === to.w && from.h === to.h) return r;
+  const sx = to.w / from.w;
+  const sy = to.h / from.h;
+  return { x: Math.round(r.x * sx), y: Math.round(r.y * sy), w: Math.round(r.w * sx), h: Math.round(r.h * sy) };
+}
+
+type OnFrame = (full: Frame, t: number) => Promise<void> | void;
+
+/**
+ * One pass with Riot's recorder: it renders [from, to] frame by frame and writes PNGs at
+ * exact game times (frame k = from + k / fps), much faster than screen capture and
+ * independent of what's on screen. Each frame is read, then deleted. Null when the
+ * recorder isn't available.
+ */
+async function recorderPass(lc: LeagueClient, from: number, to: number, fps: number, onFrame: OnFrame, isCancelled: () => boolean, onTime: (t: number) => void): Promise<{ frames: number; wallMs: number } | null> {
+  const base = pathMod.join(app.getPath("temp"), "league-coach-frames", String(Date.now()));
+  await lc.setPlayback({ time: from, paused: true });
+  await sleep(1200);
+  if (!(await lc.startFrameRecording(base, from, to, fps))) return null;
+  const t0 = Date.now();
+  await lc.setPlayback({ time: from, paused: false, speed: 8 });
+  let next = 0;
+  let lastProgress = Date.now();
+  let dir: string | null = null;
+  try {
+    while (true) {
+      if (isCancelled()) {
+        await lc.stopRecording();
+        break;
+      }
+      if (!dir) {
+        const subs = await fsp.readdir(base, { withFileTypes: true }).catch(() => []);
+        const d = subs.find((e) => e.isDirectory());
+        dir = d ? pathMod.join(base, d.name) : null;
+      }
+      const st = await lc.recordingState();
+      const done = !st || !st.recording;
+      if (dir) {
+        const files = (await fsp.readdir(dir).catch(() => [] as string[])).filter((f) => /^\d+\.png$/i.test(f)).sort();
+        const have = new Set(files.map((f) => parseInt(f, 10)));
+        for (const f of files) {
+          const k = parseInt(f, 10);
+          if (k < next) continue;
+          // A file is complete once the next one exists, or the recorder has stopped.
+          if (!done && !have.has(k + 1)) break;
+          const file = pathMod.join(dir, f);
+          const img = nativeImage.createFromPath(file);
+          if (img.isEmpty()) {
+            if (!done) break;
+          } else await onFrame(imageToFrame(img), Math.round((from + k / fps) * 1000));
+          await fsp.unlink(file).catch(() => undefined);
+          next = k + 1;
+          lastProgress = Date.now();
+          onTime(from + k / fps);
+        }
+      }
+      if (done) break;
+      // The recorder only advances while the replay plays.
+      const pb = await lc.playback();
+      if (pb?.paused) await lc.setPaused(false);
+      if (Date.now() - lastProgress > 25_000) {
+        await lc.stopRecording();
+        if (next === 0) return null;
+        break;
+      }
+      await sleep(150);
+    }
+  } finally {
+    await lc.setPaused(true);
+    await fsp.rm(base, { recursive: true, force: true }).catch(() => undefined);
+  }
+  return { frames: next, wallMs: Date.now() - t0 };
+}
+
+/**
+ * The fallback: desktop screenshots while the replay plays (~0.6 s per capture on a
+ * typical PC, so the replay runs at 1-2x). Times are the midpoint of the playback
+ * clock read before and after each capture.
+ */
+async function screenshotPass(lc: LeagueClient, from: number, to: number, onFrame: OnFrame, isCancelled: () => boolean, onTime: (t: number) => void, captureMs: number[]): Promise<{ frames: number; wallMs: number }> {
+  const t0 = Date.now();
+  let speed = 2;
+  await lc.seek(from, false, speed);
+  let frames = 0;
+  let lastT = from;
+  let atEnd = 0;
+  const gaps: number[] = [];
+  let last = Date.now();
+  while (!isCancelled()) {
+    const before = await lc.playback();
+    if (!before) throw new Error("The replay closed while reading.");
+    // Something else moved the replay (a seek backwards): put it back where we were.
+    if (before.time < lastT - 3) {
+      await lc.seek(lastT, false, speed);
+      await sleep(500);
+      continue;
+    }
+    if (before.time >= to) {
+      if (++atEnd >= 3) break;
+      await sleep(200);
+      continue;
+    }
+    atEnd = 0;
+    if (before.paused) {
+      await lc.setPaused(false);
+      await sleep(300);
+      continue;
+    }
+    const c0 = Date.now();
+    const full = await captureScreen();
+    captureMs.push(Date.now() - c0);
+    const after = await lc.playback();
+    const t = Math.round(((before.time + (after?.time ?? before.time)) / 2) * 1000);
+    lastT = before.time;
+    await onFrame(full, t);
+    frames++;
+    onTime(before.time);
+    const now = Date.now();
+    gaps.push(now - last);
+    last = now;
+    if (gaps.length === 8) {
+      const avg = gaps.reduce((s, x) => s + x, 0) / gaps.length;
+      const next = Math.max(1, Math.min(4, Math.floor(1500 / Math.max(avg, 1))));
+      if (next !== speed) {
+        speed = next;
+        await lc.setSpeed(speed);
+      }
+      gaps.length = 0;
+    }
+  }
+  await lc.setPaused(true);
+  return { frames, wallMs: Date.now() - t0 };
+}
+
 export async function scanReplay(
   lc: LeagueClient,
   matchId: string,
@@ -117,22 +265,28 @@ export async function scanReplay(
   me: ScanPlayer,
   untilSec = 16 * 60,
   debugDir?: string,
+  opts: { method?: "recorder" | "screenshot" } = {},
 ): Promise<WaveTrack> {
   if ((await lc.gameflowPhase()) === "InProgress") throw new Error("You're in a game. Replay reading only runs after the game.");
 
   // 1. Get this game's replay open.
   onProgress({ phase: "opening", label: "Opening the replay", done: 0, total: 1 });
   const pb = await openReplay(lc, matchId, (label) => onProgress({ phase: "opening", label, done: 0, total: 1 }), isCancelled);
-  const end = Math.min(pb.length, untilSec);
+  const end = Math.min(pb.length - 1, untilSec);
 
   const original = await lc.getRender();
   const refs = await portraitRefs(players).catch(() => [] as PortraitRef[]);
   try {
-    // 2. Find the minimap: capture with it on and off while paused.
+    // 2. Find the minimap: capture with it on and off while paused. Your champion is
+    // selected (so team fog is your team's), and the camera is parked over mid river
+    // for the whole pass, so the camera box on the minimap stays put.
     onProgress({ phase: "calibrating", label: "Finding the minimap", done: 0, total: 1 });
     await lc.seek(20, true);
     await lc.setRender({ fogOfWar: false, interfaceMinimap: true, selectionName: me.champion });
+    await sleep(300);
+    await lc.setRender(SCAN_CAMERA);
     let rect: Rect | null = null;
+    let screenSize = { w: 0, h: 0 };
     for (let tries = 0; tries < 3 && !rect && !isCancelled(); tries++) {
       await sleep(900);
       const on = await captureScreen();
@@ -141,9 +295,11 @@ export async function scanReplay(
       const off = await captureScreen();
       await lc.setRender({ interfaceMinimap: true });
       rect = findMinimap(on, off);
+      screenSize = { w: on.w, h: on.h };
     }
     if (!rect)
       throw new Error("Couldn't find the minimap on screen. Keep the replay on your main monitor, in Borderless or Windowed mode, and don't cover it while it reads.");
+    const minimap = rect;
 
     // 3. The empty map: frames before minions spawn, median removes the champions.
     const bgFrames: Frame[] = [];
@@ -151,16 +307,33 @@ export async function scanReplay(
       if (isCancelled()) break;
       await lc.seek(t, true);
       await sleep(700);
-      bgFrames.push(crop(await captureScreen(), rect));
+      bgFrames.push(crop(await captureScreen(), minimap));
     }
     const bg = medianFrame(bgFrames);
 
-    // 4. Play it fast. Alternate two views: fog off (minions, true positions) and your
-    // team's fog (what you could see on your minimap).
     const samples: WaveSample[] = [];
     const champs: ChampSample[] = [];
     const captureMs: number[] = [];
-    // Live Client Data, polled in parallel. Keep a poll only around a change.
+    const passes: NonNullable<NonNullable<WaveTrack["scanInfo"]>["passes"]> = [];
+    let dumped = 0;
+    const reader = (fog: ChampSample["fog"]): OnFrame => async (full, t) => {
+      const r = scaleRect(minimap, screenSize, full);
+      const frame = crop(full, r);
+      // Minimap scale differs from the background's? (recorder at another resolution)
+      const okBg = frame.w === bg.w && frame.h === bg.h;
+      const rings = findRings(frame);
+      const dots = fog === "off" && okBg ? detectDots(frame, bg, { exclude: rings }) : [];
+      if (fog === "off") samples.push(sampleFromDots(t, dots));
+      if (refs.length) {
+        const found = detectChampions(frame, refs, 38, rings);
+        const at = found.filter((c) => c.id > 0).map(({ id, x, y }) => ({ id, x, y }));
+        const unk = found.filter((c) => c.id === 0).map(({ team, x, y }) => ({ team, x, y }));
+        champs.push({ t, fog, at, ...(unk.length ? { unk } : {}) });
+        if (debugDir && dumped++ % 12 === 0) await dumpFrame(debugDir, `${String(t).padStart(7, "0")}-${fog}`, frame, { t, fog, dots, rings, champs: found });
+      }
+    };
+
+    // Live Client Data, polled in parallel with the fog-off pass. Keep a poll only around a change.
     const live: LivePoll[] = [];
     let prevPoll: LivePoll | null = null;
     let polling = true;
@@ -175,70 +348,58 @@ export async function scanReplay(
           }
           prevPoll = p;
         }
-        await sleep(250);
+        await sleep(120);
       }
     })();
-    let n = 0;
-    let speed = 4;
-    await lc.seek(65, false, speed);
-    const gaps: number[] = [];
-    let last = Date.now();
-    while (!isCancelled()) {
-      const before = await lc.playback();
-      if (!before) throw new Error("The replay closed while reading.");
-      if (before.time >= end) break;
-      if (before.paused) {
-        await lc.setPaused(false);
-        await sleep(300);
-        continue;
-      }
-      const fog: ChampSample["fog"] = n++ % 2 === 0 ? "off" : "team";
+
+    // 4. Two passes over 1:05 to the end: fog off (minions, true positions) at 2 frames
+    // per game second, then your team's fog (what you could see) at 1.
+    const from = 65;
+    let method = opts.method ?? "recorder";
+    const runPass = async (fog: ChampSample["fog"], fps: number) => {
       await lc.setRender({ fogOfWar: fog === "team" });
-      await sleep(60);
-      const c0 = Date.now();
-      const frame = crop(await captureScreen(), rect);
-      captureMs.push(Date.now() - c0);
-      const after = await lc.playback();
-      const t = Math.round(((before.time + (after?.time ?? before.time)) / 2) * 1000);
-      const dots = fog === "off" ? detectDots(frame, bg) : [];
-      if (fog === "off") samples.push(sampleFromDots(t, dots));
-      const found = refs.length ? detectChampions(frame, refs).map(({ id, x, y }) => ({ id, x, y })) : [];
-      if (refs.length) champs.push({ t, fog, at: found });
-      if (debugDir && n % 24 < 2) await dumpFrame(debugDir, `${String(t).padStart(7, "0")}-${fog}`, frame, { t, fog, dots, champs: found });
-      const now = Date.now();
-      gaps.push(now - last);
-      last = now;
-      // Aim for a read every ~1.5 game seconds, as fast as capture allows.
-      if (gaps.length === 8) {
-        const avg = gaps.reduce((s, x) => s + x, 0) / gaps.length;
-        const next = Math.max(1, Math.min(8, Math.floor(1000 / Math.max(avg, 1))));
-        if (next !== speed) {
-          speed = next;
-          await lc.setSpeed(speed);
+      await sleep(300);
+      const label = (t: number) =>
+        onProgress({ phase: "reading", label: `Reading the ${fog === "off" ? "map" : "fog of war"} at ${fmt(t)} of ${fmt(end)}`, done: Math.round((fog === "off" ? 0 : end) + t), total: Math.round(end * 2) });
+      if (method === "recorder") {
+        const r = await recorderPass(lc, from, end, fps, reader(fog), isCancelled, label);
+        if (r) {
+          passes.push({ fog, method, frames: r.frames, fps, wallMs: r.wallMs });
+          return;
         }
-        gaps.length = 0;
+        method = "screenshot";
       }
-      onProgress({ phase: "reading", label: `Reading minions at ${fmt(before.time)} of ${fmt(end)} (${speed}x)`, done: Math.round(before.time), total: Math.round(end) });
-    }
+      const r = await screenshotPass(lc, from, end, reader(fog), isCancelled, label, captureMs);
+      passes.push({ fog, method: "screenshot", frames: r.frames, fps: r.frames / Math.max(1, end - from), wallMs: r.wallMs });
+    };
+    await runPass("off", 2);
     polling = false;
     await pollLoop;
     if (prevPoll && live[live.length - 1] !== prevPoll) live.push(prevPoll);
+    if (!isCancelled()) await runPass("team", 1);
     if (isCancelled()) throw new Error("Stopped.");
+    champs.sort((a, b) => a.t - b.t);
+    nameRings(champs, (id) => players.find((p) => p.id === id)?.teamId ?? 0);
+    samples.sort((a, b) => a.t - b.t);
     onProgress({ phase: "done", label: "Done", done: 1, total: 1 });
-    if (debugDir) await dumpFrame(debugDir, "background", bg, { rect });
+    if (debugDir) await dumpFrame(debugDir, "background", bg, { rect: minimap });
     // Whose fog did "team" show? Allies are always on your own minimap.
     const team = champs.filter((c) => c.fog === "team");
     const avg = (tid: number) => team.reduce((s, c) => s + c.at.filter((a) => players.find((p) => p.id === a.id)?.teamId === tid).length, 0) / Math.max(1, team.length);
     const viewTeam = team.length ? (avg(100) >= avg(200) ? 100 : 200) : undefined;
     const sorted = [...captureMs].sort((a, b) => a - b);
+    const lastFrame = champs.length ? champs[champs.length - 1].t : samples.length ? samples[samples.length - 1].t : 0;
     const scanInfo = {
+      method: passes.every((p) => p.method === "recorder") ? ("recorder" as const) : ("screenshot" as const),
       captureMsMedian: sorted[Math.floor(sorted.length / 2)] ?? 0,
       captureMsP90: sorted[Math.floor(sorted.length * 0.9)] ?? 0,
       samples: samples.length,
       polls: live.length,
-      minimap: rect,
-      screen: { w: 0, h: 0 },
+      minimap,
+      screen: screenSize,
       until: end * 1000,
+      lastFrame,
+      passes,
     };
     return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, scanInfo };
   } finally {
