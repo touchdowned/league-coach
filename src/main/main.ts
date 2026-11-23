@@ -12,6 +12,11 @@ import { scanReplay } from "./scan";
 import type { WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
 import { listVods, matchVod } from "./vod";
+import { startAutoUpdates } from "./updater";
+
+// Keep settings, the API key and saved games in %APPDATA%\league-coach no matter how the app
+// was installed (dev run, old packaged copy, or the auto-updating installer).
+app.setPath("userData", path.join(app.getPath("appData"), "league-coach"));
 
 let win: BrowserWindow | null = null;
 let store: JsonStore;
@@ -284,6 +289,7 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   createWindow();
   watcher.start();
+  startAutoUpdates();
   app.on("activate", () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 

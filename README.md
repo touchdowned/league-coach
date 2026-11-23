@@ -13,7 +13,15 @@ A personal, post-game League of Legends coach for Windows. It doesn't ask you to
 
 Everything runs after the game. The app never reads game memory or draws over a live game, so it stays within Riot's third-party rules and Vanguard.
 
-## Run it
+## Install
+
+Download `League-Coach-Setup-<version>.exe` from the [latest release](https://github.com/touchdowned/league-coach/releases/latest) and run it. It installs for your Windows user (no admin), adds Start menu and desktop shortcuts, and opens the app. Pin it to the taskbar from there.
+
+The app updates itself: every push to `phase-1-match-review` or `main` builds a new installer in GitHub Actions and publishes it as a release. The app checks hourly, downloads the update in the background and installs it when you close the app (or click the "update ready" notification). Your settings, API key and synced games are kept in `%APPDATA%\league-coach`, which updates don't touch.
+
+Windows SmartScreen may warn the first time because the installer isn't code-signed: choose **More info → Run anyway**.
+
+## Run from source
 
 1. Install [Node.js 22 LTS](https://nodejs.org) and [Git](https://git-scm.com).
 2. In a terminal:
