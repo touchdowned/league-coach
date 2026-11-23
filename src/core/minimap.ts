@@ -181,3 +181,134 @@ export function bgraToRgba(data: Uint8Array | Uint8ClampedArray): void {
     data[i + 2] = b;
   }
 }
+
+// ---------- champions ----------
+
+/** A champion portrait to match against, sampled to a small grid (see portraitGrid). */
+export interface PortraitRef {
+  id: number;
+  team: 100 | 200;
+  grid: number[];
+}
+export interface ChampDot {
+  id: number;
+  x: number;
+  y: number;
+  /** Mean colour difference to the matched portrait; lower is surer. */
+  score: number;
+}
+
+const GRID = 8;
+
+/** Average colours on an 8x8 grid inside a circle of radius r at (cx, cy). */
+export function portraitGrid(f: Frame, cx: number, cy: number, r: number): number[] {
+  const out: number[] = [];
+  const step = (2 * r * 0.62) / GRID;
+  const x0 = cx - r * 0.62;
+  const y0 = cy - r * 0.62;
+  for (let gy = 0; gy < GRID; gy++)
+    for (let gx = 0; gx < GRID; gx++) {
+      let rr = 0;
+      let gg = 0;
+      let bb = 0;
+      let n = 0;
+      for (let sy = 0; sy < 2; sy++)
+        for (let sx = 0; sx < 2; sx++) {
+          const x = Math.round(x0 + (gx + (sx + 0.5) / 2) * step);
+          const y = Math.round(y0 + (gy + (sy + 0.5) / 2) * step);
+          if (x < 0 || y < 0 || x >= f.w || y >= f.h) continue;
+          const i = (y * f.w + x) * 4;
+          rr += f.data[i];
+          gg += f.data[i + 1];
+          bb += f.data[i + 2];
+          n++;
+        }
+      out.push(n ? rr / n : 0, n ? gg / n : 0, n ? bb / n : 0);
+    }
+  return out;
+}
+
+/** The grid for a square champion icon (e.g. Data Dragon's), as the minimap clips it to a circle. */
+export function iconGrid(icon: Frame): number[] {
+  return portraitGrid(icon, icon.w / 2, icon.h / 2, icon.w / 2);
+}
+
+function gridDiff(a: number[], b: number[]): number {
+  // Compare shapes of colour, not brightness: fogged or dimmed portraits stay matchable.
+  const mean = (v: number[]) => v.reduce((s, x) => s + x, 0) / v.length;
+  const ma = mean(a);
+  const mb = mean(b);
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - ma - (b[i] - mb));
+  return s / a.length;
+}
+
+/**
+ * Champion icons on a cropped minimap: team-coloured rings, identified by matching the
+ * portrait inside against the ten champions in the game.
+ */
+export function detectChampions(frame: Frame, refs: PortraitRef[], maxScore = 38): ChampDot[] {
+  const { w, h, data } = frame;
+  const label = new Uint8Array(w * h);
+  for (let p = 0; p < w * h; p++) {
+    const i = p * 4;
+    const t = teamColor(data[i], data[i + 1], data[i + 2]);
+    if (t) label[p] = t === 100 ? 1 : 2;
+  }
+  const seen = new Uint8Array(w * h);
+  const rings: { team: 100 | 200; cx: number; cy: number; r: number }[] = [];
+  const stack: number[] = [];
+  const minD = w * 0.045;
+  const maxD = w * 0.13;
+  for (let p = 0; p < w * h; p++) {
+    if (!label[p] || seen[p]) continue;
+    const l = label[p];
+    let area = 0;
+    let minX = w;
+    let maxX = 0;
+    let minY = h;
+    let maxY = 0;
+    stack.push(p);
+    seen[p] = 1;
+    while (stack.length) {
+      const q = stack.pop()!;
+      const x = q % w;
+      const y = (q - x) / w;
+      area++;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      for (const k of [x > 0 ? q - 1 : -1, x < w - 1 ? q + 1 : -1, y > 0 ? q - w : -1, y < h - 1 ? q + w : -1])
+        if (k >= 0 && !seen[k] && label[k] === l) {
+          seen[k] = 1;
+          stack.push(k);
+        }
+    }
+    const bw = maxX - minX + 1;
+    const bh = maxY - minY + 1;
+    if (bw < minD || bh < minD || bw > maxD || bh > maxD) continue;
+    if (bw / bh > 1.35 || bh / bw > 1.35) continue;
+    if (area / (bw * bh) > 0.6) continue; // a filled shape, not a ring
+    rings.push({ team: l === 1 ? 100 : 200, cx: minX + bw / 2 - 0.5, cy: minY + bh / 2 - 0.5, r: Math.min(bw, bh) / 2 });
+  }
+  // Match each ring to the best unused champion of its team.
+  const pairs: { ring: number; ref: PortraitRef; score: number }[] = [];
+  rings.forEach((ring, i) => {
+    const g = portraitGrid(frame, ring.cx, ring.cy, ring.r);
+    for (const ref of refs) if (ref.team === ring.team) pairs.push({ ring: i, ref, score: gridDiff(g, ref.grid) });
+  });
+  pairs.sort((a, b) => a.score - b.score);
+  const usedRing = new Set<number>();
+  const usedRef = new Set<number>();
+  const out: ChampDot[] = [];
+  for (const p of pairs) {
+    if (p.score > maxScore || usedRing.has(p.ring) || usedRef.has(p.ref.id)) continue;
+    usedRing.add(p.ring);
+    usedRef.add(p.ref.id);
+    const ring = rings[p.ring];
+    const g = pixelToGame(ring.cx + 0.5, ring.cy + 0.5, w);
+    out.push({ id: p.ref.id, x: Math.round(g.x), y: Math.round(g.y), score: Math.round(p.score) });
+  }
+  return out;
+}

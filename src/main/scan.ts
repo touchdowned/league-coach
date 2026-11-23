@@ -1,6 +1,6 @@
-import { desktopCapturer, screen } from "electron";
-import { bgraToRgba, crop, detectDots, findMinimap, Frame, medianFrame, Rect } from "../core/minimap";
-import { sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
+import { desktopCapturer, nativeImage, net, screen } from "electron";
+import { bgraToRgba, crop, detectChampions, detectDots, findMinimap, Frame, iconGrid, medianFrame, PortraitRef, Rect } from "../core/minimap";
+import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
 import { gameIdOf, LeagueClient } from "./league";
 
 /**
@@ -31,6 +31,31 @@ async function captureScreen(): Promise<Frame> {
   return { w: width, h: height, data };
 }
 
+export interface ScanPlayer {
+  id: number;
+  champion: string;
+  teamId: number;
+}
+
+/** Each champion's Data Dragon icon, reduced to the grid the minimap matcher compares. */
+async function portraitRefs(players: ScanPlayer[]): Promise<PortraitRef[]> {
+  const versions = (await (await net.fetch("https://ddragon.leagueoflegends.com/api/versions.json")).json()) as string[];
+  const v = versions[0];
+  const out: PortraitRef[] = [];
+  for (const p of players) {
+    try {
+      const res = await net.fetch(`https://ddragon.leagueoflegends.com/cdn/${v}/img/champion/${p.champion}.png`);
+      const img = nativeImage.createFromBuffer(Buffer.from(await res.arrayBuffer())).resize({ width: 48, height: 48 });
+      const data = new Uint8ClampedArray(img.toBitmap());
+      bgraToRgba(data);
+      out.push({ id: p.id, team: p.teamId === 100 ? 100 : 200, grid: iconGrid({ w: 48, h: 48, data }) });
+    } catch {
+      /* that champion just won't be identified */
+    }
+  }
+  return out;
+}
+
 async function waitFor<T>(fn: () => Promise<T | null>, ms: number, isCancelled: () => boolean): Promise<T | null> {
   const end = Date.now() + ms;
   while (Date.now() < end && !isCancelled()) {
@@ -46,6 +71,8 @@ export async function scanReplay(
   matchId: string,
   onProgress: (p: ScanProgress) => void,
   isCancelled: () => boolean,
+  players: ScanPlayer[],
+  me: ScanPlayer,
   untilSec = 16 * 60,
 ): Promise<WaveTrack> {
   if ((await lc.gameflowPhase()) === "InProgress") throw new Error("You're in a game. Replay reading only runs after the game.");
@@ -76,11 +103,12 @@ export async function scanReplay(
   const end = Math.min(pb.length, untilSec);
 
   const original = await lc.getRender();
+  const refs = await portraitRefs(players).catch(() => [] as PortraitRef[]);
   try {
     // 2. Find the minimap: capture with it on and off while paused.
     onProgress({ phase: "calibrating", label: "Finding the minimap", done: 0, total: 1 });
     await lc.seek(20, true);
-    await lc.setRender({ fogOfWar: false, interfaceMinimap: true });
+    await lc.setRender({ fogOfWar: false, interfaceMinimap: true, selectionName: me.champion });
     let rect: Rect | null = null;
     for (let tries = 0; tries < 3 && !rect && !isCancelled(); tries++) {
       await sleep(900);
@@ -104,8 +132,11 @@ export async function scanReplay(
     }
     const bg = medianFrame(bgFrames);
 
-    // 4. Play it fast and read the minions.
+    // 4. Play it fast. Alternate two views: fog off (minions, true positions) and your
+    // team's fog (what you could see on your minimap).
     const samples: WaveSample[] = [];
+    const champs: ChampSample[] = [];
+    let n = 0;
     let speed = 4;
     await lc.seek(65, false, speed);
     const gaps: number[] = [];
@@ -119,17 +150,21 @@ export async function scanReplay(
         await sleep(300);
         continue;
       }
+      const fog: ChampSample["fog"] = n++ % 2 === 0 ? "off" : "team";
+      await lc.setRender({ fogOfWar: fog === "team" });
+      await sleep(60);
       const frame = crop(await captureScreen(), rect);
       const after = await lc.playback();
-      const t = ((before.time + (after?.time ?? before.time)) / 2) * 1000;
-      samples.push(sampleFromDots(Math.round(t), detectDots(frame, bg)));
+      const t = Math.round(((before.time + (after?.time ?? before.time)) / 2) * 1000);
+      if (fog === "off") samples.push(sampleFromDots(t, detectDots(frame, bg)));
+      if (refs.length) champs.push({ t, fog, at: detectChampions(frame, refs).map(({ id, x, y }) => ({ id, x, y })) });
       const now = Date.now();
       gaps.push(now - last);
       last = now;
       // Aim for a read every ~1.5 game seconds, as fast as capture allows.
       if (gaps.length === 8) {
         const avg = gaps.reduce((s, x) => s + x, 0) / gaps.length;
-        const next = Math.max(1, Math.min(8, Math.floor(1500 / Math.max(avg, 1))));
+        const next = Math.max(1, Math.min(8, Math.floor(1000 / Math.max(avg, 1))));
         if (next !== speed) {
           speed = next;
           await lc.setSpeed(speed);
@@ -140,7 +175,11 @@ export async function scanReplay(
     }
     if (isCancelled()) throw new Error("Stopped.");
     onProgress({ phase: "done", label: "Done", done: 1, total: 1 });
-    return { version: 1, source: "replay-minimap", samples };
+    // Whose fog did "team" show? Allies are always on your own minimap.
+    const team = champs.filter((c) => c.fog === "team");
+    const avg = (tid: number) => team.reduce((s, c) => s + c.at.filter((a) => players.find((p) => p.id === a.id)?.teamId === tid).length, 0) / Math.max(1, team.length);
+    const viewTeam = team.length ? (avg(100) >= avg(200) ? 100 : 200) : undefined;
+    return { version: 2, source: "replay-minimap", samples, champs, viewTeam };
   } finally {
     await lc.setPaused(true);
     if (original) await lc.setRender(original);

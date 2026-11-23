@@ -15,6 +15,7 @@
 import { fmtTime } from "./analysis";
 import { describeSpot, dist, positionAt, Track } from "./track";
 import type { MatchDto, Participant, ParticipantFrame, TimelineDto, TimelineEvent } from "./types";
+import { hasVision, lastSeen, truthAt, visibleAt } from "./vision";
 import { laneOf, waveAt, waveSeries, type WaveRead, type WaveTrack } from "./waves";
 
 export type LeakKind = "recall" | "farm" | "roam" | "objective" | "death";
@@ -470,6 +471,38 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
     nextTime = alliesNear.length === 0
       ? `None of your team was within reach. Before walking ${spot(c, pos)}, count the enemies you can see on the map; with ${enemiesElsewhere.length} unaccounted for, this spot needed a ward or a teammate.`
       : `You had ${alliesNear.length} teammate${alliesNear.length > 1 ? "s" : ""} nearby and still lost the fight. Look at who engaged first and whether you stepped in before your team was in range.`;
+  }
+
+  // ---- What you could see vs what was true (replay read with your fog) ----
+  if (hasVision(c.waves, c.me.teamId)) {
+    const vis = c.waves;
+    const shown = visibleAt(vis, t - 5000);
+    const missing = shown ? enemyTeam.filter((p) => !shown.has(p.id)) : [];
+    if (shown) evidence.push(`Your minimap 5s before: ${enemyTeam.length - missing.length} of ${enemyTeam.length} enemies showing${missing.length ? `; missing ${missing.map((p) => p.champion).join(", ")}` : ""}.`);
+    const key = enemies.find((p) => p.teamPosition === "JUNGLE") ?? enemies.find((p) => p.participantId !== c.opp?.participantId);
+    if (key) {
+      const ls = lastSeen(vis, key.participantId, t - 2000, 150_000);
+      const truth = truthAt(vis, key.participantId, t - 20_000);
+      const safeMove =
+        t < LANE_END
+          ? `step back behind your wave toward your tower`
+          : nearestAlly
+            ? `walk toward ${nearestAlly.p.champion} (${spot(c, nearestAlly.q!).replace(/^in /, "")})`
+            : `walk back toward your tower`;
+      let tip: string;
+      if (ls && t - ls.t <= 45_000) {
+        const secs = Math.round((t - ls.t) / 1000);
+        const walk = Math.round(dist(ls, pos) / 380);
+        evidence.push(`${key.championName} showed on your minimap at ${fmtTime(ls.t)} ${spot(c, ls)}, ${secs}s before you died.`);
+        tip = `You had the information: ${key.championName} showed on your minimap at ${fmtTime(ls.t)} ${spot(c, ls)}, about ${walk}s of walking from you. That was the moment to ${safeMove}. ${secs > walk ? `You stayed ${secs - walk}s longer than that clock allowed.` : "There was no time to finish anything first."}`;
+      } else {
+        const since = ls ? Math.round((t - ls.t) / 1000) : null;
+        evidence.push(ls ? `${key.championName} was last on your minimap at ${fmtTime(ls.t)}, ${since}s before.` : `${key.championName} wasn't on your minimap at all in the 2½ minutes before.`);
+        if (truth) evidence.push(`With fog off, 20s before you died ${key.championName} was ${spot(c, truth)}.`);
+        tip = `You couldn't see ${key.championName} coming (${ls ? `last shown ${since}s earlier` : "not shown for over 2 minutes"}${missing.length > 1 ? `, ${missing.length} enemies off your minimap` : ""}). Reacting to the gank itself wasn't possible; the mistake was standing where an unseen jungler could reach you. With nobody accounted for, ${safeMove} until someone shows, or ward ${truth ? spot(c, truth).replace(/^in /, "") : "the river"} first.`;
+      }
+      nextTime = enemies.length >= 3 ? `${tip} ${nextTime}` : tip;
+    }
   }
 
   return {

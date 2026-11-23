@@ -60,10 +60,22 @@ export interface WaveSample {
   lanes: Record<Lane, { b: number[]; r: number[] }>;
 }
 
+/** Champions read off the minimap at one moment, in one view. */
+export interface ChampSample {
+  t: number;
+  /** "team": your team's fog of war, what you could see. "off": everything. */
+  fog: "team" | "off";
+  at: { id: number; x: number; y: number }[];
+}
+
 export interface WaveTrack {
-  version: 1;
+  version: 1 | 2;
   source: "replay-minimap";
   samples: WaveSample[];
+  /** Champion positions from the replay (version 2). */
+  champs?: ChampSample[];
+  /** Whose fog the "team" view showed. Vision reads are only used when it's yours. */
+  viewTeam?: number;
 }
 
 export function sampleFromDots(t: number, dots: Dot[]): WaveSample {

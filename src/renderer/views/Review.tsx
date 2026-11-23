@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, Eye, ChevronRight, Clapperboard, MonitorPlay, Pause, Play, Video, Waves } from "lucide-react";
+import { Check, ChevronLeft, Eye, EyeOff, ChevronRight, Clapperboard, MonitorPlay, Pause, Play, Video, Waves } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { fmtTime } from "../../core/analysis";
@@ -9,6 +9,7 @@ import { coach, ReplayState, Settings, TaskProgress, Vod } from "../api";
 import { ChampIcon, DeathMap, LineChart, MapBackdrop } from "../charts";
 import { describeSpot, dist, positionAt } from "../../core/track";
 import { minionsAt } from "../../core/waves";
+import { hasVision, lastSeen, visibleAt } from "../../core/vision";
 import { Rift, useGameClock } from "../rift";
 import { useProgress } from "../progress";
 import { Button, Empty, Kbd, ProgressBar, Spinner } from "../ui";
@@ -559,6 +560,19 @@ function RiftMoment(props: {
   const jungler = props.drill ? track.players.find((p) => p.champion === props.drill && p.teamId !== r.teamId) : undefined;
   const truth = jungler ? positionAt(track, jungler.id, freezeAt) : null;
   const off = props.guess && truth ? dist(props.guess, truth) : null;
+  // With the replay read: show what you could see during the lead-up, everything after.
+  const vision = hasVision(r.waves, r.teamId);
+  const [view, setView] = useState<"you" | "all">("you");
+  useEffect(() => setView(revealed ? "all" : "you"), [revealed]);
+  const seen = vision && view === "you" ? visibleAt(r.waves, t) : null;
+  const fogged = seen ? track.players.filter((p) => p.teamId !== r.teamId && !seen.has(p.id)).map((p) => p.id) : [];
+  const fogGhosts = fogged
+    .map((id) => {
+      const ls = lastSeen(r.waves, id, t, 90_000);
+      const p = track.players.find((x) => x.id === id)!;
+      return ls ? { x: ls.x, y: ls.y, champion: p.champion, label: `${Math.round((t - ls.t) / 1000)}s ago` } : null;
+    })
+    .filter((g): g is { x: number; y: number; champion: string; label: string } => !!g);
   return (
     <div className="stage-map rift-stage">
       <div className="rift-wrap">
@@ -567,7 +581,8 @@ function RiftMoment(props: {
           teamId={r.teamId}
           meId={me?.id}
           t={t}
-          hidden={props.hideId ? [props.hideId] : []}
+          hidden={[...(props.hideId ? [props.hideId] : []), ...fogged]}
+          ghosts={fogGhosts}
           guess={props.guess}
           answer={props.guess && truth && jungler ? { ...truth, champion: jungler.champion } : null}
           onPick={frozen && !revealed ? props.onPick : undefined}
@@ -575,6 +590,11 @@ function RiftMoment(props: {
           minions={minionsAt(r.waves, t)}
         />
         <span className="rift-clock">{fmtTime(t)}</span>
+        {vision && (
+          <button className="rift-view" onClick={() => setView((v) => (v === "you" ? "all" : "you"))} title="Switch between your team's vision and everything">
+            {view === "you" ? <><Eye size={13} /> Your vision</> : <><EyeOff size={13} /> Fog off: everything</>}
+          </button>
+        )}
         {frozen && !revealed && <span className="rift-frozen">{props.onPick ? `Click where ${props.drill} is` : "Frozen"}</span>}
         {off !== null && truth && (
           <span className={`rift-verdict ${off < 1500 ? "good" : off < 3000 ? "ok" : "bad"}`}>
@@ -713,13 +733,13 @@ function SourceBar(props: {
       <div className="source">
         <span className="source-icon"><Waves size={16} /></span>
         <div className="source-body">
-          <strong>Wave state</strong>
+          <strong>Replay reading</strong>
           <small>
             {props.reading
               ? props.reading.label
               : props.r.wavesRead
-                ? "Read from the replay. Recalls, farm and lane deaths quote real minion counts."
-                : "Guessed from CS. Read the replay to get real minion positions: it plays fast on your screen (about 3 min) and reads the minimap. Don't touch it while it runs."}
+                ? props.r.waves?.champs?.length ? "Read from the replay: minions, real paths, and what was on your minimap vs what was really there." : "Read from the replay. Recalls, farm and lane deaths quote real minion counts."
+                : "Guessed from Riot's data. Read the replay to get real minion counts, real paths, and what was on your minimap at every moment. It plays fast on your screen (about 4 min). Don't touch it while it runs."}
           </small>
         </div>
         {props.reading ? (

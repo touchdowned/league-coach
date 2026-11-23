@@ -125,3 +125,108 @@ describe("wave state from the replay", () => {
     expect(d.nextTime).toMatch(/with 1 of your minions against 5 of theirs/);
   });
 });
+
+// ---- champions and vision ----
+import { detectChampions, iconGrid } from "../src/core/minimap";
+import { hasVision, lastSeen, mergeReplayPositions, truthAt, visibleAt } from "../src/core/vision";
+import type { ChampSample } from "../src/core/waves";
+
+function icon(seed: number): Frame {
+  // A blocky, distinct "portrait".
+  const f = blank(48, 48, seed);
+  for (let y = 0; y < 48; y++)
+    for (let x = 0; x < 48; x++) {
+      const i = (y * 48 + x) * 4;
+      const q = ((x >> 4) + (y >> 4) * 3 + seed) % 5;
+      f.data[i] = [200, 30, 120, 240, 60][q];
+      f.data[i + 1] = [180, 200, 40, 90, 60][q];
+      f.data[i + 2] = [30, 60, 200, 20, 140][q];
+    }
+  return f;
+}
+function stamp(f: Frame, ic: Frame, cx: number, cy: number, r: number, ring: [number, number, number]) {
+  for (let y = Math.floor(cy - r); y <= cy + r; y++)
+    for (let x = Math.floor(cx - r); x <= cx + r; x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      if (d > r) continue;
+      const i = (y * f.w + x) * 4;
+      if (d > r - 2) [f.data[i], f.data[i + 1], f.data[i + 2]] = ring;
+      else {
+        const sx = Math.min(47, Math.max(0, Math.round(((x - cx) / r) * 24 + 24)));
+        const sy = Math.min(47, Math.max(0, Math.round(((y - cy) / r) * 24 + 24)));
+        const j = (sy * 48 + sx) * 4;
+        [f.data[i], f.data[i + 1], f.data[i + 2]] = [ic.data[j], ic.data[j + 1], ic.data[j + 2]];
+      }
+    }
+}
+
+describe("champions on the minimap", () => {
+  it("finds champion rings and tells which champion each one is", () => {
+    const icons = [1, 2, 3, 4].map(icon);
+    const refs = [
+      { id: 3, team: 100 as const, grid: iconGrid(icons[0]) },
+      { id: 1, team: 100 as const, grid: iconGrid(icons[1]) },
+      { id: 7, team: 200 as const, grid: iconGrid(icons[2]) },
+      { id: 8, team: 200 as const, grid: iconGrid(icons[3]) },
+    ];
+    const f = blank(300, 300, 9);
+    stamp(f, icons[0], 150, 150, 11, BLUE);
+    stamp(f, icons[2], 80, 210, 11, RED);
+    stamp(f, icons[3], 220, 60, 11, RED);
+    const found = detectChampions(f, refs);
+    const byId = Object.fromEntries(found.map((c) => [c.id, c]));
+    expect(Object.keys(byId).sort()).toEqual(["3", "7", "8"]);
+    const mid = gameToPixel(byId[3].x, byId[3].y, 300);
+    expect(Math.abs(mid.px - 150)).toBeLessThan(2);
+    expect(Math.abs(mid.py - 150)).toBeLessThan(2);
+  });
+});
+
+function visionTrack(): WaveTrack {
+  // Enemy jungler (7) shows on your minimap at 5:30 in your top-side jungle, then
+  // disappears; fog-off shows him walking to mid. You die to him at 6:00.
+  const champs: ChampSample[] = [];
+  for (let t = 65_000; t <= 7 * 60_000; t += 1000) {
+    const jg = t <= 5.5 * 60_000 ? { x: 3800, y: 8000 } : { x: 3800 + ((t - 330_000) / 30_000) * 3000, y: 8000 - ((t - 330_000) / 30_000) * 900 };
+    const allies = [1, 2, 3, 4, 5].map((id) => ({ id, x: 7000, y: 7000 }));
+    champs.push({ t, fog: "off", at: [...allies, { id: 7, ...jg }, { id: 8, x: 7600, y: 7600 }] });
+    champs.push({ t: t + 500, fog: "team", at: [...allies, ...(t <= 5.5 * 60_000 ? [{ id: 7, ...jg }] : []), { id: 8, x: 7600, y: 7600 }] });
+  }
+  return { version: 2, source: "replay-minimap", samples: [], champs, viewTeam: 100 };
+}
+
+describe("what you could see vs what was true", () => {
+  it("answers last-seen, visible-now and truth", () => {
+    const w = visionTrack();
+    expect(hasVision(w, 100)).toBe(true);
+    expect(hasVision(w, 200)).toBe(false);
+    expect(lastSeen(w, 7, 6 * 60_000)!.t).toBe(330_500);
+    expect(visibleAt(w, 345_000)!.has(7)).toBe(false);
+    expect(truthAt(w, 7, 345_000)!.x).toBeGreaterThan(4500);
+  });
+
+  it("puts the real replay path into the track", () => {
+    const g = makeGame();
+    const t = mergeReplayPositions(buildTrack(g.match, g.timeline), visionTrack());
+    expect(t.keys[7].length).toBeGreaterThan(300);
+  });
+
+  it("tells you when you had the information and what to do with it", () => {
+    const g = makeGame({ events: [{ type: "CHAMPION_KILL", timestamp: 6 * 60_000, victimId: 3, killerId: 7, assistingParticipantIds: [8], position: { x: 6600, y: 7600 } }] });
+    const me = findPlayer(g.match, ME);
+    const leaks = readGame(g.match, g.timeline, buildTrack(g.match, g.timeline), me, findOpponent(g.match, me), visionTrack());
+    const d = leaks.find((l) => l.kind === "death")!;
+    expect(d.evidence.join(" ")).toMatch(/Champ6 showed on your minimap at 5:30/);
+    expect(d.nextTime).toMatch(/^You had the information/);
+  });
+
+  it("says when you couldn't have known, and what the mistake was instead", () => {
+    const w = visionTrack();
+    w.champs = w.champs!.map((s) => (s.fog === "team" ? { ...s, at: s.at.filter((a) => a.id !== 7) } : s));
+    const g = makeGame({ events: [{ type: "CHAMPION_KILL", timestamp: 6 * 60_000, victimId: 3, killerId: 7, assistingParticipantIds: [8], position: { x: 6600, y: 7600 } }] });
+    const me = findPlayer(g.match, ME);
+    const d = readGame(g.match, g.timeline, buildTrack(g.match, g.timeline), me, findOpponent(g.match, me), w).find((l) => l.kind === "death")!;
+    expect(d.nextTime).toMatch(/^You couldn't see Champ6 coming/);
+    expect(d.evidence.join(" ")).toMatch(/With fog off, 20s before you died Champ6 was/);
+  });
+});

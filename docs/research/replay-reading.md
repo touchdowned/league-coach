@@ -33,3 +33,15 @@ state and movement are read from what happened instead of guessed.
 - Colors and sizes are tuned on synthetic frames until it runs on a real replay; the first real run is the calibration.
 - Replays only exist for the current patch, so old games can't be read.
 - Never runs during a live game: it refuses if League says a game is in progress.
+
+## Round 2: what you could see vs what was true
+
+S: "does it look at your champion's movements... see what you saw... every bit of info that was available on your vision so it can tell you what was optimal".
+
+- Proposal: during the same pass, alternate captures between fog off and your team's fog (`fogOfWar` through the Replay API, with your champion selected). Identify champions on the minimap by matching the portrait inside each ring against the ten champions in the game.
+- Attack: "Your vision" is only right if the replay's fog is *your* team's. Not documented. Fix: the scan checks it: your allies are always on your own minimap, so the team that's always fully visible is the one whose fog it showed. If it's the other team, vision advice is switched off rather than wrong.
+- Attack: portraits overlap in fights, so some samples miss a champion. Fine: last-seen looks back across many samples, and fog-off points only add to Riot's positions, never replace kills.
+- Survived. The death advice now splits into two cases:
+  - You had it: "Graves showed on your minimap at 5:30 in your top-side jungle, ~9s of walking from you. That was the moment to step back."
+  - You didn't: "You couldn't see Graves coming (last shown 95s earlier, 3 enemies off your minimap). The mistake was standing where an unseen jungler could reach you."
+- Review map: the lead-up shows only what was on your minimap, with "Xs ago" ghosts where enemies were last seen. The reveal switches to fog off.

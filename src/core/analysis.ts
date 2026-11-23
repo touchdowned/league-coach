@@ -1,3 +1,4 @@
+import { mergeReplayPositions } from "./vision";
 import { readGame } from "./engine";
 import { buildTrack } from "./track";
 import { benchmarkFor } from "./benchmarks";
@@ -283,7 +284,7 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
 
   const me = findPlayer(match, puuid);
   const opp = findOpponent(match, me);
-  const track = buildTrack(match, timeline);
+  const track = mergeReplayPositions(buildTrack(match, timeline), waves);
   const series = timeline.info.frames.map((f) => {
     const a = f.participantFrames[String(me.participantId)];
     const b = opp ? f.participantFrames[String(opp.participantId)] : undefined;
