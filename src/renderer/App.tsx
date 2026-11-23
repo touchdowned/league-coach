@@ -129,7 +129,7 @@ function Shell() {
         {loading ? (
           <LoadingPage />
         ) : tab === "coach" ? (
-          <CoachView games={games} onReview={openReview} onPuzzles={() => setTab("puzzles")} onSync={runSync} syncing={!!sync} canSync={!!settings.apiKey} />
+          <CoachView games={games} onReview={openReview} onPuzzles={() => setTab("puzzles")} onMechanics={() => setTab("mechanics")} onSync={runSync} syncing={!!sync} canSync={!!settings.apiKey} />
         ) : tab === "review" ? (
           <ReviewView games={games} target={reviewTarget} settings={settings} onTargetConsumed={() => setReviewTarget(null)} onPuzzles={() => setTab("puzzles")} />
         ) : tab === "puzzles" ? (

@@ -1,4 +1,4 @@
-import { Brain, Clapperboard, Crosshair, ListChecks, Play, TrendingUp, Zap } from "lucide-react";
+import { Brain, Clapperboard, Crosshair, Footprints, Gamepad2, ListChecks, Play, TrendingUp, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ROLE_LABEL } from "../../core/benchmarks";
 import { coachPlan, CoachPlan } from "../../core/coach";
@@ -19,6 +19,7 @@ export function CoachView({
   games,
   onReview,
   onPuzzles,
+  onMechanics,
   onSync,
   syncing,
   canSync,
@@ -26,6 +27,7 @@ export function CoachView({
   games: GameReport[];
   onReview: (matchId: string, autoplay?: boolean) => void;
   onPuzzles: () => void;
+  onMechanics?: () => void;
   onSync: () => void;
   syncing: boolean;
   canSync: boolean;
@@ -83,7 +85,7 @@ export function CoachView({
         </div>
       )}
 
-      <NextStep plan={plan} />
+      <NextStep plan={plan} games={filtered} onReview={onReview} onPuzzles={onPuzzles} onMechanics={onMechanics} />
 
       <section className="grid-3">
         <div className="tile action" onClick={() => nextReview && onReview(nextReview.metrics.matchId, true)} data-disabled={!nextReview || undefined}>
@@ -195,7 +197,19 @@ export function CoachView({
   );
 }
 
-function NextStep({ plan }: { plan: CoachPlan }) {
+// Which drill trains each focus, and which mistake in your games shows it.
+const TRAIN: Record<string, { drill: "jungle" | "decisions" | "mechanics"; kind?: string }> = {
+  ganks: { drill: "jungle", kind: "ganked" },
+  overextending: { drill: "jungle", kind: "overextended" },
+  early_deaths: { drill: "jungle", kind: "early_death" },
+  objective_deaths: { drill: "decisions", kind: "died_before_objective" },
+  unspent_gold: { drill: "decisions", kind: "died_with_gold" },
+  shutdowns: { drill: "decisions", kind: "gave_shutdown" },
+  farming: { drill: "mechanics" },
+  losing_lane: { drill: "mechanics" },
+};
+
+function NextStep({ plan, games, onReview, onPuzzles, onMechanics }: { plan: CoachPlan; games: GameReport[]; onReview: (id: string, autoplay?: boolean) => void; onPuzzles: () => void; onMechanics?: () => void }) {
   const c = plan.current;
   if (!c) return <div className="hero quiet">{plan.verdict}</div>;
   const passed = c.results.filter((x) => x === true).length;
@@ -213,6 +227,32 @@ function NextStep({ plan }: { plan: CoachPlan }) {
             </li>
           ))}
         </ol>
+        {(() => {
+          const t = TRAIN[c.id] ?? { drill: "decisions" as const };
+          const example = t.kind ? games.find((g) => g.mistakes.some((m) => m.kind === t.kind)) : undefined;
+          const goDrill = () => {
+            if (t.drill === "mechanics" && onMechanics) return onMechanics();
+            try {
+              localStorage.setItem("lc.puzzleMode", t.drill === "jungle" ? "jungle" : "decisions");
+            } catch {
+              /* falls back to the last mode */
+            }
+            onPuzzles();
+          };
+          return (
+            <div className="hero-actions">
+              <Button variant="primary" onClick={goDrill}>
+                {t.drill === "jungle" ? <Footprints size={15} /> : t.drill === "mechanics" ? <Gamepad2 size={15} /> : <Brain size={15} />}
+                {t.drill === "jungle" ? "Drill it: where's the jungler?" : t.drill === "mechanics" ? "Drill it in the lane lab" : "Drill it: decision puzzles"}
+              </Button>
+              {example && (
+                <Button onClick={() => onReview(example.metrics.matchId, true)}>
+                  <Play size={14} /> Watch it happen ({example.metrics.champion}, {example.mistakes.filter((m) => m.kind === t.kind).length}x)
+                </Button>
+              )}
+            </div>
+          );
+        })()}
       </div>
       <aside className="hero-side">
         <p className="eyebrow icon-eyebrow"><ListChecks size={13} /> Passing means</p>
