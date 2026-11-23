@@ -17,7 +17,9 @@ export type IssueId =
   | "farming"
   | "losing_lane"
   | "absent_from_fights"
-  | "vision";
+  | "vision"
+  | "recall_timing"
+  | "lane_farm";
 
 export interface Issue {
   id: IssueId;
@@ -68,7 +70,47 @@ function defs(rs: GameReport[]): IssueDef[] {
     visionPerMin: avg(bm.map((x) => x.visionPerMin)),
   };
   const has = (r: GameReport, k: MistakeKind) => r.mistakes.some((m) => m.kind === k);
+  // Gold-cost leaks from the replay-reading engine (non-death mistakes). ~150g a game ≈ 1 cost point.
+  const withLeaks = rs.filter((r) => r.leaks);
+  const leakGold = (r: GameReport, kinds: string[]) => (r.leaks ?? []).filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + l.cost, 0);
+  const perGame = (kinds: string[]) => (withLeaks.length ? avg(withLeaks.map((r) => leakGold(r, kinds))) : 0);
+  const fmtG = (n: number) => `${Math.round(n).toLocaleString("en-US")}g`;
+  const leakDefs: IssueDef[] = withLeaks.length < 3 ? [] : [
+    {
+      id: "recall_timing",
+      title: "Time your recalls to waves",
+      why: "A badly timed recall costs a wave, plates or an objective without anyone seeing it. In Silver it often costs more gold per game than your deaths do.",
+      rules: [
+        "Shove the wave into their tower first, then back while it crashes.",
+        "Back with 1,100–1,300g, not 500: small trips cost the same time as big ones.",
+        "Leave 60–90s before dragon or baron spawns, never 30s before.",
+      ],
+      passRule: "Recalls cost under 300g in total",
+      check: (r) => (r.leaks ? leakGold(r, ["recall"]) < 300 : null),
+      measure: () => {
+        const pg = perGame(["recall"]);
+        return { cost: pg / 150, evidence: `Your recalls cost about ${fmtG(pg)} a game in farm, plates and objectives.` };
+      },
+    },
+    {
+      id: "lane_farm",
+      title: "Stop bleeding farm in lane",
+      why: "Every minion your opponent gets that you don't is gold they fight you with. Lost CS outside deaths and recalls is the quietest leak in the game.",
+      rules: [
+        "Don't take a trade that costs you a cannon or two casters.",
+        "Roam only after shoving, and turn back if nothing is there within 25 seconds.",
+        "Under your tower: melee = 2 tower shots + 1 auto, caster = 1 tower shot + 1 auto.",
+      ],
+      passRule: "Lose fewer than 10 CS to your opponent outside deaths and recalls",
+      check: (r) => (r.leaks ? leakGold(r, ["farm", "roam"]) / 21 < 10 : null),
+      measure: () => {
+        const pg = perGame(["farm", "roam"]);
+        return { cost: pg / 150, evidence: `You lose about ${Math.round(pg / 21)} CS (${fmtG(pg)}) a game to your lane opponent while alive and in lane.` };
+      },
+    },
+  ];
   return [
+    ...leakDefs,
     {
       id: "early_deaths",
       title: "Stop dying before 14 minutes",

@@ -718,3 +718,20 @@ label.inline-action:has(input:disabled) { opacity: 0.5; cursor: default; }
 .session-x:hover { background: var(--surface-3); color: var(--text); }
 @media (max-width: 1200px) { .session-goal { display: none; } }
 .rift-puzzle { position: relative; aspect-ratio: 1; }
+
+/* Replay reader: cost of a leak, evidence, levers */
+.cost-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin: 4px 0 12px; }
+.cost-total { font-size: 22px; font-weight: 700; color: var(--bad); font-variant-numeric: tabular-nums; }
+.cost-part { font-size: 12px; color: var(--text-2); background: var(--surface-3); border: 1px solid var(--hair); border-radius: 999px; padding: 2px 9px; }
+.evidence { margin: 6px 0 12px; padding-left: 18px; color: var(--text-2); font-size: 13px; line-height: 1.5; }
+.evidence li + li { margin-top: 2px; }
+.levers { margin-top: 16px; }
+.levers ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.lever-label { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.lever-label span { color: var(--bad); font-variant-numeric: tabular-nums; font-weight: 600; }
+.lever-bar { height: 8px; background: var(--surface-3); border-radius: 4px; margin: 6px 0; overflow: hidden; }
+.lever-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--warn), var(--bad)); border-radius: 4px; }
+.lever-worst { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.lever-worst:hover { color: var(--accent); }
+.lever-worst:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.rift-hud:empty { display: none; }

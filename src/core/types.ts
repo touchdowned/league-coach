@@ -56,6 +56,13 @@ export interface TimelineEvent {
   killerTeamId?: number;
   creatorId?: number;
   wardType?: string;
+  participantId?: number;
+  itemId?: number;
+  /** BUILDING_KILL / TURRET_PLATE_DESTROYED: the team that lost it. */
+  teamId?: number;
+  laneType?: string;
+  buildingType?: string;
+  towerType?: string;
 }
 
 export interface TimelineDto {
@@ -156,4 +163,6 @@ export interface GameReport {
   grade: "S" | "A" | "B" | "C" | "D";
   /** Where all ten champions were. Missing on reports saved before this existed. */
   track?: import("./track").Track;
+  /** Every gold leak the engine found, biggest first. Missing on older saved reports. */
+  leaks?: import("./engine").Leak[];
 }

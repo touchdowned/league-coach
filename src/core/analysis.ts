@@ -1,3 +1,4 @@
+import { readGame } from "./engine";
 import { buildTrack } from "./track";
 import { benchmarkFor } from "./benchmarks";
 import type {
@@ -282,6 +283,7 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
 
   const me = findPlayer(match, puuid);
   const opp = findOpponent(match, me);
+  const track = buildTrack(match, timeline);
   const series = timeline.info.frames.map((f) => {
     const a = f.participantFrames[String(me.participantId)];
     const b = opp ? f.participantFrames[String(opp.participantId)] : undefined;
@@ -307,7 +309,8 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
     strengths,
     focus: pickFocus(m, all),
     grade: grade(m, all),
-    track: buildTrack(match, timeline),
+    track,
+    leaks: readGame(match, timeline, track, me, opp),
   };
 }
 

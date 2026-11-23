@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Brain, CircleAlert, Clapperboard, Compass, Gamepad2, LoaderCircle, LucideIcon, PlayCircle, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import type { GameReport } from "../core/types";
+import { momentCount } from "../core/engine";
 import { coach, PostGameStatus, Settings, TaskProgress } from "./api";
 import { PlayerCard, ProgressProvider, useProgress } from "./progress";
 import { Button, Skeleton } from "./ui";
@@ -48,7 +49,7 @@ function Shell() {
   function goStep(step: SessionStep) {
     setSession(step);
     if (step === "review") {
-      const next = games?.find((g) => g.mistakes.length > 0 && !progress.reviewedGames.includes(g.metrics.matchId)) ?? games?.[0];
+      const next = games?.find((g) => momentCount(g) > 0 && !progress.reviewedGames.includes(g.metrics.matchId)) ?? games?.[0];
       if (next) openReview(next.metrics.matchId, true);
       else setTab("review");
     } else setTab(step);
@@ -188,7 +189,7 @@ function PostGamePill({ status, onOpen, onDismiss }: { status: PostGameStatus; o
 }
 
 function UnreviewedBadge({ games, reviewed }: { games: GameReport[]; reviewed: string[] }) {
-  const n = games.slice(0, 10).filter((g) => g.mistakes.length > 0 && !reviewed.includes(g.metrics.matchId)).length;
+  const n = games.slice(0, 10).filter((g) => momentCount(g) > 0 && !reviewed.includes(g.metrics.matchId)).length;
   return n ? <span className="badge">{n}</span> : null;
 }
 

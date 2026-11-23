@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { fmtTime } from "../../core/analysis";
 import { benchmarkFor, ROLE_LABEL } from "../../core/benchmarks";
 import type { GameReport, Mistake } from "../../core/types";
+import { momentCount, REVIEW_MOMENTS, type Leak } from "../../core/engine";
 import { coach, ReplayState, Settings, TaskProgress, Vod } from "../api";
 import { ChampIcon, DeathMap, LineChart, MapBackdrop } from "../charts";
 import { describeSpot, dist, positionAt } from "../../core/track";
@@ -42,7 +43,7 @@ export function ReviewView({
   if (games.length === 0) return <div className="page"><Empty title="No games yet" body="Sync your games first, then come back to review them." /></div>;
 
   const current = games.find((g) => g.metrics.matchId === selected) ?? games.find((g) => !progress.reviewedGames.includes(g.metrics.matchId)) ?? games[0];
-  const nextUnreviewed = games.find((g) => g !== current && g.mistakes.length > 0 && !progress.reviewedGames.includes(g.metrics.matchId)) ?? null;
+  const nextUnreviewed = games.find((g) => g !== current && momentCount(g) > 0 && !progress.reviewedGames.includes(g.metrics.matchId)) ?? null;
 
   return (
     <div className="review-layout">
@@ -60,8 +61,8 @@ export function ReviewView({
                 </small>
               </span>
               <span className="gi-side">
-                <b className="grade-chip" title="Moments to review">{g.mistakes.length}</b>
-                {done ? <i className="check" /> : g.mistakes.length > 0 ? <span className="dot-new" /> : null}
+                <b className="grade-chip" title="Moments to review">{momentCount(g)}</b>
+                {done ? <i className="check" /> : momentCount(g) > 0 ? <span className="dot-new" /> : null}
               </span>
             </button>
           );
@@ -83,15 +84,48 @@ export function ReviewView({
   );
 }
 
-// One entry per death (several flags on the same death are merged into one moment).
+// One entry per leak, biggest gold cost first. Older reports without the engine's
+// leaks fall back to one entry per death.
 interface Moment {
   key: string;
   timeMs: number;
-  main: Mistake;
+  main?: Mistake;
   extra: Mistake[];
+  leak?: Leak;
 }
 
+const MAX_MOMENTS = REVIEW_MOMENTS;
+
+
 function toMoments(r: GameReport): Moment[] {
+  if (r.leaks?.length) {
+    return r.leaks.slice(0, MAX_MOMENTS).map((l) => {
+      const ms = l.deathMs != null ? r.mistakes.filter((m) => m.timeMs === l.deathMs).sort((a, b) => b.severity - a.severity) : [];
+      return { key: `${r.metrics.matchId}:${l.kind}:${l.t}`, timeMs: l.t, main: ms[0], extra: ms.slice(1), leak: l };
+    });
+  }
+  return deathMoments(r);
+}
+
+function promptFor(mo: Moment, opp: string | null): string {
+  const at = fmtTime(mo.timeMs);
+  switch (mo.leak?.kind) {
+    case "recall":
+      return `${at}: you recall. Was this the right time?`;
+    case "farm":
+      return `${at}: watch your farm against ${opp ?? "your opponent"}. What's leaking?`;
+    case "roam":
+      return `${at}: you leave lane. Was it worth it?`;
+    case "objective":
+      return `${at}: an objective is coming. Where should you be?`;
+    default:
+      return `${at}: you die here. Why?`;
+  }
+}
+
+const costTier = (mo: Moment) => (mo.leak ? (mo.leak.cost >= 600 ? "hi" : mo.leak.cost >= 300 ? "mid" : "lo") : (mo.main?.severity ?? 0) >= 8 ? "hi" : (mo.main?.severity ?? 0) >= 6 ? "mid" : "lo");
+
+function deathMoments(r: GameReport): Moment[] {
   const by = new Map<number, Mistake[]>();
   for (const m of r.mistakes) by.set(m.timeMs, [...(by.get(m.timeMs) ?? []), m]);
   return [...by.entries()]
@@ -127,7 +161,7 @@ function ReviewPlayer({
   const m = r.metrics;
   const moments = useMemo(() => toMoments(r), [r]);
   const { state: progress, award } = useProgress();
-  const [idx, setIdx] = useState(() => Math.max(0, startKind ? moments.findIndex((mo) => mo.main.kind === startKind || mo.extra.some((x) => x.kind === startKind)) : 0));
+  const [idx, setIdx] = useState(() => Math.max(0, startKind ? moments.findIndex((mo) => mo.main?.kind === startKind || mo.leak?.kind === startKind || mo.extra.some((x) => x.kind === startKind)) : 0));
   const [playing, setPlaying] = useState(autoplay && moments.length > 0);
   const [elapsed, setElapsed] = useState(0);
   // Predict, then reveal: the coaching stays hidden for the first few seconds so you
@@ -177,7 +211,7 @@ function ReviewPlayer({
   const [frozen, setFrozen] = useState(false);
   const [guess, setGuess] = useState<{ x: number; y: number } | null>(null);
   const enemyJungler = r.track?.players.find((p) => p.teamId !== r.teamId && p.role === "JUNGLE");
-  const junglerDrill = media.kind === "rift" && !!enemyJungler && !!moment && (moment.main.kind === "ganked" || !!moment.main.context?.enemyJunglerInvolved);
+  const junglerDrill = media.kind === "rift" && !!enemyJungler && !!moment && !!moment.main && (moment.main.kind === "ganked" || !!moment.main.context?.enemyJunglerInvolved);
 
   // On each moment: point the media at it.
   useEffect(() => {
@@ -300,7 +334,7 @@ function ReviewPlayer({
             <span className={m.win ? "win" : "loss"}>{m.win ? "Victory" : "Defeat"}</span> · {ROLE_LABEL[m.role]} · {Math.round(m.durationMin)} min · {m.kills}/{m.deaths}/{m.assists} · {new Date(m.gameCreation).toLocaleDateString()}
           </p>
         </div>
-        <span className="moments-big"><b>{r.mistakes.length}</b><small>moments</small></span>
+        <span className="moments-big"><b>{momentCount(r)}</b><small>moments</small></span>
       </header>
 
       {moments.length === 0 ? (
@@ -352,10 +386,10 @@ function ReviewPlayer({
 
           <div className="moment" key={moment?.key}>
             <div className="moment-top">
-              <span className={`sev sev-${moment.main.severity >= 8 ? "hi" : moment.main.severity >= 6 ? "mid" : "lo"}`}>
+              <span className={`sev sev-${costTier(moment)}`}>
                 {idx + 1}/{moments.length}
               </span>
-              <h2>{revealed ? moment.main.title : `${fmtTime(moment.timeMs)}: you die here. Why?`}</h2>
+              <h2>{revealed ? (moment.leak?.title ?? moment.main?.title) : promptFor(moment, m.opponentChampion)}</h2>
             </div>
             {!revealed && (
               <button className="guess" onClick={() => setRevealed(true)}>
@@ -368,7 +402,7 @@ function ReviewPlayer({
                       </>
                     ) : (
                       <>
-                        <strong>Call it before you see it.</strong> {frozen ? "Frozen 4 seconds before you die. What's about to go wrong?" : "Watch the lead-up. It freezes 4 seconds before you die."} Or press <Kbd>R</Kbd>.
+                        <strong>Call it before you see it.</strong> {moment.leak && moment.leak.kind !== "death" ? (frozen ? "Frozen at the moment. What would you do differently?" : "Watch the lead-up. It freezes at the moment.") : frozen ? "Frozen 4 seconds before you die. What's about to go wrong?" : "Watch the lead-up. It freezes 4 seconds before you die."} Or press <Kbd>R</Kbd>.
                       </>
                     )
                   ) : (
@@ -380,18 +414,48 @@ function ReviewPlayer({
               </button>
             )}
             <div className={`reveal ${revealed ? "on" : ""}`} aria-hidden={!revealed}>
-            <p className="moment-detail">
-              {moment.main.detail}
-              {moment.extra.length > 0 && <> Also: {moment.extra.map((x) => x.title.replace(/ at \d+:\d+$/, "").toLowerCase()).join(", ")}.</>}
-            </p>
-            <div className="think">
-              <p className="eyebrow">What you were probably thinking</p>
-              <p>{moment.main.read}</p>
-            </div>
-            <div className="fix">
-              <p className="eyebrow">Why that's wrong</p>
-              <p>{moment.main.tip}</p>
-            </div>
+            {moment.leak ? (
+              <>
+                <div className="cost-row">
+                  <span className="cost-total">≈ {moment.leak.cost.toLocaleString("en-US")}g</span>
+                  {moment.leak.costParts.map((p) => (
+                    <span key={p.label} className="cost-part">
+                      {p.label} <b>{p.gold.toLocaleString("en-US")}g</b>
+                    </span>
+                  ))}
+                </div>
+                <div className="think">
+                  <p className="eyebrow">What you were doing</p>
+                  <p>{moment.leak.doing}</p>
+                  {moment.leak.evidence.length > 0 && (
+                    <ul className="evidence">
+                      {moment.leak.evidence.map((e) => (
+                        <li key={e}>{e}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="fix">
+                  <p className="eyebrow">Next time</p>
+                  <p>{moment.leak.nextTime}</p>
+                </div>
+              </>
+            ) : moment.main ? (
+              <>
+                <p className="moment-detail">
+                  {moment.main.detail}
+                  {moment.extra.length > 0 && <> Also: {moment.extra.map((x) => x.title.replace(/ at \d+:\d+$/, "").toLowerCase()).join(", ")}.</>}
+                </p>
+                <div className="think">
+                  <p className="eyebrow">What you were probably thinking</p>
+                  <p>{moment.main.read}</p>
+                </div>
+                <div className="fix">
+                  <p className="eyebrow">Why that's wrong</p>
+                  <p>{moment.main.tip}</p>
+                </div>
+              </>
+            ) : null}
             </div>
             <div className="controls">
               <Button variant="ghost" size="sm" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>
@@ -487,7 +551,7 @@ function RiftMoment(props: {
           guess={props.guess}
           answer={props.guess && truth && jungler ? { ...truth, champion: jungler.champion } : null}
           onPick={frozen && !revealed ? props.onPick : undefined}
-          highlight={revealed && moment.main.context?.position ? moment.main.context.position : null}
+          highlight={revealed ? (moment.leak?.focus ?? moment.main?.context?.position ?? null) : null}
         />
         <span className="rift-clock">{fmtTime(t)}</span>
         {frozen && !revealed && <span className="rift-frozen">{props.onPick ? `Click where ${props.drill} is` : "Frozen"}</span>}
@@ -503,7 +567,7 @@ function RiftMoment(props: {
 }
 
 function MomentMap({ r, moment }: { r: GameReport; moment: Moment }) {
-  const pos = moment.main.context?.position;
+  const pos = moment.leak?.focus ?? moment.main?.context?.position;
   const size = 360;
   const [x, y] = pos ? [(pos.x / 14870) * size, (1 - pos.y / 14870) * size] : [size / 2, size / 2];
   return (
@@ -519,7 +583,7 @@ function MomentMap({ r, moment }: { r: GameReport; moment: Moment }) {
 }
 
 function MomentFacts({ r, moment, compact }: { r: GameReport; moment: Moment; compact?: boolean }) {
-  const c = moment.main.context;
+  const c = moment.main?.context;
   const gold = r.series.filter((p) => p.goldDiff !== null && Math.abs(p.minute * 60000 - moment.timeMs) <= 6 * 60000);
   return (
       <div className={compact ? "rift-hud" : "stage-facts"}>

@@ -2,6 +2,7 @@ import { Brain, Clapperboard, Crosshair, Footprints, Gamepad2, ListChecks, Play,
 import { useMemo, useState } from "react";
 import { ROLE_LABEL } from "../../core/benchmarks";
 import { coachPlan, CoachPlan } from "../../core/coach";
+import { LEAK_LABEL, leverTotals, momentCount } from "../../core/engine";
 import { buildProfile, SKILLS, trend } from "../../core/profile";
 import { DAILY, dayKey } from "../../core/progress";
 import type { GameReport, Position } from "../../core/types";
@@ -58,7 +59,7 @@ export function CoachView({
   }
 
   const roles = [...new Set(games.map((g) => g.metrics.role))].filter(Boolean) as Position[];
-  const nextReview = games.find((g) => g.mistakes.length > 0 && !progress.reviewedGames.includes(g.metrics.matchId));
+  const nextReview = games.find((g) => momentCount(g) > 0 && !progress.reviewedGames.includes(g.metrics.matchId));
   const today = progress.today.date === dayKey(new Date()) ? progress.today : { moments: 0, puzzles: 0, puzzlesRight: 0 };
   const t = TRENDS.find((x) => x.key === metric)!;
   const tr = trend(filtered.slice(0, 30), t.pick);
@@ -94,6 +95,8 @@ export function CoachView({
 
       <NextStep plan={plan} games={filtered} onReview={onReview} onPuzzles={onPuzzles} onMechanics={onMechanics} />
 
+      <Levers games={filtered} onReview={onReview} />
+
       <section className="grid-3">
         <div className="tile action" onClick={() => nextReview && onReview(nextReview.metrics.matchId, true)} data-disabled={!nextReview || undefined}>
           <div className="tile-top">
@@ -113,7 +116,7 @@ export function CoachView({
                     {nextReview.metrics.champion} {nextReview.metrics.opponentChampion ? `vs ${nextReview.metrics.opponentChampion}` : ""}
                   </strong>
                   <small>
-                    {nextReview.mistakes.length} moments · {nextReview.metrics.win ? "Win" : "Loss"}
+                    {momentCount(nextReview)} moments · {nextReview.metrics.win ? "Win" : "Loss"}
                   </small>
                 </div>
               </div>
@@ -151,9 +154,9 @@ export function CoachView({
               .slice()
               .reverse()
               .map((g) => (
-                <button key={g.metrics.matchId} className={`form-cell ${g.metrics.win ? "w" : "l"}`} onClick={() => onReview(g.metrics.matchId)} title={`${g.metrics.champion}: ${g.mistakes.length} moments to review`}>
+                <button key={g.metrics.matchId} className={`form-cell ${g.metrics.win ? "w" : "l"}`} onClick={() => onReview(g.metrics.matchId)} title={`${g.metrics.champion}: ${momentCount(g)} moments to review`}>
                   <ChampIcon name={g.metrics.champion} size={28} />
-                  <b className={g.mistakes.length > 2 ? "g-D" : g.mistakes.length ? "g-C" : "g-A"}>{g.mistakes.length}</b>
+                  <b className={momentCount(g) > 2 ? "g-D" : momentCount(g) ? "g-C" : "g-A"}>{momentCount(g)}</b>
                   {progress.reviewedGames.includes(g.metrics.matchId) && <i className="check" />}
                 </button>
               ))}
@@ -212,6 +215,8 @@ const TRAIN: Record<string, { drill: "jungle" | "decisions" | "mechanics"; kind?
   objective_deaths: { drill: "decisions", kind: "died_before_objective" },
   unspent_gold: { drill: "decisions", kind: "died_with_gold" },
   shutdowns: { drill: "decisions", kind: "gave_shutdown" },
+  recall_timing: { drill: "decisions", kind: "recall" },
+  lane_farm: { drill: "mechanics", kind: "farm" },
   farming: { drill: "mechanics" },
   losing_lane: { drill: "mechanics" },
 };
@@ -236,7 +241,8 @@ function NextStep({ plan, games, onReview, onPuzzles, onMechanics }: { plan: Coa
         </ol>
         {(() => {
           const t = TRAIN[c.id] ?? { drill: "decisions" as const };
-          const example = t.kind ? games.find((g) => g.mistakes.some((m) => m.kind === t.kind)) : undefined;
+          const hits = (g: GameReport) => g.mistakes.filter((m) => m.kind === t.kind).length + (g.leaks ?? []).filter((l) => l.kind === t.kind).length;
+          const example = t.kind ? [...games].sort((a, b) => hits(b) - hits(a)).find((g) => hits(g) > 0) : undefined;
           const goDrill = () => {
             if (t.drill === "mechanics" && onMechanics) return onMechanics();
             try {
@@ -254,7 +260,7 @@ function NextStep({ plan, games, onReview, onPuzzles, onMechanics }: { plan: Coa
               </Button>
               {example && (
                 <Button onClick={() => onReview(example.metrics.matchId, true, t.kind)}>
-                  <Play size={14} /> Watch it happen ({example.metrics.champion}, {example.mistakes.filter((m) => m.kind === t.kind).length}x)
+                  <Play size={14} /> Watch it happen ({example.metrics.champion}, {hits(example)}x)
                 </Button>
               )}
             </div>
@@ -270,6 +276,45 @@ function NextStep({ plan, games, onReview, onPuzzles, onMechanics }: { plan: Coa
         </small>
         <p className="why">{c.why}</p>
       </aside>
+    </section>
+  );
+}
+
+// Where the gold actually goes: every leak the replay reader found, summed per game.
+function Levers({ games, onReview }: { games: GameReport[]; onReview: (id: string, autoplay?: boolean, kind?: string) => void }) {
+  const levers = useMemo(() => leverTotals(games), [games]);
+  if (!levers.length) return null;
+  const max = Math.max(...levers.map((l) => l.perGame), 1);
+  const worst = (kind: string) => {
+    let best: { id: string; cost: number; title: string } | undefined;
+    for (const g of games) for (const l of g.leaks ?? []) if (l.kind === kind && (!best || l.cost > best.cost)) best = { id: g.metrics.matchId, cost: l.cost, title: l.title };
+    return best;
+  };
+  return (
+    <section className="card levers">
+      <div className="card-head">
+        <h3>Biggest levers</h3>
+        <small className="muted">Gold you threw away per game, by cause. Fix the top bar first.</small>
+      </div>
+      <ol>
+        {levers.map((l) => {
+          const w = worst(l.kind);
+          return (
+            <li key={l.kind}>
+              <div className="lever-label">
+                <strong>{LEAK_LABEL[l.kind]}</strong>
+                <span>{l.perGame}g / game</span>
+              </div>
+              <div className="lever-bar"><i style={{ width: `${(l.perGame / max) * 100}%` }} /></div>
+              {w && (
+                <button className="lever-worst" onClick={() => onReview(w.id, true, l.kind)}>
+                  <Play size={12} /> Watch the worst one: {w.title}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ol>
     </section>
   );
 }
