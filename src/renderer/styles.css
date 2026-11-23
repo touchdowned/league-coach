@@ -539,3 +539,55 @@ label.inline-action:has(input:disabled) { opacity: 0.5; cursor: default; }
 .inline-action input[type="checkbox"]:checked::before { transform: translateX(16px); background: var(--accent-ink); }
 .inline-action input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .form label.inline-action { display: flex; flex-direction: row; align-items: center; gap: 16px; }
+
+/* =========================================================================
+   Mechanics trainers
+   ========================================================================= */
+.mech-daily { display: flex; align-items: center; gap: 12px; }
+.mech-pool { align-items: center; }
+.mech-pool .champ-chip { padding: 4px 12px 4px 4px; font-size: 13px; gap: 8px; box-shadow: 0 0 0 1px var(--hair) inset; transition: background-color 150ms ease, box-shadow 150ms ease; }
+.mech-pool .champ-chip:hover:not(:disabled) { background: var(--surface-3); }
+.mech-pool .champ-chip.active { background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
+.mech-pool .champ-chip:disabled { opacity: 0.5; cursor: default; }
+.mech-other { height: 36px; padding: 0 10px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); border: 0; box-shadow: 0 0 0 1px var(--hair) inset; font: inherit; font-size: 13px; }
+.mech-tile { min-height: 0; }
+.mech-tile .tile-top { justify-content: flex-start; gap: 8px; color: var(--accent); }
+.mech-tile .tile-top h3 { color: var(--text); }
+.mech-tile .tile-top .pill { margin-left: auto; }
+.mech-suggest { background: var(--accent-soft); color: var(--accent); }
+.mech-tile-foot { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
+.mech-spark { display: flex; align-items: flex-end; gap: 3px; height: 36px; }
+.mech-spark span { flex: 1; max-width: 14px; border-radius: 3px 3px 0 0; background: var(--surface-3); }
+.mech-spark span.good { background: var(--good); }
+.mech-spark.is-empty { align-items: center; }
+.mech-summary { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; }
+.mech-summary h2 { font-size: 34px; margin: 2px 0 6px; }
+.mech-summary ul { margin: 0; padding-left: 18px; color: var(--text-2); }
+.mech-kit { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 980px) { .mech-kit { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mech-ability { display: flex; gap: 10px; align-items: flex-start; }
+.mech-ability img, .mech-ability .combo-glyph { width: 40px; height: 40px; border-radius: 8px; flex: none; }
+.mech-why { display: flex; gap: 10px; align-items: flex-start; color: var(--accent); }
+
+.drill { display: grid; gap: 12px; outline: none; }
+.drill-hud { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; color: var(--text-2); font-size: 13px; }
+.drill-hud b { color: var(--text); font-variant-numeric: tabular-nums; }
+.drill-keys { display: flex; gap: 14px; margin-left: auto; flex-wrap: wrap; }
+.drill-stage { position: relative; width: 100%; max-width: calc((100vh - 300px) * 1800 / 1100); min-width: min(100%, 640px); margin: 0 auto; border-radius: var(--r); overflow: hidden; box-shadow: 0 0 0 1px var(--hair) inset; }
+.drill-canvas { display: block; width: 100%; cursor: crosshair; }
+.drill-count { position: absolute; inset: 0; display: grid; place-items: center; font-size: 72px; font-weight: 700; color: var(--accent); background: rgba(8, 9, 13, 0.45); pointer-events: none; }
+.drill-note { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px; background: var(--surface-3); color: var(--text); font-size: 13px; box-shadow: var(--shadow); pointer-events: none; white-space: nowrap; animation: drill-note-in 200ms var(--ease-out); }
+@keyframes drill-note-in { from { opacity: 0; transform: translate(-50%, 6px); } }
+
+.combo-stage { display: grid; gap: 10px; justify-items: center; text-align: center; padding: 28px 12px 20px; border-radius: var(--r); background: var(--bg-2); box-shadow: 0 0 0 1px var(--hair) inset; }
+.combo-stage .bar { width: min(420px, 100%); }
+.combo-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin: 10px 0; }
+.combo-key { display: grid; justify-items: center; gap: 6px; width: 92px; padding: 10px 6px; border-radius: var(--r); background: var(--surface-2); box-shadow: 0 0 0 1px var(--hair) inset; transition: background-color 120ms ease, box-shadow 120ms ease, transform 120ms var(--ease-out); }
+.combo-key img, .combo-glyph { width: 48px; height: 48px; border-radius: 10px; }
+.combo-glyph { display: grid; place-items: center; background: var(--surface-3); font-weight: 700; font-size: 18px; color: var(--text); }
+.combo-label { font-size: 11px; color: var(--text-2); line-height: 1.2; }
+.combo-key.next { box-shadow: 0 0 0 2px var(--accent) inset; transform: translateY(-2px); }
+.combo-key.ok { background: var(--good-soft); box-shadow: 0 0 0 1px var(--good) inset; }
+.combo-key.bad { background: var(--bad-soft); box-shadow: 0 0 0 1px var(--bad) inset; }
+.combo-gap { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.combo-gap.slow { color: var(--warn); font-weight: 600; }

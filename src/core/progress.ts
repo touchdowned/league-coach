@@ -32,12 +32,15 @@ export const XP = {
   puzzleRight: 10,
   puzzleWrong: 3,
   dailyComplete: 100,
+  /** One finished mechanics trainer set; up to double for a strong set. */
+  drillSet: 12,
 };
 
 export type ProgressEvent =
   | { type: "moment"; id: string }
   | { type: "game"; matchId: string }
-  | { type: "puzzle"; right: boolean };
+  | { type: "puzzle"; right: boolean }
+  | { type: "drill"; score: number };
 
 export interface ProgressResult {
   state: ProgressState;
@@ -91,6 +94,8 @@ export function applyEvent(prev: ProgressState, e: ProgressEvent, now = new Date
     if (s.reviewedGames.includes(e.matchId)) return { state: prev, gained: 0, leveledUp: false, dailyJustCompleted: false, streakExtended: false };
     s.reviewedGames.push(e.matchId);
     gained += XP.gameReviewed;
+  } else if (e.type === "drill") {
+    gained += Math.round(XP.drillSet * (1 + Math.max(0, Math.min(1, e.score))));
   } else {
     s.today.puzzles++;
     if (e.right) s.today.puzzlesRight++;
