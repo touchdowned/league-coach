@@ -93,6 +93,24 @@ export function medianFrame(frames: Frame[]): Frame {
   return { w, h, data: out };
 }
 
+/**
+ * The empty map from two sets of frames: `early` (before minions spawn) everywhere, except
+ * inside the fountains, where champions sit at the start, so there it takes the median of
+ * `later` frames instead (no minion ever enters a fountain).
+ */
+export function backgroundFrame(early: Frame[], later: Frame[]): Frame {
+  const bg = medianFrame(early);
+  if (!later.length) return bg;
+  const late = medianFrame(later);
+  const m = new Uint8Array(bg.w * bg.h);
+  for (const f of FOUNTAINS) {
+    const c = gameToPixel(f.x, f.y, bg.w);
+    markDisc(m, bg.w, bg.h, c.px, c.py, (f.r / (RIFT.maxX - RIFT.minX)) * bg.w);
+  }
+  for (let p = 0; p < m.length; p++) if (m[p]) for (let k = 0; k < 4; k++) bg.data[p * 4 + k] = late.data[p * 4 + k];
+  return bg;
+}
+
 /** Which team's minion colour a pixel is, if any. Spectator view: blue side blue, red side red. */
 export function teamColor(r: number, g: number, b: number): 0 | 100 | 200 {
   if (b >= 120 && b > r + 50 && b > g + 5) return 100;
@@ -278,12 +296,15 @@ export interface Ring {
   cover: number;
 }
 
-/** Team-coloured pixels: 1 blue, 2 red. */
-function teamLabels(frame: Frame): Uint8Array {
+/** Team-coloured pixels: 1 blue, 2 red. With a background, only pixels that aren't part of the empty map. */
+function teamLabels(frame: Frame, bg?: Frame, minDiff = 60): Uint8Array {
   const { w, h, data } = frame;
   const label = new Uint8Array(w * h);
+  const useBg = !!bg && bg.w === w && bg.h === h;
   for (let p = 0; p < w * h; p++) {
     const i = p * 4;
+    // Bright blue river edges and blue structures are on the empty map too: not icons.
+    if (useBg && diffAt(data, bg!.data, i) < minDiff) continue;
     const t = teamColor(data[i], data[i + 1], data[i + 2]);
     if (t) label[p] = t === 100 ? 1 : 2;
   }
@@ -419,9 +440,9 @@ function houghRings(b: Blob, w: number, r: number, minCover: number): { cx: numb
  * blobs that are several touching rings, or a ring partly under another icon, are split
  * with a circle search at the ring size the clean ones show.
  */
-export function findRings(frame: Frame): Ring[] {
+export function findRings(frame: Frame, bg?: Frame): Ring[] {
   const { w, h } = frame;
-  const all = blobs(teamLabels(frame), w, h);
+  const all = blobs(teamLabels(frame, bg), w, h);
   const minD = w * 0.045;
   const maxD = w * 0.13;
   const rings: Ring[] = [];

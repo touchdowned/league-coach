@@ -101,3 +101,39 @@ export function nameRings(champs: ChampSample[], teamOf: (id: number) => number)
   }
   return named;
 }
+
+/**
+ * Drops champion reads that can't be true: a read far from both the previous and next
+ * reads of that champion, when those two agree with each other (a wrong portrait match,
+ * usually a ring on the far side of the map). Champions cover under 500 units a second;
+ * 1500 units of slack covers blinks, dashes and the read's own error.
+ * Teleports and recalls move a champion once and stay, so they survive.
+ */
+export function dropJumps(champs: ChampSample[]): number {
+  let dropped = 0;
+  for (const fog of ["off", "team"] as const) {
+    const ss = champs.filter((c) => c.fog === fog).sort((a, b) => a.t - b.t);
+    const reads = new Map<number, { s: ChampSample; i: number }[]>();
+    for (const s of ss) s.at.forEach((a, i) => (reads.get(a.id) ?? reads.set(a.id, []).get(a.id)!).push({ s, i }));
+    const bad = new Map<ChampSample, Set<number>>();
+    for (const list of reads.values()) {
+      for (let k = 1; k < list.length - 1; k++) {
+        const p = list[k - 1].s.at[list[k - 1].i];
+        const c = list[k].s.at[list[k].i];
+        const n = list[k + 1].s.at[list[k + 1].i];
+        const reach = (a: ChampSample, b: ChampSample) => 1500 + (Math.abs(b.t - a.t) / 1000) * 500;
+        const dp = Math.hypot(c.x - p.x, c.y - p.y);
+        const dn = Math.hypot(c.x - n.x, c.y - n.y);
+        const pn = Math.hypot(p.x - n.x, p.y - n.y);
+        if (dp > reach(list[k - 1].s, list[k].s) && dn > reach(list[k].s, list[k + 1].s) && pn <= reach(list[k - 1].s, list[k + 1].s)) {
+          (bad.get(list[k].s) ?? bad.set(list[k].s, new Set()).get(list[k].s)!).add(list[k].i);
+        }
+      }
+    }
+    for (const [s, idx] of bad) {
+      s.at = s.at.filter((_, i) => !idx.has(i));
+      dropped += idx.size;
+    }
+  }
+  return dropped;
+}

@@ -127,8 +127,8 @@ describe("wave state from the replay", () => {
 });
 
 // ---- champions and vision ----
-import { detectChampions, findRings, iconGrid } from "../src/core/minimap";
-import { hasVision, lastSeen, mergeReplayPositions, nameRings, truthAt, visibleAt } from "../src/core/vision";
+import { backgroundFrame, detectChampions, findRings, FOUNTAINS, iconGrid } from "../src/core/minimap";
+import { dropJumps, hasVision, lastSeen, mergeReplayPositions, nameRings, truthAt, visibleAt } from "../src/core/vision";
 import type { ChampSample } from "../src/core/waves";
 
 function icon(seed: number): Frame {
@@ -290,5 +290,38 @@ describe("naming rings by tracking", () => {
     expect(champs[1].at.find((a) => a.id === 6)).toEqual({ id: 6, x: 5200, y: 5100 });
     expect(champs[1].unk).toBeUndefined();
     expect(champs[3].unk?.length).toBe(1);
+  });
+});
+
+describe("scan cleanup", () => {
+  it("ignores blue map features that are on the empty map", () => {
+    const empty = blank(300, 300, 4);
+    // A bright blue arc on the map itself (a river edge), present in the background too.
+    for (let a = 0; a < Math.PI; a += 0.01) paint(empty, 80 + Math.cos(a) * 11, 80 + Math.sin(a) * 11, 1, BLUE);
+    const f = clone(empty);
+    stamp(f, icon(2), 200, 200, 11, BLUE);
+    expect(findRings(f).length).toBeGreaterThan(1);
+    const rings = findRings(f, empty);
+    expect(rings.length).toBe(1);
+    expect(Math.hypot(rings[0].cx - 200, rings[0].cy - 200)).toBeLessThan(2);
+  });
+
+  it("drops a read that jumps across the map and back", () => {
+    const champs: ChampSample[] = [1000, 2000, 3000, 4000].map((t) => ({ t, fog: "off" as const, at: [{ id: 1, x: 2000 + t / 10, y: 2000 }] }));
+    champs[2].at[0] = { id: 1, x: 12000, y: 12000 };
+    expect(dropJumps(champs)).toBe(1);
+    expect(champs[2].at).toEqual([]);
+    // A recall: moves once and stays. Kept.
+    const r: ChampSample[] = [1000, 2000, 3000, 4000].map((t) => ({ t, fog: "off" as const, at: [{ id: 1, x: t < 2500 ? 7000 : 400, y: t < 2500 ? 7000 : 400 }] }));
+    expect(dropJumps(r)).toBe(0);
+  });
+
+  it("takes the fountains from later frames", () => {
+    const early = blank(300, 300, 6);
+    const later = clone(early);
+    const fp = gameToPixel(FOUNTAINS[0].x, FOUNTAINS[0].y, 300);
+    stamp(early, icon(3), fp.px, fp.py, 11, BLUE); // a champion still in base at the start
+    const bg = backgroundFrame([early], [later]);
+    expect(findRings(bg).length).toBe(0);
   });
 });
