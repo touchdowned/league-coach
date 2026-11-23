@@ -23,9 +23,9 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -46,12 +46,14 @@ jobs:
       - run: npm run build
 
       - name: Build installer${{ github.event_name != 'pull_request' && ' and publish release' || '' }}
+        # bash, because PowerShell splits the -c.extraMetadata... argument at the dot.
+        shell: bash
         run: npx electron-builder --win --publish ${{ github.event_name == 'pull_request' && 'never' || 'always' }} -c.extraMetadata.version=${{ steps.version.outputs.version }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: League-Coach-Setup
           path: release/League-Coach-Setup-*.exe
