@@ -1,5 +1,8 @@
 import type { ProgressEvent, ProgressResult, ProgressState } from "../core/progress";
+import type { PostGameStatus } from "../core/postgame";
 import type { GameReport } from "../core/types";
+
+export type { PostGameStatus };
 
 export interface Settings {
   apiKey: string;
@@ -9,6 +12,9 @@ export interface Settings {
   leagueDir: string;
   vodDir: string;
   autoAdvanceSec: number;
+  autoReview: boolean;
+  autoLaunchReplay: boolean;
+  launchAtLogin: boolean;
 }
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -57,6 +63,10 @@ export interface CoachApi {
   vodFind(matchId: string): Promise<Result<Vod | null>>;
   vodPick(matchId: string): Promise<Result<Vod | null>>;
   folderPick(): Promise<Result<string | null>>;
+
+  postGameStatus(): Promise<Result<PostGameStatus | undefined>>;
+  onPostGameStatus(cb: (s: PostGameStatus) => void): () => void;
+  onPostGameOpen(cb: (matchId: string) => void): () => void;
 }
 
 declare global {

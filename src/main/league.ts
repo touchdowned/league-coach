@@ -137,6 +137,35 @@ export class LeagueClient {
     }
   }
 
+  /** GET a League client route. Null when the client is closed or the route fails. */
+  async lcuGet<T>(route: string): Promise<T | null> {
+    const lock = await readLockfile(this.leagueDir);
+    if (!lock) return null;
+    try {
+      const r = await request<T>(`https://127.0.0.1:${lock.port}${route}`, { auth: lock.password, timeoutMs: 2500 });
+      return r.status === 200 ? r.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Current gameflow phase ("InProgress", "EndOfGame", ...), or null when the client is closed. */
+  async gameflowPhase(): Promise<string | null> {
+    const lock = await readLockfile(this.leagueDir);
+    if (!lock) return null;
+    try {
+      const r = await request<string>(`https://127.0.0.1:${lock.port}/lol-gameflow/v1/gameflow-phase`, { auth: lock.password, timeoutMs: 2500 });
+      return r.status === 200 && typeof r.data === "string" ? r.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Raw replay state for a game id: "download", "downloading", "watch", "checking", "lost", ... */
+  async replayMeta(gameId: string): Promise<{ state: string; downloadProgress?: number } | null> {
+    return this.lcuGet(`/lol-replays/v1/metadata/${gameId}`);
+  }
+
   private async lcu(method: string, route: string, body?: unknown) {
     const lock = await readLockfile(this.leagueDir);
     if (!lock) throw new Error("Open the League client first.");

@@ -10,9 +10,15 @@ export interface Settings {
   leagueDir: string;
   vodDir: string;
   autoAdvanceSec: number;
+  /** After a ranked game: sync it and open its review. */
+  autoReview: boolean;
+  /** Also open the replay in League once it has downloaded. */
+  autoLaunchReplay: boolean;
+  /** Start hidden at Windows sign-in so games are caught without opening the app. */
+  launchAtLogin: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { apiKey: "", riotId: "", region: "NA", matchCount: 40, leagueDir: "C:\\Riot Games\\League of Legends", vodDir: "", autoAdvanceSec: 14 };
+export const DEFAULT_SETTINGS: Settings = { apiKey: "", riotId: "", region: "NA", matchCount: 40, leagueDir: "C:\\Riot Games\\League of Legends", vodDir: "", autoAdvanceSec: 14, autoReview: true, autoLaunchReplay: false, launchAtLogin: false };
 
 export class JsonStore {
   constructor(private dir: string) {}

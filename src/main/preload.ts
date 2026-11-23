@@ -34,4 +34,8 @@ contextBridge.exposeInMainWorld("coach", {
   vodFind: call("vod:find"),
   vodPick: call("vod:pick"),
   folderPick: call("folder:pick"),
+
+  postGameStatus: call("postgame:status"),
+  onPostGameStatus: (cb: Cb<unknown>) => on("postgame:status", cb),
+  onPostGameOpen: (cb: Cb<unknown>) => on("postgame:open", cb),
 });
