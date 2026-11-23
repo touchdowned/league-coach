@@ -36,6 +36,15 @@ contextBridge.exposeInMainWorld("coach", {
   clipsCancel: call("clips:cancel"),
   onClipsProgress: (cb: Cb<unknown>) => on("clips:progress", cb),
 
+  stageOpen: call("stage:open"),
+  stageSource: call("stage:source"),
+  stagePlayback: call("stage:playback"),
+  stageRender: call("stage:render"),
+  stageSequence: call("stage:sequence"),
+  stageGlide: call("stage:glide"),
+  stageFocus: call("stage:focus"),
+  onStageProgress: (cb: Cb<string>) => on("stage:progress", cb),
+
   vodFind: call("vod:find"),
   vodPick: call("vod:pick"),
   folderPick: call("folder:pick"),

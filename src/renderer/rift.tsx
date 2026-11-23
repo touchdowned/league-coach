@@ -32,10 +32,12 @@ export interface RiftProps {
   highlight?: { x: number; y: number } | null;
   /** Minions read from the replay's minimap. */
   minions?: { x: number; y: number; team: number }[];
+  /** Extra SVG drawn on top (arrows, rings), given the map size. */
+  overlay?: (size: number) => React.ReactNode;
 }
 
 /** Summoner's Rift with every champion where Riot's data puts them at time t. */
-export function Rift({ track, teamId, meId, t, size = 520, hidden = [], ghosts = [], guess, answer, onPick, highlight, minions = [] }: RiftProps) {
+export function Rift({ track, teamId, meId, t, size = 520, hidden = [], ghosts = [], guess, answer, onPick, highlight, minions = [], overlay }: RiftProps) {
   const v = useDdragonVersion();
   const [src, setSrc] = useState(0);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -136,6 +138,8 @@ export function Rift({ track, teamId, meId, t, size = 520, hidden = [], ghosts =
             </g>
           );
         })}
+
+      {overlay?.(size)}
 
       {guess && (() => {
         const [x, y] = toView(guess, size);

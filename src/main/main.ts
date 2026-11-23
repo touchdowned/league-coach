@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, Notification, protocol } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, Notification, protocol } from "electron";
 import { promises as fs } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
@@ -8,7 +8,7 @@ import { parseRiotId, RiotClient, SR_QUEUES } from "../core/riot";
 import type { GameReport } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
-import { scanReplay } from "./scan";
+import { openReplay, scanReplay } from "./scan";
 import { growBench, readBench } from "./bench";
 import type { WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
@@ -256,6 +256,58 @@ app.whenReady().then(async () => {
   handle("replay:follow", async (champ: string) => (await league()).follow(champ));
   handle("replay:enableApi", async () => (await league()).enableReplayApi());
   handle("bench:get", () => readBench(store));
+
+  // Guided walkthrough: the League replay window is streamed into the app and driven
+  // through the Replay API (camera, fog, playback). No game memory, no file decoding.
+  handle("stage:open", async (matchId: string) => {
+    const pb = await openReplay(await league(), matchId, (label) => send("stage:progress", label));
+    focusWindow();
+    return pb;
+  });
+  handle("stage:source", async () => {
+    const srcs = await desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } });
+    const s = srcs.find((x) => /League of Legends \(TM\) Client/i.test(x.name)) ?? srcs.find((x) => /^League of Legends/i.test(x.name) && !/Coach/i.test(x.name));
+    return s ? { id: s.id, name: s.name } : null;
+  });
+  handle("stage:playback", async (body?: { time?: number; paused?: boolean; speed?: number }) => {
+    const lc = await league();
+    return body ? lc.setPlayback(body) : lc.playback();
+  });
+  handle("stage:render", async (body?: Record<string, unknown>) => {
+    const lc = await league();
+    if (body) await lc.setRender(body);
+    return lc.getRender();
+  });
+  handle("stage:sequence", async (body: Record<string, unknown>) => (await league()).setSequence(body));
+  // Smooth free-camera move to a target (works while paused, unlike sequences).
+  let glideId = 0;
+  handle("stage:glide", async (target: { cameraPosition: { x: number; y: number; z: number }; cameraRotation: { x: number; y: number; z: number }; fieldOfView?: number }, ms = 900) => {
+    const lc = await league();
+    const id = ++glideId;
+    const cur = await lc.getRender();
+    const from = cur?.cameraPosition as typeof target.cameraPosition | undefined;
+    const rot = cur?.cameraRotation as typeof target.cameraRotation | undefined;
+    await lc.setRender({ cameraAttached: false, cameraMode: "fps" });
+    if (!from || !rot) return lc.setRender(target);
+    const t0 = Date.now();
+    const ease = (k: number) => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
+    const mix = (a: number, b: number, k: number) => a + (b - a) * k;
+    // Shortest way round for yaw.
+    const dyaw = ((((target.cameraRotation.x - rot.x) % 360) + 540) % 360) - 180;
+    while (id === glideId) {
+      const k = Math.min(1, (Date.now() - t0) / ms);
+      const e = ease(k);
+      await lc.setRender({
+        cameraPosition: { x: mix(from.x, target.cameraPosition.x, e), y: mix(from.y, target.cameraPosition.y, e), z: mix(from.z, target.cameraPosition.z, e) },
+        cameraRotation: { x: rot.x + dyaw * e, y: mix(rot.y, target.cameraRotation.y, e), z: 0 },
+        ...(k >= 1 && target.fieldOfView ? { fieldOfView: target.fieldOfView } : {}),
+      });
+      if (k >= 1) break;
+      await new Promise((r) => setTimeout(r, 12));
+    }
+    return true;
+  });
+  handle("stage:focus", () => focusWindow());
   handle("replay:read", (matchId: string) => readReplay(matchId));
   handle("replay:readCancel", () => {
     scanCancelled = true;

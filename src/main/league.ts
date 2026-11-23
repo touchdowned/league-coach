@@ -211,6 +211,18 @@ export class LeagueClient {
     return !!r && r.status < 400;
   }
 
+  /** POST /replay/playback with any of time, paused, speed. */
+  async setPlayback(body: { time?: number; paused?: boolean; speed?: number }): Promise<{ time: number; length: number; paused: boolean; speed?: number } | null> {
+    const r = await request<{ time: number; length: number; paused: boolean; speed?: number }>("https://127.0.0.1:2999/replay/playback", { method: "POST", body, timeoutMs: 1500 }).catch(() => null);
+    return r?.status === 200 ? r.data : null;
+  }
+
+  /** Keyframed camera/playback sequence (smooth camera moves). An empty object clears it. */
+  async setSequence(body: Record<string, unknown>): Promise<boolean> {
+    const r = await request("https://127.0.0.1:2999/replay/sequence", { method: "POST", body, timeoutMs: 1500 }).catch(() => null);
+    return !!r && r.status < 400;
+  }
+
   /** The game id of whatever the client is running right now (a replay or a live game). */
   async currentGameId(): Promise<string | null> {
     const s = await this.lcuGet<{ gameData?: { gameId?: number } }>("/lol-gameflow/v1/session");

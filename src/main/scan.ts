@@ -66,6 +66,32 @@ async function waitFor<T>(fn: () => Promise<T | null>, ms: number, isCancelled: 
   return null;
 }
 
+/** Gets this game's replay open in League (downloading it first if needed). */
+export async function openReplay(lc: LeagueClient, matchId: string, onLabel: (label: string) => void, isCancelled: () => boolean = () => false) {
+  let pb = await lc.playback();
+  if (pb) {
+    const open = await lc.currentGameId();
+    if (open && open !== gameIdOf(matchId)) throw new Error("A different replay is open. Close it and try again.");
+    return pb;
+  }
+  const st = await lc.state(matchId);
+  if (st.kind === "client-closed") throw new Error("Open the League client first.");
+  if (st.kind === "api-disabled") throw new Error("Turn on replay control first (Settings, or the button on the replay card), then try again.");
+  if (st.kind === "unavailable") throw new Error(st.reason);
+  if (st.kind === "can-download") await lc.download(matchId);
+  if (st.kind === "can-download" || st.kind === "downloading") {
+    onLabel("Downloading the replay");
+    const ok = await waitFor(async () => ((await lc.state(matchId)).kind === "ready" ? true : null), 180_000, isCancelled);
+    if (!ok) throw new Error("The replay didn't finish downloading.");
+  }
+  await lc.watch(matchId);
+  onLabel("Loading the replay");
+  pb = await waitFor(() => lc.playback(), 150_000, isCancelled);
+  if (!pb) throw new Error("The replay didn't open. Is replay control turned on?");
+  await sleep(4000); // loading screen
+  return pb;
+}
+
 export async function scanReplay(
   lc: LeagueClient,
   matchId: string,
@@ -79,27 +105,7 @@ export async function scanReplay(
 
   // 1. Get this game's replay open.
   onProgress({ phase: "opening", label: "Opening the replay", done: 0, total: 1 });
-  let pb = await lc.playback();
-  if (pb) {
-    const open = await lc.currentGameId();
-    if (open && open !== gameIdOf(matchId)) throw new Error("A different replay is open. Close it and try again.");
-  } else {
-    const st = await lc.state(matchId);
-    if (st.kind === "client-closed") throw new Error("Open the League client first.");
-    if (st.kind === "api-disabled") throw new Error("Turn on replay control first (the button on the League replay card), then try again.");
-    if (st.kind === "unavailable") throw new Error(st.reason);
-    if (st.kind === "can-download") await lc.download(matchId);
-    if (st.kind === "can-download" || st.kind === "downloading") {
-      onProgress({ phase: "opening", label: "Downloading the replay", done: 0, total: 1 });
-      const ok = await waitFor(async () => ((await lc.state(matchId)).kind === "ready" ? true : null), 180_000, isCancelled);
-      if (!ok) throw new Error("The replay didn't finish downloading.");
-    }
-    await lc.watch(matchId);
-    onProgress({ phase: "opening", label: "Waiting for the replay to load", done: 0, total: 1 });
-    pb = await waitFor(() => lc.playback(), 150_000, isCancelled);
-    if (!pb) throw new Error("The replay didn't open. Is replay control turned on?");
-    await sleep(4000); // loading screen
-  }
+  const pb = await openReplay(lc, matchId, (label) => onProgress({ phase: "opening", label, done: 0, total: 1 }), isCancelled);
   const end = Math.min(pb.length, untilSec);
 
   const original = await lc.getRender();
