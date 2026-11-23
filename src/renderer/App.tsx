@@ -147,7 +147,7 @@ function Shell() {
         ) : tab === "coach" ? (
           <CoachView games={games} onReview={openReview} onPuzzles={() => setTab("puzzles")} onMechanics={() => setTab("mechanics")} onStartSession={startSession} onSync={runSync} syncing={!!sync} canSync={!!settings.apiKey} />
         ) : tab === "review" ? (
-          <ReviewView games={games} target={reviewTarget} settings={settings} onTargetConsumed={() => setReviewTarget(null)} onPuzzles={() => setTab("puzzles")} />
+          <ReviewView games={games} target={reviewTarget} settings={settings} onTargetConsumed={() => setReviewTarget(null)} onPuzzles={() => setTab("puzzles")} onGameUpdated={(r) => setGames((gs) => gs && gs.map((g) => (g.metrics.matchId === r.metrics.matchId ? r : g)))} />
         ) : tab === "puzzles" ? (
           <PuzzlesView games={games} />
         ) : tab === "mechanics" ? (

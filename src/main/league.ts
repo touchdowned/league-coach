@@ -191,6 +191,32 @@ export class LeagueClient {
     }
   }
 
+  /** Change replay speed without seeking. */
+  async setSpeed(speed: number): Promise<void> {
+    await request("https://127.0.0.1:2999/replay/playback", { method: "POST", body: { speed } }).catch(() => null);
+  }
+
+  async setPaused(paused: boolean): Promise<void> {
+    await request("https://127.0.0.1:2999/replay/playback", { method: "POST", body: { paused } }).catch(() => null);
+  }
+
+  /** The replay's render settings (fog, interface toggles, ...), or null. */
+  async getRender(): Promise<Record<string, unknown> | null> {
+    const r = await request<Record<string, unknown>>("https://127.0.0.1:2999/replay/render", { timeoutMs: 1500 }).catch(() => null);
+    return r?.status === 200 ? r.data : null;
+  }
+
+  async setRender(body: Record<string, unknown>): Promise<boolean> {
+    const r = await request("https://127.0.0.1:2999/replay/render", { method: "POST", body, timeoutMs: 1500 }).catch(() => null);
+    return !!r && r.status < 400;
+  }
+
+  /** The game id of whatever the client is running right now (a replay or a live game). */
+  async currentGameId(): Promise<string | null> {
+    const s = await this.lcuGet<{ gameData?: { gameId?: number } }>("/lol-gameflow/v1/session");
+    return s?.gameData?.gameId ? String(s.gameData.gameId) : null;
+  }
+
   /** Lock the camera onto a player by champion name. Best effort: ignored if unsupported. */
   async follow(championName: string): Promise<void> {
     try {

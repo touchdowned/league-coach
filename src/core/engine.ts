@@ -8,12 +8,14 @@
  * levers come first, an inferred read of what you were doing (from your path, wards,
  * purchases and fights), and a "next time" built from the actual map state.
  *
- * What it can't see: Riot's data has no minion positions or health bars, so wave state
- * is inferred from CS differences, never read directly. Costs are estimates and say so.
+ * Wave state: when the replay has been read (see minimap.ts / waves.ts), minion
+ * positions come from the replay's minimap and the advice quotes them. Without it,
+ * wave state is inferred from CS differences. Costs are estimates and say so.
  */
 import { fmtTime } from "./analysis";
 import { describeSpot, dist, positionAt, Track } from "./track";
 import type { MatchDto, Participant, ParticipantFrame, TimelineDto, TimelineEvent } from "./types";
+import { laneOf, waveAt, waveSeries, type WaveRead, type WaveTrack } from "./waves";
 
 export type LeakKind = "recall" | "farm" | "roam" | "objective" | "death";
 
@@ -56,11 +58,19 @@ interface Ctx {
   opp: Participant | null;
   byId: Map<number, Participant>;
   events: TimelineEvent[];
+  /** Minion positions read from the replay, when available. */
+  waves?: WaveTrack;
 }
 
-export function readGame(match: MatchDto, timeline: TimelineDto, track: Track, me: Participant, opp: Participant | null): Leak[] {
+/** Your lane's wave at time t, from the replay, if it was read and you were laning. */
+function myWave(c: Ctx, t: number): WaveRead | null {
+  const lane = laneOf(c.me.teamPosition);
+  return lane && t < LANE_END + 2 * MIN ? waveAt(c.waves, t, lane, c.me.teamId) : null;
+}
+
+export function readGame(match: MatchDto, timeline: TimelineDto, track: Track, me: Participant, opp: Participant | null, waves?: WaveTrack): Leak[] {
   const events = timeline.info.frames.flatMap((f) => f.events ?? []).sort((a, b) => a.timestamp - b.timestamp);
-  const c: Ctx = { match, timeline, track, me, opp, byId: new Map(match.info.participants.map((p) => [p.participantId, p])), events };
+  const c: Ctx = { match, timeline, track, me, opp, byId: new Map(match.info.participants.map((p) => [p.participantId, p])), events, waves };
   const deaths = events.filter((e) => e.type === "CHAMPION_KILL" && e.victimId === me.participantId);
   const leaks = [...recallLeaks(c, deaths), ...farmLeaks(c, deaths), ...objectiveLeaks(c, deaths), ...deaths.map((d) => deathLeak(c, d))];
   return leaks.filter((l) => l.cost >= 100).sort((a, b) => b.cost - a.cost);
@@ -209,6 +219,35 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
       tips.push(`At ${fmtTime(firstRich.timestamp)} you already had ${g(heldGold)}. Recall on the next wave crash after you pass about 1,300g; fighting with gold in your pocket is fighting an item down.`);
     }
 
+    // The wave when you left, read from the replay.
+    const w = myWave(c, leftAt);
+    const oppName = c.opp?.championName ?? "their laner";
+    if (w) {
+      const crashing = w.where === "under their tower" && w.mine >= 2;
+      if (crashing) {
+        evidence.push(`Wave read from the replay: when you started recalling, your wave was crashing into ${oppName}'s tower (${w.mine} of yours vs ${w.theirs} of theirs). Good timing on the wave.`);
+        for (let i = tips.length - 1; i >= 0; i--) if (/^(Shove|Plates only fall)/.test(tips[i])) tips.splice(i, 1);
+      } else if (w.theirs >= 3 && w.theirs >= w.mine + 2) {
+        evidence.push(`Wave read from the replay: when you started recalling, ${w.theirs} of ${oppName}'s minions were pushing ${w.where} against ${w.mine} of yours.`);
+        const before = waveSeries(c.waves, leftAt - 100_000, leftAt - 5000, laneOf(c.me.teamPosition)!, c.me.teamId).filter((x) => x.where === "under their tower" && x.mine >= 2);
+        const window = before[before.length - 1];
+        for (let i = tips.length - 1; i >= 0; i--) if (/^(Shove|Plates only fall)/.test(tips[i])) tips.splice(i, 1);
+        tips.unshift(
+          window
+            ? `At ${fmtTime(window.t)} your wave was crashing into ${oppName}'s tower. That was the recall: their next wave would have walked into your tower with no one there for only a few seconds, instead of ${w.theirs} minions sitting on yours.`
+            : `You left with ${w.theirs} of their minions coming at you. Kill that wave first (about ${w.theirs * GOLD_PER_CS}g and 20 seconds), push yours into their tower, then back as it crashes.`,
+        );
+        // Those minions die to your tower with nobody there to last-hit them.
+        if (w.theirs > lostCs) {
+          const i = parts.findIndex((p) => /CS lost around the trip/.test(p.label));
+          if (i >= 0) parts.splice(i, 1);
+          parts.push({ label: `${w.theirs} minions died to your tower while you were gone`, gold: w.theirs * GOLD_PER_CS });
+        }
+      } else if (w.where === "on their side" && w.mine >= w.theirs + 3) {
+        evidence.push(`Wave read from the replay: your wave was ${w.mine} vs ${w.theirs} on their side when you left. It would have crashed in a few seconds; staying ~10s more lands the crash before you back.`);
+      }
+    }
+
     const small = pocket < 900 && t0 < 25 * MIN;
     if (small) tips.push(`You backed with ${g(pocket)}, which is less than one real item step. If nothing forces you out, stay until about 1,100–1,300g.`);
     const cost = parts.reduce((s, p) => s + p.gold, 0);
@@ -257,6 +296,20 @@ function farmLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
     );
     if (away && took.length) continue; // a roam that paid off
     const cost = gap * GOLD_PER_CS;
+    const lane = laneOf(c.me.teamPosition);
+    const reads = lane ? waveSeries(c.waves, a, b, lane, c.me.teamId) : [];
+    const share = (wh: string) => (reads.length ? reads.filter((r) => r.where === wh).length / reads.length : 0);
+    const underMine = share("under your tower");
+    const underTheirs = share("under their tower");
+    const waveEvidence = reads.length
+      ? [`Wave read from the replay: the wave was under your tower ${Math.round(underMine * 100)}% of this window and under theirs ${Math.round(underTheirs * 100)}%.`]
+      : [];
+    const waveTip =
+      underTheirs >= 0.5
+        ? `${c.opp.championName} kept the wave frozen in front of their tower, so every last-hit meant walking into their range. Don't stand there and lose it slowly: hit it hard with ${c.opp.championName} on cooldown, or ask your jungler to break the freeze with you.`
+        : underMine >= 0.5
+          ? `The wave sat under your tower and you lost the tower last-hits. Melee minions: 2 tower shots then an auto. Casters: 1 tower shot then an auto. Practice it in the lane lab until it's automatic.`
+          : null;
     if (away && mid) {
       out.push({
         kind: "roam",
@@ -277,11 +330,11 @@ function farmLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
         costParts: [{ label: `${gap} CS behind ${c.opp.championName} in lane`, gold: cost }],
         title: `${c.opp.championName} out-farmed you by ${gap} CS from ${fmtTime(a)} to ${fmtTime(b)}`,
         doing: `You were both in lane, but you took ${Math.round(mine)} CS to their ${Math.round(theirs)}.`,
-        evidence: [`That's about ${(gap / 2).toFixed(1)} CS a minute lost with no death or recall to explain it.`],
-        nextTime:
+        evidence: [`That's about ${(gap / 2).toFixed(1)} CS a minute lost with no death or recall to explain it.`, ...waveEvidence],
+        nextTime: waveTip ?? (
           gap >= 9
             ? `A gap this size usually means the wave was sitting under your tower and you were missing tower last-hits, or you were zoned off it. Practice tower last-hitting (melee: 2 tower shots + 1 auto; caster: 1 tower shot + 1 auto) and don't trade when it costs you a cannon.`
-            : `Watch this window and count the minions you missed. Most lost CS in Silver is casters dying while you trade.`,
+            : `Watch this window and count the minions you missed. Most lost CS in Silver is casters dying while you trade.`),
         focus: mid ?? null,
       });
     }
@@ -380,6 +433,9 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
   );
   const pocket = goldInPocket(c, t - 1000);
   if (pocket >= 1300) evidence.push(`You died holding ${g(pocket)}.`);
+  const w = myWave(c, t - 4000);
+  const inLane = w && c.opp && enemies.some((p) => p.participantId === c.opp!.participantId) && enemies.length <= 2;
+  if (w) evidence.push(`Wave read from the replay, 4s before: ${w.mine} of your minions vs ${w.theirs} of theirs, ${w.where}.`);
 
   // ---- Next time: built from the map state ----
   let nextTime: string;
@@ -391,7 +447,9 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
     .map((p) => ({ p, q: positionAt(c.track, p.id, t - 5000) }))
     .filter((x) => x.q && !x.q.dead)
     .sort((a, b) => dist(a.q!, pos) - dist(b.q!, pos))[0];
-  if (enemies.length >= 3) {
+  if (inLane && w!.theirs >= w!.mine + 3) {
+    nextTime = `You fought ${c.opp!.championName} with ${w!.mine} of your minions against ${w!.theirs} of theirs. Early on, a minion wave that size does as much damage as a champion. Trade when the wave is yours, or wait until theirs is under your tower and your tower is the extra hit.`;
+  } else if (enemies.length >= 3) {
     const farSide = pos.x - pos.y > 0 ? "top side" : "bottom side";
     const open = farSide === "bottom side" && dragonUp ? "dragon was up" : farSide === "top side" && baronUp ? "baron was up" : "their towers on that side were open";
     nextTime = `${enemies.length} of them came for you, which left ${enemiesElsewhere.length} on the rest of the map, and on the ${farSide} ${open}. That's the trade: when you see 3+ missing while you're ${sideLane ? "side-laning" : "out"} like this, walk back toward ${nearestAlly ? `${nearestAlly.p.champion} (${spot(c, nearestAlly.q!).replace(/^in /, "")})` : "your tower"} and ping your team to take it. Make them pay for sending ${enemies.length} to you instead of dying to it.`;

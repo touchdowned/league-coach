@@ -266,7 +266,7 @@ export function findMistakes(match: MatchDto, timeline: TimelineDto, puuid: stri
   return out.sort((a, b) => b.severity - a.severity || a.timeMs - b.timeMs);
 }
 
-export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: string): GameReport {
+export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: string, waves?: import("./waves").WaveTrack): GameReport {
   const m = computeMetrics(match, timeline, puuid);
   const bench = benchmarkFor(m.role);
   const all = findMistakes(match, timeline, puuid);
@@ -310,7 +310,7 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
     focus: pickFocus(m, all),
     grade: grade(m, all),
     track,
-    leaks: readGame(match, timeline, track, me, opp),
+    leaks: readGame(match, timeline, track, me, opp, waves), wavesRead: !!waves?.samples.length, waves: waves?.samples.length ? waves : undefined,
   };
 }
 

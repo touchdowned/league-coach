@@ -8,6 +8,8 @@ import { parseRiotId, RiotClient, SR_QUEUES } from "../core/riot";
 import type { GameReport } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
+import { scanReplay } from "./scan";
+import type { WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
 import { listVods, matchVod } from "./vod";
 
@@ -16,6 +18,8 @@ let store: JsonStore;
 let reports: GameReport[] = [];
 let progressState: ProgressState = EMPTY_PROGRESS;
 let recordingCancelled = false;
+let scanCancelled = false;
+const wavesFile = (matchId: string) => `waves-${matchId.replace(/[^A-Za-z0-9_]/g, "")}.json`;
 let watcher: PostGameWatcher | null = null;
 // Started at Windows sign-in: stay hidden until a review is ready.
 const startHidden = process.argv.includes("--hidden");
@@ -103,7 +107,8 @@ async function runSync(): Promise<GameReport[]> {
     const match = await riot.getMatch(ids[i]);
     if (!SR_QUEUES.includes(match.info.queueId) || match.info.gameDuration < 600) continue; // skip ARAM, remakes
     const timeline = await riot.getTimeline(ids[i]);
-    out.push(buildReport(match, timeline, puuid));
+    const waves = await store.readJson<WaveTrack | null>(wavesFile(ids[i]), null);
+    out.push(buildReport(match, timeline, puuid, waves ?? undefined));
   }
   send("sync:progress", { done: ids.length, total: ids.length, label: "Done" });
   reports = out.sort((a, b) => b.metrics.gameCreation - a.metrics.gameCreation);
@@ -145,6 +150,24 @@ async function recordClips(matchId: string, moments: number[]): Promise<Record<s
   }
   send("clips:progress", { done: todo.length, total: todo.length, label: "Done" });
   return listClips(matchId);
+}
+
+/** Plays this game's replay, reads minions off the minimap, and re-reads the game with them. */
+async function readReplay(matchId: string): Promise<GameReport> {
+  const s = await store.readSettings();
+  if (!s.apiKey) throw new Error("Add your Riot API key in Settings first.");
+  scanCancelled = false;
+  const waves = await scanReplay(await league(), matchId, (p) => send("scan:progress", p), () => scanCancelled);
+  if (waves.samples.length < 20) throw new Error("Couldn't read enough of the minimap. Keep the replay visible on your main monitor while it reads.");
+  await store.writeJson(wavesFile(matchId), waves);
+  const { gameName, tagLine } = parseRiotId(s.riotId);
+  const riot = new RiotClient(s.apiKey.trim(), s.region, store.cache());
+  const puuid = await riot.getPuuid(gameName, tagLine);
+  const report = buildReport(await riot.getMatch(matchId), await riot.getTimeline(matchId), puuid, waves);
+  reports = reports.map((r) => (r.metrics.matchId === matchId ? report : r));
+  await store.writeReports(reports);
+  focusWindow();
+  return report;
 }
 
 function handle<T>(channel: string, fn: (...args: any[]) => Promise<T> | T) {
@@ -199,6 +222,10 @@ app.whenReady().then(async () => {
   handle("replay:seek", async (sec: number, paused: boolean) => (await league()).seek(sec, paused));
   handle("replay:follow", async (champ: string) => (await league()).follow(champ));
   handle("replay:enableApi", async () => (await league()).enableReplayApi());
+  handle("replay:read", (matchId: string) => readReplay(matchId));
+  handle("replay:readCancel", () => {
+    scanCancelled = true;
+  });
   handle("clips:list", (matchId: string) => listClips(matchId));
   handle("clips:record", (matchId: string, moments: number[]) => recordClips(matchId, moments));
   handle("clips:cancel", () => {

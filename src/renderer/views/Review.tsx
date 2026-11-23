@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, Eye, ChevronRight, Clapperboard, MonitorPlay, Pause, Play, Video } from "lucide-react";
+import { Check, ChevronLeft, Eye, ChevronRight, Clapperboard, MonitorPlay, Pause, Play, Video, Waves } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { fmtTime } from "../../core/analysis";
@@ -8,6 +8,7 @@ import { momentCount, REVIEW_MOMENTS, type Leak } from "../../core/engine";
 import { coach, ReplayState, Settings, TaskProgress, Vod } from "../api";
 import { ChampIcon, DeathMap, LineChart, MapBackdrop } from "../charts";
 import { describeSpot, dist, positionAt } from "../../core/track";
+import { minionsAt } from "../../core/waves";
 import { Rift, useGameClock } from "../rift";
 import { useProgress } from "../progress";
 import { Button, Empty, Kbd, ProgressBar, Spinner } from "../ui";
@@ -18,12 +19,14 @@ export function ReviewView({
   settings,
   onTargetConsumed,
   onPuzzles,
+  onGameUpdated,
 }: {
   games: GameReport[];
   target: { matchId: string; autoplay: boolean; kind?: string } | null;
   settings: Settings;
   onTargetConsumed: () => void;
   onPuzzles: () => void;
+  onGameUpdated?: (r: GameReport) => void;
 }) {
   const { state: progress } = useProgress();
   const [selected, setSelected] = useState<string | null>(target?.matchId ?? null);
@@ -78,6 +81,7 @@ export function ReviewView({
           next={nextUnreviewed}
           onNext={(id) => { setSelected(id); setAutoplay(true); }}
           onPuzzles={onPuzzles}
+          onGameUpdated={onGameUpdated}
         />
       </div>
     </div>
@@ -149,6 +153,7 @@ function ReviewPlayer({
   next,
   onNext,
   onPuzzles,
+  onGameUpdated,
 }: {
   r: GameReport;
   autoplay: boolean;
@@ -157,6 +162,7 @@ function ReviewPlayer({
   next: GameReport | null;
   onNext: (matchId: string) => void;
   onPuzzles: () => void;
+  onGameUpdated?: (r: GameReport) => void;
 }) {
   const m = r.metrics;
   const moments = useMemo(() => toMoments(r), [r]);
@@ -173,6 +179,7 @@ function ReviewPlayer({
   const [replay, setReplay] = useState<ReplayState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [recording, setRecording] = useState<TaskProgress | null>(null);
+  const [reading, setReading] = useState<TaskProgress | null>(null);
   const [vodOffset, setVodOffset] = useState(() => Number(safeGet(`lc.vodOffset.${m.matchId}`) ?? 0));
   const videoRef = useRef<HTMLVideoElement>(null);
   const per = Math.max(6, settings.autoAdvanceSec || 14);
@@ -193,6 +200,7 @@ function ReviewPlayer({
   }, [m.matchId, refreshReplay]);
 
   useEffect(() => coach().onClipsProgress((p) => setRecording(p.done >= p.total ? null : p)), []);
+  useEffect(() => coach().onScanProgress((p) => setReading(p.phase === "done" ? null : p)), []);
 
   const media: Media = !moment
     ? { kind: "map" }
@@ -503,6 +511,18 @@ function ReviewPlayer({
           return res;
         })}
         onCancelRecord={() => coach().clipsCancel()}
+        reading={reading}
+        onRead={() => act("read", async () => {
+          setReading({ done: 0, total: 1, label: "Starting" });
+          const res = await coach().replayRead(m.matchId);
+          setReading(null);
+          if (res.ok) {
+            onGameUpdated?.(res.value);
+            toast.success("Replay read", { description: "Wave state now comes from the replay's minimap." });
+          }
+          return res;
+        })}
+        onCancelRead={() => coach().replayReadCancel()}
         onPickVod={() => act("vod", async () => {
           const res = await coach().vodPick(m.matchId);
           if (res.ok && res.value) setVod(res.value);
@@ -552,6 +572,7 @@ function RiftMoment(props: {
           answer={props.guess && truth && jungler ? { ...truth, champion: jungler.champion } : null}
           onPick={frozen && !revealed ? props.onPick : undefined}
           highlight={revealed ? (moment.leak?.focus ?? moment.main?.context?.position ?? null) : null}
+          minions={minionsAt(r.waves, t)}
         />
         <span className="rift-clock">{fmtTime(t)}</span>
         {frozen && !revealed && <span className="rift-frozen">{props.onPick ? `Click where ${props.drill} is` : "Frozen"}</span>}
@@ -633,6 +654,9 @@ function SourceBar(props: {
   onRecord: () => void;
   onCancelRecord: () => void;
   onPickVod: () => void;
+  reading: TaskProgress | null;
+  onRead: () => void;
+  onCancelRead: () => void;
 }) {
   const { replay, vod, clips, busy, recording } = props;
   const clipCount = clips ? Object.keys(clips).length : 0;
@@ -685,6 +709,26 @@ function SourceBar(props: {
           <small>{status}</small>
         </div>
         {action}
+      </div>
+      <div className="source">
+        <span className="source-icon"><Waves size={16} /></span>
+        <div className="source-body">
+          <strong>Wave state</strong>
+          <small>
+            {props.reading
+              ? props.reading.label
+              : props.r.wavesRead
+                ? "Read from the replay. Recalls, farm and lane deaths quote real minion counts."
+                : "Guessed from CS. Read the replay to get real minion positions: it plays fast on your screen (about 3 min) and reads the minimap. Don't touch it while it runs."}
+          </small>
+        </div>
+        {props.reading ? (
+          <Button size="sm" variant="ghost" onClick={props.onCancelRead}>Stop</Button>
+        ) : (
+          replay && replay.kind !== "client-closed" && replay.kind !== "unavailable" && (
+            <Button size="sm" variant={props.r.wavesRead ? "ghost" : "primary"} loading={busy === "read"} onClick={props.onRead}>{props.r.wavesRead ? "Read again" : "Read the replay"}</Button>
+          )
+        )}
       </div>
       <div className="source">
         <span className="source-icon"><Video size={16} /></span>

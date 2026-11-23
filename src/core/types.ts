@@ -165,4 +165,7 @@ export interface GameReport {
   track?: import("./track").Track;
   /** Every gold leak the engine found, biggest first. Missing on older saved reports. */
   leaks?: import("./engine").Leak[];
+  /** True when minion positions were read from the replay itself. */
+  wavesRead?: boolean;
+  waves?: import("./waves").WaveTrack;
 }

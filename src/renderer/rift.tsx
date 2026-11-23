@@ -30,10 +30,12 @@ export interface RiftProps {
   answer?: { x: number; y: number; champion: string } | null;
   onPick?: (p: { x: number; y: number }) => void;
   highlight?: { x: number; y: number } | null;
+  /** Minions read from the replay's minimap. */
+  minions?: { x: number; y: number; team: number }[];
 }
 
 /** Summoner's Rift with every champion where Riot's data puts them at time t. */
-export function Rift({ track, teamId, meId, t, size = 520, hidden = [], ghosts = [], guess, answer, onPick, highlight }: RiftProps) {
+export function Rift({ track, teamId, meId, t, size = 520, hidden = [], ghosts = [], guess, answer, onPick, highlight, minions = [] }: RiftProps) {
   const v = useDdragonVersion();
   const [src, setSrc] = useState(0);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -80,6 +82,11 @@ export function Rift({ track, teamId, meId, t, size = 520, hidden = [], ghosts =
         <MapBackdrop size={size} />
       )}
       <rect width={size} height={size} fill="url(#rift-vignette)" pointerEvents="none" />
+
+      {minions.map((mn, i) => {
+        const [x, y] = toView(mn, size);
+        return <rect key={`m${i}`} className={`rift-minion ${mn.team === teamId ? "ally" : "enemy"}`} x={x - size * 0.005} y={y - size * 0.005} width={size * 0.01} height={size * 0.01} />;
+      })}
 
       {recentObj.map((o, i) => {
         const [x, y] = toView(o, size);
