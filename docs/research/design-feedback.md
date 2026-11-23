@@ -35,3 +35,19 @@ The learning-science department's full write-up is linked from the PR.
 - One custom ease-out curve, animations under 300 ms, scale(0.97) on press,
   no scale(0) entrances, one entrance animation per container, prefers-reduced-motion respected.
 - One focus at a time on Coach, with the pass rule and a 10-game pass strip.
+
+## Round 2: propose, then attack
+
+Every idea below was pitched, then attacked for being generic, unrealistic, or not
+making S better at League. Only the survivors were built.
+
+| Idea | Attack | Verdict |
+| --- | --- | --- |
+| 3D Summoner's Rift in three.js | No licensed map models; a fake low-poly Rift is less real than League's own replay, which the app already drives. Decoration, not training. | Killed |
+| Live Rift map: all ten champions moved through each death from Riot's timeline (positions every minute plus exact kill spots), on the real minimap art | Positions between data points are estimates. Answer: show it honestly (faded and dashed icons when far from a known point). It uses S's real games, so it isn't generic. | **Built** |
+| Freeze 4 seconds before each death and make S call it (temporal occlusion) | Is it just a gimmick pause? No: occlusion training has a large effect on anticipation in sport (Muller & Morris-Binelli 2024 meta-analysis, *Sports Medicine*). | **Built** |
+| "Where's the jungler?" inside gank deaths: the enemy jungler is hidden; S clicks where they are, and the reveal shows the real spot and the distance | Directly trains the skill behind S's top leak (ganks). Scored by distance, not by multiple choice, so it can't be guessed. | **Built** |
+| Endless jungle tracking drill from every laning minute of S's games (hundreds of questions per sync) | Only useful if the last-seen info matches the in-game reality. The question shows where the jungler was a minute earlier, about what a good minimap habit gives. | **Built** |
+| Death-risk meter from positions (like Dota 2 death prediction, Katona et al. 2019, arXiv:1906.03939) | Needs high-frequency positions; Riot gives one per minute, so it would be noise dressed up as AI. | Killed for now |
+| Eye-tracking minimap trainer | Experts do look at the minimap more (Sci. Reports 2025 meta-analysis), but S has no eye tracker. | Killed |
+| League-style gold HUD skin | Cosplay. Doesn't change a single decision. | Killed |

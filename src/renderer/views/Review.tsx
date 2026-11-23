@@ -6,6 +6,8 @@ import { benchmarkFor, ROLE_LABEL } from "../../core/benchmarks";
 import type { GameReport, Mistake } from "../../core/types";
 import { coach, ReplayState, Settings, TaskProgress, Vod } from "../api";
 import { ChampIcon, DeathMap, LineChart, MapBackdrop } from "../charts";
+import { describeSpot, dist, positionAt } from "../../core/track";
+import { Rift, useGameClock } from "../rift";
 import { useProgress } from "../progress";
 import { Button, Empty, Kbd, ProgressBar, Spinner } from "../ui";
 
@@ -96,7 +98,10 @@ function toMoments(r: GameReport): Moment[] {
     .sort((a, b) => a.timeMs - b.timeMs);
 }
 
-type Media = { kind: "clip"; url: string } | { kind: "vod"; vod: Vod } | { kind: "replay" } | { kind: "map" };
+type Media = { kind: "clip"; url: string } | { kind: "vod"; vod: Vod } | { kind: "replay" } | { kind: "rift" } | { kind: "map" };
+
+const LEAD_MS = 40000; // the lead-up shown before each death
+const FREEZE_MS = 4000; // freeze this long before the death (temporal occlusion)
 
 function ReviewPlayer({
   r,
@@ -157,13 +162,24 @@ function ReviewPlayer({
         ? { kind: "vod", vod }
         : replay?.kind === "open"
           ? { kind: "replay" }
-          : { kind: "map" };
+          : r.track
+            ? { kind: "rift" }
+            : { kind: "map" };
+
+  // Freeze-and-predict on the live map. For ganks, the enemy jungler stays in the fog and you
+  // have to place them before the answer shows (jungle tracking is the skill being trained).
+  const [frozen, setFrozen] = useState(false);
+  const [guess, setGuess] = useState<{ x: number; y: number } | null>(null);
+  const enemyJungler = r.track?.players.find((p) => p.teamId !== r.teamId && p.role === "JUNGLE");
+  const junglerDrill = media.kind === "rift" && !!enemyJungler && !!moment && (moment.main.kind === "ganked" || !!moment.main.context?.enemyJunglerInvolved);
 
   // On each moment: point the media at it.
   useEffect(() => {
     if (!moment) return;
     setElapsed(0);
     setRevealed(false);
+    setFrozen(false);
+    setGuess(null);
     const start = Math.max(0, moment.timeMs / 1000 - 12);
     if (media.kind === "vod" && videoRef.current) {
       videoRef.current.currentTime = Math.max(0, start + vodOffset);
@@ -205,6 +221,7 @@ function ReviewPlayer({
   // Auto-advance timer (clips advance when they end instead).
   useEffect(() => {
     if (!playing || finished || !moment || media.kind === "clip") return;
+    if (media.kind === "rift" && !revealed) return; // the map review waits for your call first
     const started = performance.now() - elapsed * 1000;
     let raf = 0;
     const tick = () => {
@@ -219,7 +236,7 @@ function ReviewPlayer({
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, idx, finished, media.kind]);
+  }, [playing, idx, finished, media.kind, revealed]);
 
   // Keyboard: space play/pause, arrows step.
   useEffect(() => {
@@ -248,8 +265,21 @@ function ReviewPlayer({
   const reviewed = progress.reviewedGames.includes(m.matchId);
   const revealAt = media.kind === "clip" ? 12 : Math.min(5, per * 0.35);
   useEffect(() => {
-    if (!revealed && elapsed >= revealAt) setRevealed(true);
-  }, [elapsed, revealAt, revealed]);
+    if (media.kind !== "rift" && !revealed && elapsed >= revealAt) setRevealed(true);
+  }, [elapsed, revealAt, revealed, media.kind]);
+  // Without the jungler drill, the frozen map gives you a few seconds to call it, then reveals.
+  useEffect(() => {
+    if (media.kind !== "rift" || !frozen || revealed || junglerDrill || !playing) return;
+    const t = setTimeout(() => setRevealed(true), 3500);
+    return () => clearTimeout(t);
+  }, [media.kind, frozen, revealed, junglerDrill, playing]);
+  const pickJungler = (p: { x: number; y: number }) => {
+    if (!frozen || revealed || !moment || !enemyJungler || !r.track) return;
+    setGuess(p);
+    setRevealed(true);
+    const truth = positionAt(r.track, enemyJungler.id, moment.timeMs - FREEZE_MS);
+    award({ type: "puzzle", right: !!truth && dist(p, truth) < 3000 });
+  };
   const timerPct = media.kind === "clip" ? elapsed / (videoRef.current?.duration || 19) : elapsed / per;
 
   return (
@@ -294,10 +324,24 @@ function ReviewPlayer({
                 <span><span className="live-dot" /> Playing in your League replay window</span>
                 <small className="muted">The camera jumps to 12s before each moment.</small>
               </div>
+            ) : media.kind === "rift" && moment ? (
+              <RiftMoment
+                key={moment.key}
+                r={r}
+                moment={moment}
+                playing={playing}
+                frozen={frozen}
+                revealed={revealed}
+                onFrozen={() => setFrozen(true)}
+                hideId={junglerDrill && !revealed ? enemyJungler!.id : undefined}
+                drill={junglerDrill ? enemyJungler!.champion : undefined}
+                guess={guess}
+                onPick={junglerDrill ? pickJungler : undefined}
+              />
             ) : moment ? (
               <MomentMap r={r} moment={moment} />
             ) : null}
-            <span className="stage-time">{moment ? fmtTime(moment.timeMs) : ""}</span>
+            {media.kind !== "rift" && <span className="stage-time">{moment ? fmtTime(moment.timeMs) : ""}</span>}
           </div>
 
           <div className="moment" key={moment?.key}>
@@ -311,7 +355,21 @@ function ReviewPlayer({
               <button className="guess" onClick={() => setRevealed(true)}>
                 <Eye size={16} />
                 <span>
-                  <strong>Call it before you see it.</strong> Watch the moment and decide what went wrong. Revealing in {Math.max(1, Math.ceil(revealAt - elapsed))}s, or press <Kbd>R</Kbd>.
+                  {media.kind === "rift" ? (
+                    junglerDrill ? (
+                      <>
+                        <strong>Where's {enemyJungler!.champion}?</strong> The jungler is hidden, like on your minimap. {frozen ? "Click where you think they are." : "Watch the lead-up; it freezes 4 seconds before you die."} <Kbd>R</Kbd> skips.
+                      </>
+                    ) : (
+                      <>
+                        <strong>Call it before you see it.</strong> {frozen ? "Frozen 4 seconds before you die. What's about to go wrong?" : "Watch the lead-up. It freezes 4 seconds before you die."} Or press <Kbd>R</Kbd>.
+                      </>
+                    )
+                  ) : (
+                    <>
+                      <strong>Call it before you see it.</strong> Watch the moment and decide what went wrong. Revealing in {Math.max(1, Math.ceil(revealAt - elapsed))}s, or press <Kbd>R</Kbd>.
+                    </>
+                  )}
                 </span>
               </button>
             )}
@@ -387,12 +445,61 @@ function ReviewPlayer({
   );
 }
 
+function RiftMoment(props: {
+  r: GameReport;
+  moment: Moment;
+  playing: boolean;
+  frozen: boolean;
+  revealed: boolean;
+  onFrozen: () => void;
+  hideId?: number;
+  drill?: string;
+  guess: { x: number; y: number } | null;
+  onPick?: (p: { x: number; y: number }) => void;
+}) {
+  const { r, moment, playing, frozen, revealed } = props;
+  const track = r.track!;
+  const death = moment.timeMs;
+  const freezeAt = death - FREEZE_MS;
+  const me = track.players.find((p) => p.champion === r.metrics.champion && p.teamId === r.teamId);
+  // Lead-up at 6x, then after the reveal play through the death at 2x.
+  const leadT = useGameClock(Math.max(0, death - LEAD_MS), freezeAt, 6, playing && !frozen, props.onFrozen);
+  const afterT = useGameClock(freezeAt, Math.min(track.durationMs, death + 5000), 2, playing && revealed);
+  const t = revealed ? afterT : leadT;
+  const jungler = props.drill ? track.players.find((p) => p.champion === props.drill && p.teamId !== r.teamId) : undefined;
+  const truth = jungler ? positionAt(track, jungler.id, freezeAt) : null;
+  const off = props.guess && truth ? dist(props.guess, truth) : null;
+  return (
+    <div className="stage-map rift-stage">
+      <div className="rift-wrap">
+        <Rift
+          track={track}
+          teamId={r.teamId}
+          meId={me?.id}
+          t={t}
+          hidden={props.hideId ? [props.hideId] : []}
+          guess={props.guess}
+          answer={props.guess && truth && jungler ? { ...truth, champion: jungler.champion } : null}
+          onPick={frozen && !revealed ? props.onPick : undefined}
+          highlight={revealed && moment.main.context?.position ? moment.main.context.position : null}
+        />
+        <span className="rift-clock">{fmtTime(t)}</span>
+        {frozen && !revealed && <span className="rift-frozen">{props.onPick ? `Click where ${props.drill} is` : "Frozen"}</span>}
+        {off !== null && truth && (
+          <span className={`rift-verdict ${off < 1500 ? "good" : off < 3000 ? "ok" : "bad"}`}>
+            {off < 1500 ? "Spot on." : off < 3000 ? "Close." : "Missed."} {props.drill} was {describeSpot(truth, r.teamId)}
+          </span>
+        )}
+        <MomentFacts r={r} moment={moment} compact />
+      </div>
+    </div>
+  );
+}
+
 function MomentMap({ r, moment }: { r: GameReport; moment: Moment }) {
   const pos = moment.main.context?.position;
   const size = 360;
   const [x, y] = pos ? [(pos.x / 14870) * size, (1 - pos.y / 14870) * size] : [size / 2, size / 2];
-  const c = moment.main.context;
-  const gold = r.series.filter((p) => p.goldDiff !== null && Math.abs(p.minute * 60000 - moment.timeMs) <= 6 * 60000);
   return (
     <div className="stage-map">
       <svg viewBox={`0 0 ${size} ${size}`} className="map">
@@ -400,8 +507,17 @@ function MomentMap({ r, moment }: { r: GameReport; moment: Moment }) {
         <circle cx={x} cy={y} r="30" className="pulse" />
         <path d={`M${x - 8},${y - 8}L${x + 8},${y + 8}M${x + 8},${y - 8}L${x - 8},${y + 8}`} className="map-death big" />
       </svg>
-      <div className="stage-facts">
-        <p className="eyebrow">At the moment</p>
+      <MomentFacts r={r} moment={moment} />
+    </div>
+  );
+}
+
+function MomentFacts({ r, moment, compact }: { r: GameReport; moment: Moment; compact?: boolean }) {
+  const c = moment.main.context;
+  const gold = r.series.filter((p) => p.goldDiff !== null && Math.abs(p.minute * 60000 - moment.timeMs) <= 6 * 60000);
+  return (
+      <div className={compact ? "rift-hud" : "stage-facts"}>
+        {!compact && <p className="eyebrow">At the moment</p>}
         {c?.goldDiff != null && (
           <p>
             <b className={c.goldDiff >= 0 ? "pos" : "neg"}>{c.goldDiff >= 0 ? "+" : ""}{Math.round(c.goldDiff)}g</b> vs {r.metrics.opponentChampion ?? "lane"}
@@ -422,14 +538,13 @@ function MomentMap({ r, moment }: { r: GameReport; moment: Moment }) {
             Enemy took <b>{c.followedBy.name}</b> {c.followedBy.afterSec}s later
           </p>
         )}
-        {gold.length > 2 && (
+        {!compact && gold.length > 2 && (
           <div className="mini-gold">
             <LineChart points={gold.map((p) => ({ x: p.minute, y: p.goldDiff! }))} height={90} format={(n) => `${n >= 0 ? "+" : ""}${Math.round(n)}`} xLabel={(v) => `${v}m`} markers={[{ x: Math.round(moment.timeMs / 60000), label: "✕" }]} />
           </div>
         )}
-        <p className="muted small">Add a replay clip or your recording below to watch this moment here.</p>
+        {!compact && <p className="muted small">{r.track ? "Positions come from Riot's match data. Faded icons are estimates between known points." : "Sync again to see every champion on the map. Add a replay clip or your recording below to watch this moment here."}</p>}
       </div>
-    </div>
   );
 }
 

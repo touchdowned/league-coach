@@ -1,4 +1,5 @@
 import { Crosshair, Flame } from "lucide-react";
+import { JungleDrill } from "./JungleDrill";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CHOICES, Choice, puzzleAt, puzzlesFromGames } from "../../core/puzzles";
 import type { GameReport } from "../../core/types";
@@ -31,6 +32,45 @@ function load(): Stats {
 }
 
 export function PuzzlesView({ games }: { games: GameReport[] }) {
+  const [mode, setMode] = useState<"decisions" | "jungle">(() => {
+    try {
+      return localStorage.getItem("lc.puzzleMode") === "jungle" ? "jungle" : "decisions";
+    } catch {
+      return "decisions";
+    }
+  });
+  const switchMode = (m: "decisions" | "jungle") => {
+    setMode(m);
+    try {
+      localStorage.setItem("lc.puzzleMode", m);
+    } catch {
+      /* not persisted */
+    }
+  };
+  const seg = (
+    <div className="seg">
+      <button className={mode === "decisions" ? "on" : ""} onClick={() => switchMode("decisions")}>Decisions</button>
+      <button className={mode === "jungle" ? "on" : ""} onClick={() => switchMode("jungle")}>Jungle tracking</button>
+    </div>
+  );
+  if (mode === "jungle")
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div>
+            <p className="eyebrow">Puzzles</p>
+            <h1>Where's the jungler?</h1>
+            <p className="muted">Real minutes from your games. Most of your deaths are ganks, and tracking the jungler is how you stop them.</p>
+          </div>
+          {seg}
+        </div>
+        <JungleDrill games={games} />
+      </div>
+    );
+  return <DecisionPuzzles games={games} seg={seg} />;
+}
+
+function DecisionPuzzles({ games, seg }: { games: GameReport[]; seg: React.ReactNode }) {
   const own = useMemo(() => puzzlesFromGames(games), [games]);
   const [stats, setStats] = useState<Stats>(load);
   const [picked, setPicked] = useState<Choice | null>(null);
@@ -99,6 +139,8 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
             {own.length} from your own deaths, then endless drills. Misses come back a few puzzles later. <Kbd>1</Kbd>–<Kbd>4</Kbd> to answer, <Kbd>Enter</Kbd> for next.
           </p>
         </div>
+        <div className="puzzle-head-side">
+        {seg}
         <div className="puzzle-stats">
           <div>
             <small>Accuracy</small>
@@ -116,6 +158,7 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
             <small>Solved</small>
             <strong>{stats.solved}</strong>
           </div>
+        </div>
         </div>
       </div>
 

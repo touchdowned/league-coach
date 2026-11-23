@@ -154,4 +154,6 @@ export interface GameReport {
   strengths: string[];
   focus: string; // one thing to work on next game
   grade: "S" | "A" | "B" | "C" | "D";
+  /** Where all ten champions were. Missing on reports saved before this existed. */
+  track?: import("./track").Track;
 }

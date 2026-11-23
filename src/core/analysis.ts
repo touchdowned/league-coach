@@ -1,3 +1,4 @@
+import { buildTrack } from "./track";
 import { benchmarkFor } from "./benchmarks";
 import type {
   GameMetrics,
@@ -306,6 +307,7 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
     strengths,
     focus: pickFocus(m, all),
     grade: grade(m, all),
+    track: buildTrack(match, timeline),
   };
 }
 

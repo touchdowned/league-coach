@@ -4,7 +4,7 @@ import type { MapEvent } from "../core/types";
 // ---------- Champion icons (Riot Data Dragon) ----------
 
 let ddVersion: Promise<string> | null = null;
-function useDdragonVersion() {
+export function useDdragonVersion() {
   const [v, setV] = useState<string | null>(null);
   useEffect(() => {
     ddVersion ??= fetch("https://ddragon.leagueoflegends.com/api/versions.json")
