@@ -14,6 +14,7 @@ import type { WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
 import { listVods, matchVod } from "./vod";
 import { startAutoUpdates } from "./updater";
+import { MindService } from "./mind";
 
 // Keep settings, the API key and saved games in %APPDATA%\league-coach no matter how the app
 // was installed (dev run, old packaged copy, or the auto-updating installer).
@@ -27,6 +28,7 @@ let recordingCancelled = false;
 let scanCancelled = false;
 const wavesFile = (matchId: string) => `waves-${matchId.replace(/[^A-Za-z0-9_]/g, "")}.json`;
 let watcher: PostGameWatcher | null = null;
+let mind: MindService | null = null;
 // Started at Windows sign-in: stay hidden until a review is ready.
 const startHidden = process.argv.includes("--hidden");
 
@@ -297,6 +299,7 @@ app.whenReady().then(async () => {
     matchPublished,
     sync,
     status: (st) => send("postgame:status", st),
+    onPhase: (phase) => void mind?.onPhase(phase).catch(() => undefined),
     openReview: (matchId) => {
       send("postgame:open", matchId);
       focusWindow();
@@ -308,6 +311,34 @@ app.whenReady().then(async () => {
     },
   });
   handle("postgame:status", () => watcher?.status);
+
+  // Mental game: draft card, live overlay, debriefs.
+  mind = new MindService({
+    store,
+    league,
+    settings: () => store.readSettings(),
+    reports: () => reports,
+    send,
+    focusMain: focusWindow,
+    preload: path.join(__dirname, "preload.js"),
+    rendererUrl: (hash) => (process.env.VITE_DEV_SERVER_URL ? { url: process.env.VITE_DEV_SERVER_URL, hash } : { file: path.join(__dirname, "../../dist-renderer/index.html"), hash }),
+  });
+  await mind.load();
+  handle("mind:get", () => mind!.data);
+  handle("mind:draftInfo", () => mind!.currentDraft ?? mind!.buildDraft(null, null, "", null, null));
+  handle("mind:lockPlan", (p) => mind!.lockPlan(p));
+  handle("mind:nextPlan", () => mind!.nextPlan);
+  handle("mind:closeDraft", () => mind!.closeDraft());
+  handle("mind:saveDebrief", (db) => mind!.saveDebrief(db));
+  handle("mind:skipDebrief", (gameId: string) => mind!.skipDebrief(gameId));
+  handle("mind:checkIn", (n: number) => mind!.checkIn(n));
+  handle("mind:preview", () => mind!.preview());
+  handle("mind:endPreview", () => mind!.endPreview());
+  handle("mind:windowMode", async () => mind!.windowMode((await store.readSettings()).leagueDir));
+  handle("mind:setOverlayPos", async (pos: { x: number; y: number }) => {
+    const s = await store.readSettings();
+    await store.writeSettings({ ...s, overlayPos: pos });
+  });
   applyLoginItem(await store.readSettings());
 
   Menu.setApplicationMenu(null);
@@ -317,7 +348,10 @@ app.whenReady().then(async () => {
   app.on("activate", () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 
-app.on("before-quit", () => watcher?.stop());
+app.on("before-quit", () => {
+  watcher?.stop();
+  mind?.stop();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

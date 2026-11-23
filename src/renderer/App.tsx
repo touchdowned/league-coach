@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Brain, CircleAlert, Clapperboard, Compass, Gamepad2, LoaderCircle, LucideIcon, PlayCircle, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Brain, CircleAlert, Clapperboard, Compass, Gamepad2, HeartPulse, LoaderCircle, LucideIcon, PlayCircle, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import type { GameReport } from "../core/types";
 import { momentCount } from "../core/engine";
@@ -10,15 +10,17 @@ import { firstOpenStep, SessionBar, SessionStep } from "./session";
 import { ChampionsView } from "./views/Champions";
 import { CoachView } from "./views/Coach";
 import { MechanicsView } from "./views/Mechanics";
+import { MindView } from "./views/Mind";
 import { PuzzlesView } from "./views/Puzzles";
 import { ReviewView } from "./views/Review";
 import { RoleView } from "./views/Role";
 import { SettingsView } from "./views/Settings";
 
-export type Tab = "coach" | "review" | "puzzles" | "mechanics" | "champions" | "role" | "settings";
+export type Tab = "coach" | "mind" | "review" | "puzzles" | "mechanics" | "champions" | "role" | "settings";
 
 const NAV: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "coach", label: "Coach", icon: Target },
+  { id: "mind", label: "Mind", icon: HeartPulse },
   { id: "review", label: "Review", icon: Clapperboard },
   { id: "puzzles", label: "Puzzles", icon: Brain },
   { id: "mechanics", label: "Mechanics", icon: Gamepad2 },
@@ -44,6 +46,10 @@ function Shell() {
   const [sync, setSync] = useState<TaskProgress | null>(null);
   const [postGame, setPostGame] = useState<PostGameStatus | null>(null);
   const { state: progress } = useProgress();
+  // After a game the mental debrief comes first; a review that gets ready meanwhile waits for it.
+  const [debriefFor, setDebriefFor] = useState<string | null>(null);
+  const debriefActive = useRef(false);
+  debriefActive.current = !!debriefFor;
   // One-button daily training: review, then puzzles, then a lane lab set.
   const [session, setSession] = useState<SessionStep | null>(null);
   function goStep(step: SessionStep) {
@@ -64,12 +70,21 @@ function Shell() {
     const offStatus = coach().onPostGameStatus(setPostGame);
     const offOpen = coach().onPostGameOpen(async (matchId) => {
       setGames(await coach().listGames());
+      if (debriefActive.current) {
+        toast.success("Your review is ready", { description: "Finish the debrief first, or open it now.", action: { label: "Open review", onClick: () => openReview(matchId, true) } });
+        return;
+      }
       openReview(matchId, true);
       toast.success("Your review is ready", { description: "Starting with the moments that cost you the most." });
+    });
+    const offDebrief = coach().onMindDebrief((gameId) => {
+      setDebriefFor(gameId);
+      setTab("mind");
     });
     return () => {
       offStatus();
       offOpen();
+      offDebrief();
     };
   }, []);
 
@@ -146,6 +161,8 @@ function Shell() {
           <LoadingPage />
         ) : tab === "coach" ? (
           <CoachView games={games} onReview={openReview} onPuzzles={() => setTab("puzzles")} onMechanics={() => setTab("mechanics")} onStartSession={startSession} onSync={runSync} syncing={!!sync} canSync={!!settings.apiKey} />
+        ) : tab === "mind" ? (
+          <MindView games={games} debriefFor={debriefFor} onDebriefDone={() => setDebriefFor(null)} onReview={(m) => openReview(m, true)} />
         ) : tab === "review" ? (
           <ReviewView games={games} target={reviewTarget} settings={settings} onTargetConsumed={() => setReviewTarget(null)} onPuzzles={() => setTab("puzzles")} onGameUpdated={(r) => setGames((gs) => gs && gs.map((g) => (g.metrics.matchId === r.metrics.matchId ? r : g)))} />
         ) : tab === "puzzles" ? (

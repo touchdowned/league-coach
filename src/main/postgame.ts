@@ -36,6 +36,8 @@ export interface PostGameDeps {
   status(s: PostGameStatus): void;
   /** Bring the app forward on this game's review. */
   openReview(matchId: string): void;
+  /** Every observed phase (null when the client is closed), for the live overlay and draft card. */
+  onPhase?(phase: string | null): void;
   sleep?(ms: number): Promise<void>;
 }
 
@@ -78,6 +80,7 @@ export class PostGameWatcher {
   async tick(): Promise<number> {
     const lc = await this.deps.league();
     const phase = await lc.gameflowPhase();
+    this.deps.onPhase?.(phase);
     if (phase === null) {
       this.detector.update(null);
       return 10_000;
