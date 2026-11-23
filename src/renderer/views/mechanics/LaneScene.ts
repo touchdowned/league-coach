@@ -207,9 +207,18 @@ export class LaneScene {
     this.syncShots(s);
 
     // Locked camera that eases onto your champion.
+    // Centre on you, leaning toward your lane opponent so it stays in frame (like
+    // nudging an unlocked camera ahead in lane), and back off on narrow views.
     const me = s.units.find((u) => u.id === youId);
-    if (me) this.camTarget.lerp(new THREE.Vector3(me.pos.x, 0, me.pos.y), Math.min(1, dt * 10));
-    const dist = 2350 * this.zoom;
+    const foe = s.units.find((u) => u.kind === "champ" && u.id !== youId && !u.dead);
+    if (me) {
+      const ahead = foe ? Math.max(-500, Math.min(500, (foe.pos.x - me.pos.x) * 0.4)) : 250;
+      this.camTarget.lerp(new THREE.Vector3(me.pos.x + ahead, 0, me.pos.y * 0.6), Math.min(1, dt * 6));
+    }
+    // Keep at least ~1,300 units visible either side of centre whatever the aspect ratio.
+    const halfFov = THREE.MathUtils.degToRad(FOV / 2);
+    const needed = 1300 / (Math.tan(halfFov) * Math.max(this.camera.aspect, 0.5));
+    const dist = Math.max(2350, needed) * this.zoom;
     this.camera.position.set(this.camTarget.x, Math.sin(PITCH) * dist, this.camTarget.z + Math.cos(PITCH) * dist);
     this.camera.lookAt(this.camTarget);
 
