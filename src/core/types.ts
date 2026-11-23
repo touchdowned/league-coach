@@ -167,5 +167,9 @@ export interface GameReport {
   leaks?: import("./engine").Leak[];
   /** True when minion positions were read from the replay itself. */
   wavesRead?: boolean;
+  /** Laning numbers in the same shape as the Master+ benchmarks. */
+  lane?: import("./benchmark").LaneStats;
+  /** Every crash-plus-item-gold moment in laning, taken or passed (replay read only). */
+  recallWindows?: import("./engine").RecallWindow[];
   waves?: import("./waves").WaveTrack;
 }

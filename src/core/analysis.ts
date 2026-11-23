@@ -1,5 +1,6 @@
 import { mergeReplayPositions } from "./vision";
-import { readGame } from "./engine";
+import { readGame, recallWindows } from "./engine";
+import { laneStats } from "./benchmark";
 import { buildTrack } from "./track";
 import { benchmarkFor } from "./benchmarks";
 import type {
@@ -311,7 +312,7 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
     focus: pickFocus(m, all),
     grade: grade(m, all),
     track,
-    leaks: readGame(match, timeline, track, me, opp, waves), wavesRead: !!waves?.samples.length, waves: waves?.samples.length ? waves : undefined,
+    leaks: readGame(match, timeline, track, me, opp, waves), lane: laneStats(match, timeline, me.participantId) ?? undefined, wavesRead: !!waves?.samples.length, recallWindows: waves?.samples.length ? recallWindows(match, timeline, track, me, waves) : undefined, waves: waves?.samples.length ? waves : undefined,
   };
 }
 

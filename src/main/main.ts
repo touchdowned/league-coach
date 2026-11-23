@@ -9,6 +9,7 @@ import type { GameReport } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
 import { scanReplay } from "./scan";
+import { growBench, readBench } from "./bench";
 import type { WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
 import { listVods, matchVod } from "./vod";
@@ -79,7 +80,29 @@ function sync(): Promise<GameReport[]> {
   syncing ??= runSync().finally(() => {
     syncing = null;
   });
+  syncing.then(() => void growBenchInBackground()).catch(() => undefined);
   return syncing;
+}
+
+let growing = false;
+/** After each sync, add a few Master+ games for your roles to the benchmark set. */
+async function growBenchInBackground() {
+  if (growing) return;
+  growing = true;
+  try {
+    const s = await store.readSettings();
+    if (!s.apiKey) return;
+    const counts = new Map<string, number>();
+    for (const r of reports.slice(0, 20)) counts.set(r.metrics.role, (counts.get(r.metrics.role) ?? 0) + 1);
+    const roles = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([r]) => r) as GameReport["metrics"]["role"][];
+    // No cache: high-elo timelines are only needed once, then reduced to a few numbers.
+    const added = await growBench(store, new RiotClient(s.apiKey.trim(), s.region), roles, 8);
+    if (added) send("bench:updated", added);
+  } catch {
+    /* benchmarks are optional; try again next sync */
+  } finally {
+    growing = false;
+  }
 }
 
 async function matchPublished(gameId: string): Promise<boolean> {
@@ -227,6 +250,7 @@ app.whenReady().then(async () => {
   handle("replay:seek", async (sec: number, paused: boolean) => (await league()).seek(sec, paused));
   handle("replay:follow", async (champ: string) => (await league()).follow(champ));
   handle("replay:enableApi", async () => (await league()).enableReplayApi());
+  handle("bench:get", () => readBench(store));
   handle("replay:read", (matchId: string) => readReplay(matchId));
   handle("replay:readCancel", () => {
     scanCancelled = true;

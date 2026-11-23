@@ -104,6 +104,17 @@ export class RiotClient {
     return this.get<string[]>(`https://${this.cluster}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?${q}`);
   }
 
+  /** PUUIDs of Challenger, Grandmaster and Master solo queue players on this platform. */
+  async getApexPuuids(): Promise<string[]> {
+    const platform = REGIONS[this.region].platform;
+    const out: string[] = [];
+    for (const tier of ["challenger", "grandmaster", "master"]) {
+      const r = await this.get<{ entries: { puuid?: string }[] }>(`https://${platform}.api.riotgames.com/lol/league/v4/${tier}leagues/by-queue/RANKED_SOLO_5x5`);
+      for (const e of r.entries ?? []) if (e.puuid) out.push(e.puuid);
+    }
+    return out;
+  }
+
   getMatch(id: string): Promise<MatchDto> {
     return this.cached(`match-${id}`, `https://${this.cluster}.api.riotgames.com/lol/match/v5/matches/${id}`);
   }

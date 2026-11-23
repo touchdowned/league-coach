@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld("coach", {
   replayFollow: call("replay:follow"),
   replayEnableApi: call("replay:enableApi"),
   replayRead: call("replay:read"),
+  benchGet: call("bench:get"),
+  onBenchUpdated: (cb: Cb<unknown>) => on("bench:updated", cb),
   replayReadCancel: call("replay:readCancel"),
   onScanProgress: (cb: Cb<unknown>) => on("scan:progress", cb),
   clipsList: call("clips:list"),

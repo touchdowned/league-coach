@@ -58,6 +58,8 @@ export interface CoachApi {
   /** Plays the replay and reads minions off the minimap, then returns the re-read game. */
   replayRead(matchId: string): Promise<Result<GameReport>>;
   replayReadCancel(): Promise<Result<void>>;
+  benchGet(): Promise<Result<import("../core/benchmark").LaneStats[]>>;
+  onBenchUpdated(cb: (added: number) => void): () => void;
   onScanProgress(cb: (p: TaskProgress & { phase?: string }) => void): () => void;
   clipsList(matchId: string): Promise<Result<Record<string, string>>>;
   clipsRecord(matchId: string, moments: number[]): Promise<Result<Record<string, string>>>;

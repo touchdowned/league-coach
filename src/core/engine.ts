@@ -37,6 +37,31 @@ export interface Leak {
   focus: { x: number; y: number } | null;
   /** For deaths, the matching Mistake's time, so review can link them. */
   deathMs?: number;
+  /** For linking the same mistake across games: why, where, when. */
+  tags?: LeakTags;
+}
+
+export interface LeakTags {
+  cause: string;
+  area: string;
+  phase: "early" | "mid" | "late";
+  /** Deaths with the replay read: did you have the information? */
+  vision?: "seen" | "unseen";
+}
+
+const phaseOf = (t: number): LeakTags["phase"] => (t < LANE_END ? "early" : t < 25 * MIN ? "mid" : "late");
+
+/** A coarse place name, so the same spot in different games groups together. */
+export function areaOf(p: { x: number; y: number }, myTeam: number): string {
+  const d = describeSpot(p, myTeam);
+  if (/dragon/.test(d)) return "the dragon-side river";
+  if (/baron/.test(d)) return "the baron-side river";
+  if (/mid lane/.test(d)) return "mid lane";
+  if (/top lane/.test(d)) return "top lane";
+  if (/bottom lane/.test(d)) return "bottom lane";
+  if (/their/.test(d)) return "their jungle";
+  if (/your/.test(d)) return "your jungle";
+  return "near a base";
 }
 
 const MIN = 60_000;
@@ -61,6 +86,53 @@ interface Ctx {
   events: TimelineEvent[];
   /** Minion positions read from the replay, when available. */
   waves?: WaveTrack;
+  windows?: RecallWindow[];
+}
+
+/** A moment your wave was crashing into their tower and you had item gold: a free recall. */
+export interface RecallWindow {
+  t: number;
+  end: number;
+  gold: number;
+  taken: boolean;
+}
+
+/** Shop visits that were recalls (not respawns), by purchase time. */
+function recallVisits(c: Ctx, deaths: TimelineEvent[]): number[] {
+  const buys = c.events.filter((e) => e.type === "ITEM_PURCHASED" && e.participantId === c.me.participantId && e.timestamp > 90_000);
+  const visits: number[] = [];
+  for (const b of buys) if (!visits.length || b.timestamp - visits[visits.length - 1] > 45_000) visits.push(b.timestamp);
+  return visits.filter((t0) => !deaths.some((d) => t0 > d.timestamp && t0 - d.timestamp < 75_000));
+}
+
+const WINDOW_GOLD = 1100;
+
+function findWindows(c: Ctx, deaths: TimelineEvent[]): RecallWindow[] {
+  const lane = laneOf(c.me.teamPosition);
+  if (!lane || !c.waves) return [];
+  const lefts = recallVisits(c, deaths).map((t0) => t0 - 10_000);
+  const out: RecallWindow[] = [];
+  let cur: RecallWindow | null = null;
+  for (const r of waveSeries(c.waves, 90_000, LANE_END, lane, c.me.teamId)) {
+    const gold = goldInPocket(c, r.t);
+    const ok = r.where === "under their tower" && r.mine >= 3 && gold >= WINDOW_GOLD && !wasDeadAt(c, deaths, r.t);
+    if (!ok) continue;
+    if (cur && r.t - cur.end <= 8000) cur.end = r.t;
+    else {
+      if (cur) out.push(cur);
+      cur = { t: r.t, end: r.t, gold: Math.round(gold), taken: false };
+    }
+  }
+  if (cur) out.push(cur);
+  for (const w of out) w.taken = lefts.some((l) => l >= w.t - 5000 && l <= w.end + 25_000);
+  return out;
+}
+
+/** Every recall window in the laning phase, taken or passed. Needs the replay read. */
+export function recallWindows(match: MatchDto, timeline: TimelineDto, track: Track, me: Participant, waves?: WaveTrack): RecallWindow[] {
+  const events = timeline.info.frames.flatMap((f) => f.events ?? []).sort((a, b) => a.timestamp - b.timestamp);
+  const c: Ctx = { match, timeline, track, me, opp: null, byId: new Map(match.info.participants.map((p) => [p.participantId, p])), events, waves };
+  return findWindows(c, events.filter((e) => e.type === "CHAMPION_KILL" && e.victimId === me.participantId));
 }
 
 /** Your lane's wave at time t, from the replay, if it was read and you were laning. */
@@ -73,6 +145,7 @@ export function readGame(match: MatchDto, timeline: TimelineDto, track: Track, m
   const events = timeline.info.frames.flatMap((f) => f.events ?? []).sort((a, b) => a.timestamp - b.timestamp);
   const c: Ctx = { match, timeline, track, me, opp, byId: new Map(match.info.participants.map((p) => [p.participantId, p])), events, waves };
   const deaths = events.filter((e) => e.type === "CHAMPION_KILL" && e.victimId === me.participantId);
+  c.windows = findWindows(c, deaths);
   const leaks = [...recallLeaks(c, deaths), ...farmLeaks(c, deaths), ...objectiveLeaks(c, deaths), ...deaths.map((d) => deathLeak(c, d))];
   return leaks.filter((l) => l.cost >= 100).sort((a, b) => b.cost - a.cost);
 }
@@ -160,12 +233,8 @@ function lostWhile(c: Ctx, from: number, to: number) {
 // ---------- recalls ----------
 
 function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
-  const buys = c.events.filter((e) => e.type === "ITEM_PURCHASED" && e.participantId === c.me.participantId && e.timestamp > 90_000);
-  const visits: number[] = [];
-  for (const b of buys) if (!visits.length || b.timestamp - visits[visits.length - 1] > 45_000) visits.push(b.timestamp);
   const out: Leak[] = [];
-  for (const t0 of visits) {
-    if (deaths.some((d) => t0 > d.timestamp && t0 - d.timestamp < 75_000)) continue; // a shop after dying, not a recall
+  for (const t0 of recallVisits(c, deaths)) {
     const from = positionAt(c.track, c.me.participantId, t0 - 20_000);
     if (!from) continue;
     const walk = Math.min(60, dist(from, FOUNTAIN[c.me.teamId]) / MOVE_SPEED);
@@ -230,8 +299,11 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
         for (let i = tips.length - 1; i >= 0; i--) if (/^(Shove|Plates only fall)/.test(tips[i])) tips.splice(i, 1);
       } else if (w.theirs >= 3 && w.theirs >= w.mine + 2) {
         evidence.push(`Wave read from the replay: when you started recalling, ${w.theirs} of ${oppName}'s minions were pushing ${w.where} against ${w.mine} of yours.`);
+        const passed = (c.windows ?? []).filter((x) => !x.taken && x.end < leftAt - 5000 && x.t > leftAt - 180_000);
         const before = waveSeries(c.waves, leftAt - 100_000, leftAt - 5000, laneOf(c.me.teamPosition)!, c.me.teamId).filter((x) => x.where === "under their tower" && x.mine >= 2);
-        const window = before[before.length - 1];
+        const window = passed[passed.length - 1] ?? before[before.length - 1];
+        if (passed.length)
+          evidence.push(`You passed ${passed.length} recall window${passed.length > 1 ? "s" : ""} before this (wave crashing into their tower, item gold in your pocket): ${passed.map((x) => `${fmtTime(x.t)} with ${g(x.gold)}`).join(", ")}.`);
         for (let i = tips.length - 1; i >= 0; i--) if (/^(Shove|Plates only fall)/.test(tips[i])) tips.splice(i, 1);
         tips.unshift(
           window
@@ -264,9 +336,20 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
       evidence,
       nextTime: tips.join(" ") || `Time recalls to a wave crash: push, back as the wave hits their tower, and arrive with the next wave.`,
       focus: from,
+      tags: { cause: recallCause(parts), area: areaOf(from, c.me.teamId), phase: phaseOf(leftAt) },
     });
   }
   return out;
+}
+
+function recallCause(parts: { label: string; gold: number }[]): string {
+  const top = [...parts].sort((a, b) => b.gold - a.gold)[0]?.label ?? "";
+  if (/minions died/.test(top)) return "recalled-into-their-wave";
+  if (/CS lost/.test(top)) return "recall-cost-farm";
+  if (/plate/.test(top)) return "plates-fell-while-recalling";
+  if (/unspent/.test(top)) return "sat-on-gold";
+  if (/enemy took/.test(top)) return "objective-lost-while-recalling";
+  return "recall-other";
 }
 
 // ---------- farm gaps and roams ----------
@@ -320,6 +403,7 @@ function farmLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
         title: `Roam at ${fmtTime(a + MIN)} got nothing and cost ${gap} CS`,
         doing: `You left lane: at ${fmtTime(a + MIN)} you were ${spot(c, mid)} while ${c.opp.championName} stayed ${spot(c, oppMid!)}.`,
         evidence: [`${c.opp.championName} farmed ${Math.round(theirs)} CS from ${fmtTime(a)} to ${fmtTime(b)}; you farmed ${Math.round(mine)}.`, "No kill, assist or objective for your team in that window."],
+        tags: { cause: "roam-got-nothing", area: areaOf(mid, c.me.teamId), phase: phaseOf(a) },
         nextTime: `Only roam after you shove the wave into their tower, and turn back if the play isn't there within about 25 seconds. If ${c.opp.championName} doesn't follow, the roam has to make more than the ${gap} CS you give up.`,
         focus: mid,
       });
@@ -337,6 +421,7 @@ function farmLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
             ? `A gap this size usually means the wave was sitting under your tower and you were missing tower last-hits, or you were zoned off it. Practice tower last-hitting (melee: 2 tower shots + 1 auto; caster: 1 tower shot + 1 auto) and don't trade when it costs you a cannon.`
             : `Watch this window and count the minions you missed. Most lost CS in Silver is casters dying while you trade.`),
         focus: mid ?? null,
+        tags: { cause: underTheirs >= 0.5 ? "frozen-out" : underMine >= 0.5 ? "missed-tower-lasthits" : "lost-cs-in-lane", area: mid ? areaOf(mid, c.me.teamId) : "lane", phase: phaseOf(a) },
       });
     }
   }
@@ -371,6 +456,7 @@ function objectiveLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
       evidence: [`The enemy took ${nm} at ${fmtTime(e.timestamp)}.`, `You were ${spot(c, me)} when it died.`],
       nextTime: `${cap(nm)} timers are known a minute ahead. Either start walking at ${fmtTime(e.timestamp - 60_000)} so you arrive with your team, or commit to the other side and take a tower while they're on it. Doing neither gives it away for free.`,
       focus: before,
+      tags: { cause: `${nm}-given-free`, area: areaOf(before, c.me.teamId), phase: phaseOf(e.timestamp) },
     });
   }
   return out;
@@ -448,32 +534,41 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
     .map((p) => ({ p, q: positionAt(c.track, p.id, t - 5000) }))
     .filter((x) => x.q && !x.q.dead)
     .sort((a, b) => dist(a.q!, pos) - dist(b.q!, pos))[0];
+  let cause = "other";
   if (inLane && w!.theirs >= w!.mine + 3) {
+    cause = "fought-into-bigger-wave";
     nextTime = `You fought ${c.opp!.championName} with ${w!.mine} of your minions against ${w!.theirs} of theirs. Early on, a minion wave that size does as much damage as a champion. Trade when the wave is yours, or wait until theirs is under your tower and your tower is the extra hit.`;
   } else if (enemies.length >= 3) {
+    cause = "collapsed-on";
     const farSide = pos.x - pos.y > 0 ? "top side" : "bottom side";
     const open = farSide === "bottom side" && dragonUp ? "dragon was up" : farSide === "top side" && baronUp ? "baron was up" : "their towers on that side were open";
     nextTime = `${enemies.length} of them came for you, which left ${enemiesElsewhere.length} on the rest of the map, and on the ${farSide} ${open}. That's the trade: when you see 3+ missing while you're ${sideLane ? "side-laning" : "out"} like this, walk back toward ${nearestAlly ? `${nearestAlly.p.champion} (${spot(c, nearestAlly.q!).replace(/^in /, "")})` : "your tower"} and ping your team to take it. Make them pay for sending ${enemies.length} to you instead of dying to it.`;
   } else if (jg && t < LANE_END) {
+    cause = "ganked";
     const seen = positionAt(c.track, jg.participantId, t - 45_000);
     const secs = seen ? Math.round(dist(seen, pos) / 400) : null;
     nextTime = seen
       ? `${jg.championName} was ${spot(c, seen)} at ${fmtTime(t - 45_000)}, about ${secs}s from where you died. Once you know where they are, start a ${secs}-second clock: when it runs out and your wave is past the middle, step back toward your tower until they show up again.`
       : `${jg.championName} came to your lane. Track where they were last seen and when your wave is past the middle, assume they're coming.`;
   } else if (myFight) {
+    cause = "chased-after-kill";
     nextTime = `The kill at ${fmtTime(myFight.timestamp)} was already the win. Take it and walk out: you gave back ${g(bounty)} chasing further ${spot(c, pos)}.`;
   } else if (pocket >= 1300) {
+    cause = "died-holding-gold";
     nextTime = `You had ${g(pocket)} on you. Back before the next fight or wave you can't afford to lose; dying with it means fighting an item down and losing the gold's tempo.`;
   } else if (enemies.length === 1 && c.opp && enemies[0].participantId === c.opp.participantId) {
+    cause = "lost-1v1";
     const gd = (lerp(c, meId, t - 1000, (f) => f.totalGold) ?? 0) - (lerp(c, c.opp.participantId, t - 1000, (f) => f.totalGold) ?? 0);
     nextTime = gd < -300 ? `You were ${g(-gd)} behind ${c.opp.championName} and lost a 1v1. Behind, don't take even trades: farm under tower and look for ${c.opp.championName}'s cooldowns before you step up.` : `You were ${gd >= 0 ? `${g(gd)} ahead` : "even"} and still lost the 1v1, so this one is mechanics or cooldowns, not position. Watch it and check what they used before you committed.`;
   } else {
+    cause = alliesNear.length === 0 ? "caught-alone" : "lost-fight";
     nextTime = alliesNear.length === 0
       ? `None of your team was within reach. Before walking ${spot(c, pos)}, count the enemies you can see on the map; with ${enemiesElsewhere.length} unaccounted for, this spot needed a ward or a teammate.`
       : `You had ${alliesNear.length} teammate${alliesNear.length > 1 ? "s" : ""} nearby and still lost the fight. Look at who engaged first and whether you stepped in before your team was in range.`;
   }
 
   // ---- What you could see vs what was true (replay read with your fog) ----
+  let vision: LeakTags["vision"];
   if (hasVision(c.waves, c.me.teamId)) {
     const vis = c.waves;
     const shown = visibleAt(vis, t - 5000);
@@ -490,6 +585,7 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
             ? `walk toward ${nearestAlly.p.champion} (${spot(c, nearestAlly.q!).replace(/^in /, "")})`
             : `walk back toward your tower`;
       let tip: string;
+      vision = ls && t - ls.t <= 45_000 ? "seen" : "unseen";
       if (ls && t - ls.t <= 45_000) {
         const secs = Math.round((t - ls.t) / 1000);
         const walk = Math.round(dist(ls, pos) / 380);
@@ -516,6 +612,7 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
     nextTime,
     focus: pos,
     deathMs: t,
+    tags: { cause, area: areaOf(pos, c.me.teamId), phase: phaseOf(t), vision },
   };
 }
 

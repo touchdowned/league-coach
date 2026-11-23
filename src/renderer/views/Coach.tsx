@@ -1,12 +1,15 @@
-import { Brain, Clapperboard, Crosshair, Footprints, Gamepad2, ListChecks, Play, TrendingUp, Zap } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Brain, Clapperboard, Repeat, Trophy, Crosshair, Footprints, Gamepad2, ListChecks, Play, TrendingUp, Zap } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { ROLE_LABEL } from "../../core/benchmarks";
 import { coachPlan, CoachPlan } from "../../core/coach";
 import { LEAK_LABEL, leverTotals, momentCount } from "../../core/engine";
+import { findHabits } from "../../core/habits";
+import { summarize, type LaneStats } from "../../core/benchmark";
 import { buildProfile, SKILLS, trend } from "../../core/profile";
 import { DAILY, dayKey } from "../../core/progress";
 import type { GameReport, Position } from "../../core/types";
 import { ChampIcon, LineChart, Meter, Radar, ResultDots } from "../charts";
+import { coach } from "../api";
 import { useProgress } from "../progress";
 import { Button, Empty, Ring } from "../ui";
 
@@ -95,7 +98,11 @@ export function CoachView({
 
       <NextStep plan={plan} games={filtered} onReview={onReview} onPuzzles={onPuzzles} onMechanics={onMechanics} />
 
+      <Habits games={filtered} onReview={onReview} />
+
       <Levers games={filtered} onReview={onReview} />
+
+      <VsMasters games={filtered} />
 
       <section className="grid-3">
         <div className="tile action" onClick={() => nextReview && onReview(nextReview.metrics.matchId, true)} data-disabled={!nextReview || undefined}>
@@ -276,6 +283,105 @@ function NextStep({ plan, games, onReview, onPuzzles, onMechanics }: { plan: Coa
         </small>
         <p className="why">{c.why}</p>
       </aside>
+    </section>
+  );
+}
+
+// The same mistake, linked across games.
+function Habits({ games, onReview }: { games: GameReport[]; onReview: (id: string, autoplay?: boolean, kind?: string) => void }) {
+  const habits = useMemo(() => findHabits(games).slice(0, 3), [games]);
+  if (!habits.length) return null;
+  return (
+    <section className="card habits">
+      <div className="card-head">
+        <h3 className="icon-eyebrow"><Repeat size={15} /> Habits</h3>
+        <small className="muted">The same mistake, in more than one game. One fix covers all of them.</small>
+      </div>
+      <ol>
+        {habits.map((h) => (
+          <li key={h.key}>
+            <div>
+              <strong>{h.title}</strong>
+              <small>{h.detail}</small>
+            </div>
+            <button className="lever-worst" onClick={() => onReview(h.examples[0].matchId, true, h.kind)}>
+              <Play size={12} /> Watch the worst one
+            </button>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+const fmtT = (ms: number | null) => (ms == null ? "–" : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}`);
+const med = (xs: number[]) => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length % 2 ? s[s.length >> 1] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+};
+
+// Your laning numbers next to Master+ players in your role (and champion, when there are enough games).
+function VsMasters({ games }: { games: GameReport[] }) {
+  const [bench, setBench] = useState<LaneStats[] | null>(null);
+  useEffect(() => {
+    const load = () => coach().benchGet?.().then((r) => r.ok && setBench(r.value)).catch(() => undefined);
+    load();
+    return coach().onBenchUpdated?.(() => load());
+  }, []);
+  const mine = games.map((g) => g.lane).filter((l): l is LaneStats => !!l).slice(0, 15);
+  if (!mine.length) return null;
+  const roleCount = new Map<string, number>();
+  for (const l of mine) roleCount.set(l.role, (roleCount.get(l.role) ?? 0) + 1);
+  const role = [...roleCount.entries()].sort((a, b) => b[1] - a[1])[0][0] as LaneStats["role"];
+  const inRole = mine.filter((l) => l.role === role);
+  const champCount = new Map<string, number>();
+  for (const l of inRole) champCount.set(l.champion, (champCount.get(l.champion) ?? 0) + 1);
+  const champ = [...champCount.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  const b = bench ? summarize(bench, role, champ) : null;
+  const inRoleN = bench?.filter((x) => x.role === role).length ?? 0;
+  // Compare like with like: your games on that champion when the benchmark is champion-specific.
+  const onChamp = b?.champion ? inRole.filter((l) => l.champion === b.champion) : [];
+  const yours = onChamp.length >= 3 ? onChamp : inRole;
+  const you = (f: (l: LaneStats) => number | null | undefined) => med(yours.map(f).filter((x): x is number => x != null));
+  const rows: { label: string; you: number | null; them: number | null; fmt: (n: number | null) => string; better: "higher" | "lower" | "earlier" | "none" }[] = b
+    ? [
+        { label: "CS at 10", you: you((l) => l.cs10), them: b.med.cs10, fmt: (n) => (n == null ? "–" : String(Math.round(n))), better: "higher" },
+        { label: "CS at 15", you: you((l) => l.cs15), them: b.med.cs15, fmt: (n) => (n == null ? "–" : String(Math.round(n))), better: "higher" },
+        { label: "First recall", you: you((l) => l.firstBack?.t), them: b.med.firstBackT, fmt: fmtT, better: "earlier" },
+        { label: "Gold on first recall", you: you((l) => l.firstBack?.gold), them: b.med.firstBackGold, fmt: (n) => (n == null ? "–" : `${Math.round(n).toLocaleString("en-US")}g`), better: "none" },
+        { label: "Recalls before 14:00", you: you((l) => l.backs14), them: b.med.backs14, fmt: (n) => (n == null ? "–" : n.toFixed(1).replace(/\.0$/, "")), better: "none" },
+        { label: "Deaths before 14:00", you: you((l) => l.deaths14), them: b.med.deaths14, fmt: (n) => (n == null ? "–" : n.toFixed(1).replace(/\.0$/, "")), better: "lower" },
+        { label: "Plates before 14:00", you: you((l) => l.plates14), them: b.med.plates14, fmt: (n) => (n == null ? "–" : n.toFixed(1).replace(/\.0$/, "")), better: "higher" },
+      ]
+    : [];
+  return (
+    <section className="card vs-masters">
+      <div className="card-head">
+        <h3 className="icon-eyebrow"><Trophy size={15} /> You vs Master+ {b?.champion ?? ROLE_LABEL[role]}</h3>
+        <small className="muted">
+          {b ? `Medians: your last ${yours.length} ${yours === onChamp ? b.champion : ROLE_LABEL[role]} games vs ${b.n} Master+ games${b.champion ? ` on ${b.champion}` : ""}.` : `Collecting Master+ games: ${inRoleN} so far. A few more are added after each sync.`}
+        </small>
+      </div>
+      {b && (
+        <table className="vs-table">
+          <thead>
+            <tr><th /><th>You</th><th>Master+</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const good = r.you == null || r.them == null || r.better === "none" ? null : r.better === "lower" || r.better === "earlier" ? r.you <= r.them : r.you >= r.them;
+              return (
+                <tr key={r.label}>
+                  <td>{r.label}</td>
+                  <td className={good === null ? "" : good ? "pos" : "neg"}>{r.fmt(r.you)}</td>
+                  <td>{r.fmt(r.them)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
     </section>
   );
 }

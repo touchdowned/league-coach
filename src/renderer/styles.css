@@ -741,3 +741,18 @@ label.inline-action:has(input:disabled) { opacity: 0.5; cursor: default; }
 .rift-view { position: absolute; top: 44px; left: 10px; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 7px; border: 1px solid var(--hair-2); background: rgba(5, 6, 8, 0.78); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; backdrop-filter: blur(6px); }
 .rift-view:hover { border-color: var(--accent); }
 .rift-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bench-line { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
+.bench-line svg { flex: none; margin-top: 3px; color: var(--accent); }
+.habits, .vs-masters { margin-top: 16px; }
+.habits ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.habits li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--hair); }
+.habits li > div { display: grid; gap: 4px; min-width: 0; }
+.habits li small { color: var(--text-2); font-size: 12.5px; line-height: 1.45; }
+.habits .lever-worst { flex: none; }
+.vs-table { width: 100%; max-width: 620px; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.vs-table th { text-align: right; font-weight: 600; color: var(--muted); font-size: 12px; padding: 0 0 8px; }
+.vs-table td { padding: 7px 0; border-top: 1px solid var(--hair); text-align: right; }
+.vs-table td:first-child { text-align: left; color: var(--text-2); }
+.vs-table td.pos { color: var(--good); }
+.vs-table td.neg { color: var(--bad); }
+@media (max-width: 720px) { .habits li { flex-direction: column; align-items: flex-start; } }

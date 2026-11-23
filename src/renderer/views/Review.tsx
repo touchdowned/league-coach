@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, Eye, EyeOff, ChevronRight, Clapperboard, MonitorPlay, Pause, Play, Video, Waves } from "lucide-react";
+import { Check, ChevronLeft, Eye, EyeOff, ChevronRight, Clapperboard, MonitorPlay, Pause, Play, Trophy, Video, Waves } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { fmtTime } from "../../core/analysis";
@@ -9,6 +9,7 @@ import { coach, ReplayState, Settings, TaskProgress, Vod } from "../api";
 import { ChampIcon, DeathMap, LineChart, MapBackdrop } from "../charts";
 import { describeSpot, dist, positionAt } from "../../core/track";
 import { minionsAt } from "../../core/waves";
+import { atMinute, summarize, type LaneStats } from "../../core/benchmark";
 import { hasVision, lastSeen, visibleAt } from "../../core/vision";
 import { Rift, useGameClock } from "../rift";
 import { useProgress } from "../progress";
@@ -181,10 +182,16 @@ function ReviewPlayer({
   const [busy, setBusy] = useState<string | null>(null);
   const [recording, setRecording] = useState<TaskProgress | null>(null);
   const [reading, setReading] = useState<TaskProgress | null>(null);
+  const [bench, setBench] = useState<LaneStats[]>([]);
+  useEffect(() => {
+    coach().benchGet?.().then((res) => res.ok && setBench(res.value)).catch(() => undefined);
+  }, []);
   const [vodOffset, setVodOffset] = useState(() => Number(safeGet(`lc.vodOffset.${m.matchId}`) ?? 0));
   const videoRef = useRef<HTMLVideoElement>(null);
   const per = Math.max(6, settings.autoAdvanceSec || 14);
   const moment = moments[idx];
+  const benchSummary = useMemo(() => summarize(bench, m.role, m.champion), [bench, m.role, m.champion]);
+  const benchLine = benchSummary && r.lane && moment?.leak ? atMinute(benchSummary, r.lane, moment.leak.t) : null;
 
   // Load media sources.
   const refreshReplay = useCallback(async () => {
@@ -448,6 +455,9 @@ function ReviewPlayer({
                   <p className="eyebrow">Next time</p>
                   <p>{moment.leak.nextTime}</p>
                 </div>
+                {benchLine && moment.leak.t < 16 * 60_000 && moment.leak.kind !== "objective" && (
+                  <p className="bench-line"><Trophy size={13} /> {benchLine}</p>
+                )}
               </>
             ) : moment.main ? (
               <>
@@ -814,7 +824,9 @@ function GameStats({ r }: { r: GameReport }) {
     ["Early deaths", String(m.deathsPre14), b.deathsPre14.toFixed(1), m.deathsPre14 <= b.deathsPre14],
     ["Kill part.", `${Math.round(m.killParticipation * 100)}%`, `${Math.round(b.killParticipation * 100)}%`, m.killParticipation >= b.killParticipation],
     ["Vision/min", m.visionPerMin.toFixed(2), b.visionPerMin.toFixed(2), m.visionPerMin >= b.visionPerMin],
-    ["Dmg share", `${Math.round(m.damageShare * 100)}%`, "20%", m.damageShare >= 0.2],
+    r.recallWindows?.length
+      ? ["Recall windows", `${r.recallWindows.filter((w) => w.taken).length} of ${r.recallWindows.length}`, "half+", r.recallWindows.filter((w) => w.taken).length * 2 >= r.recallWindows.length]
+      : ["Dmg share", `${Math.round(m.damageShare * 100)}%`, "20%", m.damageShare >= 0.2],
   ];
   return (
     <section className="stats-section">
