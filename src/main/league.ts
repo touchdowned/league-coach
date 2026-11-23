@@ -223,6 +223,12 @@ export class LeagueClient {
     return !!r && r.status < 400;
   }
 
+  /** /liveclientdata/allgamedata: answers during replays too, at the replay's current time. */
+  async liveData(): Promise<unknown | null> {
+    const r = await request<unknown>("https://127.0.0.1:2999/liveclientdata/allgamedata", { timeoutMs: 1500 }).catch(() => null);
+    return r?.status === 200 ? r.data : null;
+  }
+
   /** The game id of whatever the client is running right now (a replay or a live game). */
   async currentGameId(): Promise<string | null> {
     const s = await this.lcuGet<{ gameData?: { gameId?: number } }>("/lol-gameflow/v1/session");

@@ -2,6 +2,9 @@ import { desktopCapturer, nativeImage, net, screen } from "electron";
 import { bgraToRgba, crop, detectChampions, detectDots, findMinimap, Frame, iconGrid, medianFrame, PortraitRef, Rect } from "../core/minimap";
 import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
 import { gameIdOf, LeagueClient } from "./league";
+import { parseLive, type LivePoll } from "../core/telemetry";
+import { promises as fsp } from "fs";
+import pathMod from "path";
 
 /**
  * Reads minion positions from a replay: plays your own replay through the official
@@ -92,6 +95,19 @@ export async function openReplay(lc: LeagueClient, matchId: string, onLabel: (la
   return pb;
 }
 
+/** Same-state check, so only polls around a change are kept. */
+const sameLive = (a: LivePoll, b: LivePoll) => JSON.stringify(a.players) === JSON.stringify(b.players);
+
+/** Writes a minimap crop (RGBA) as PNG, with what was read from it, for checking by eye. */
+async function dumpFrame(dir: string, name: string, f: Frame, info: unknown) {
+  const bgra = new Uint8ClampedArray(f.data);
+  bgraToRgba(bgra); // the swap is its own inverse
+  const img = nativeImage.createFromBitmap(Buffer.from(bgra.buffer), { width: f.w, height: f.h });
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(pathMod.join(dir, `${name}.png`), img.toPNG());
+  await fsp.writeFile(pathMod.join(dir, `${name}.json`), JSON.stringify(info));
+}
+
 export async function scanReplay(
   lc: LeagueClient,
   matchId: string,
@@ -100,6 +116,7 @@ export async function scanReplay(
   players: ScanPlayer[],
   me: ScanPlayer,
   untilSec = 16 * 60,
+  debugDir?: string,
 ): Promise<WaveTrack> {
   if ((await lc.gameflowPhase()) === "InProgress") throw new Error("You're in a game. Replay reading only runs after the game.");
 
@@ -142,6 +159,25 @@ export async function scanReplay(
     // team's fog (what you could see on your minimap).
     const samples: WaveSample[] = [];
     const champs: ChampSample[] = [];
+    const captureMs: number[] = [];
+    // Live Client Data, polled in parallel. Keep a poll only around a change.
+    const live: LivePoll[] = [];
+    let prevPoll: LivePoll | null = null;
+    let polling = true;
+    const pollLoop = (async () => {
+      while (polling && !isCancelled()) {
+        const p = parseLive(await lc.liveData());
+        if (p) {
+          const last = live[live.length - 1];
+          if (!last || !sameLive(last, p)) {
+            if (prevPoll && prevPoll !== last && prevPoll.t > (last?.t ?? -1)) live.push(prevPoll);
+            live.push(p);
+          }
+          prevPoll = p;
+        }
+        await sleep(250);
+      }
+    })();
     let n = 0;
     let speed = 4;
     await lc.seek(65, false, speed);
@@ -159,11 +195,16 @@ export async function scanReplay(
       const fog: ChampSample["fog"] = n++ % 2 === 0 ? "off" : "team";
       await lc.setRender({ fogOfWar: fog === "team" });
       await sleep(60);
+      const c0 = Date.now();
       const frame = crop(await captureScreen(), rect);
+      captureMs.push(Date.now() - c0);
       const after = await lc.playback();
       const t = Math.round(((before.time + (after?.time ?? before.time)) / 2) * 1000);
-      if (fog === "off") samples.push(sampleFromDots(t, detectDots(frame, bg)));
-      if (refs.length) champs.push({ t, fog, at: detectChampions(frame, refs).map(({ id, x, y }) => ({ id, x, y })) });
+      const dots = fog === "off" ? detectDots(frame, bg) : [];
+      if (fog === "off") samples.push(sampleFromDots(t, dots));
+      const found = refs.length ? detectChampions(frame, refs).map(({ id, x, y }) => ({ id, x, y })) : [];
+      if (refs.length) champs.push({ t, fog, at: found });
+      if (debugDir && n % 24 < 2) await dumpFrame(debugDir, `${String(t).padStart(7, "0")}-${fog}`, frame, { t, fog, dots, champs: found });
       const now = Date.now();
       gaps.push(now - last);
       last = now;
@@ -179,13 +220,27 @@ export async function scanReplay(
       }
       onProgress({ phase: "reading", label: `Reading minions at ${fmt(before.time)} of ${fmt(end)} (${speed}x)`, done: Math.round(before.time), total: Math.round(end) });
     }
+    polling = false;
+    await pollLoop;
+    if (prevPoll && live[live.length - 1] !== prevPoll) live.push(prevPoll);
     if (isCancelled()) throw new Error("Stopped.");
     onProgress({ phase: "done", label: "Done", done: 1, total: 1 });
+    if (debugDir) await dumpFrame(debugDir, "background", bg, { rect });
     // Whose fog did "team" show? Allies are always on your own minimap.
     const team = champs.filter((c) => c.fog === "team");
     const avg = (tid: number) => team.reduce((s, c) => s + c.at.filter((a) => players.find((p) => p.id === a.id)?.teamId === tid).length, 0) / Math.max(1, team.length);
     const viewTeam = team.length ? (avg(100) >= avg(200) ? 100 : 200) : undefined;
-    return { version: 2, source: "replay-minimap", samples, champs, viewTeam };
+    const sorted = [...captureMs].sort((a, b) => a - b);
+    const scanInfo = {
+      captureMsMedian: sorted[Math.floor(sorted.length / 2)] ?? 0,
+      captureMsP90: sorted[Math.floor(sorted.length * 0.9)] ?? 0,
+      samples: samples.length,
+      polls: live.length,
+      minimap: rect,
+      screen: { w: 0, h: 0 },
+      until: end * 1000,
+    };
+    return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, scanInfo };
   } finally {
     await lc.setPaused(true);
     if (original) await lc.setRender(original);

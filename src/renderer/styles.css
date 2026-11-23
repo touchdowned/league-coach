@@ -902,3 +902,25 @@ label.inline-action:has(input:disabled) { opacity: 0.5; cursor: default; }
 .wt-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin-top: auto; }
 .main:has(.wt) { overflow: hidden; }
 .review-main:has(.wt) { overflow: hidden; }
+
+/* ---- Overlay mode: drawn over the League replay window ---- */
+html.overlay-doc, html.overlay-doc body, html.overlay-doc #root { background: transparent !important; overflow: hidden; }
+.wt.overlay { position: fixed; inset: 0; display: block; background: transparent; }
+.wt.overlay .wt-main { position: absolute; inset: 0; padding: 0; display: block; }
+.wt.overlay .wt-stage { position: absolute; inset: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; }
+.wt.overlay .wt-stage::before { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 45%, rgba(4, 5, 8, 0.25), rgba(4, 5, 8, 0.62)); opacity: 0; transition: opacity 420ms var(--ease-out); pointer-events: none; }
+.wt.overlay .wt-stage.dim::before { opacity: 1; }
+.wt.overlay .wt-top { top: 12px; left: 12px; right: auto; }
+.wt.overlay .wt-tac { top: 12px; right: 12px; width: 236px; }
+.wt.overlay .wt-caption { bottom: 108px; }
+.wt.overlay .wt-card-layer { bottom: 92px; padding: 0 0 0 16px; }
+.wt.overlay .wt-card { width: 520px; }
+.wt-card-hit { pointer-events: auto; }
+.wt.overlay .wt-scrub-wrap { position: absolute; left: 50%; bottom: 58px; width: 560px; transform: translateX(-50%); padding: 6px 14px 14px; border-radius: 12px 12px 0 0; background: rgba(8, 9, 13, 0.78); backdrop-filter: blur(10px); }
+.wt.overlay .wt-transport { position: absolute; left: 50%; bottom: 14px; width: 560px; transform: translateX(-50%); padding: 6px 12px; border-radius: 0 0 12px 12px; background: rgba(8, 9, 13, 0.78); backdrop-filter: blur(10px); }
+.wt.overlay .wt-transport .hint { display: none; }
+.wt.overlay .wt-scrub-label { color: var(--text-2); }
+.wt.overlay .wt-rail { position: absolute; left: 12px; top: 56px; width: 270px; max-height: 64px; overflow: hidden; border: 0; border-radius: 12px; background: rgba(8, 9, 13, 0.8); backdrop-filter: blur(10px); padding: 12px; transition: max-height 360ms var(--ease-out); }
+.wt.overlay .wt-rail:hover { max-height: 70vh; overflow-y: auto; }
+.wt.overlay .wt-rail .wt-note { display: none; }
+.wt.overlay .wt-intro { background: radial-gradient(circle at 50% 50%, rgba(5, 6, 8, 0.4), rgba(5, 6, 8, 0.7)); }

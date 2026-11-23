@@ -44,6 +44,11 @@ contextBridge.exposeInMainWorld("coach", {
   stageGlide: call("stage:glide"),
   stageFocus: call("stage:focus"),
   onStageProgress: (cb: Cb<string>) => on("stage:progress", cb),
+  overlayOpen: call("overlay:open"),
+  overlayClose: call("overlay:close"),
+  overlayInteractive: call("overlay:interactive"),
+  overlayFocus: call("overlay:focus"),
+  onOverlayClosed: (cb: Cb<unknown>) => on("overlay:closed", cb),
 
   vodFind: call("vod:find"),
   vodPick: call("vod:pick"),

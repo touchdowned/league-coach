@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, Notification, protocol } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, Notification, protocol, screen } from "electron";
 import { promises as fs } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
@@ -9,6 +9,7 @@ import type { GameReport } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
 import { openReplay, scanReplay } from "./scan";
+import { checkAllies, checkCs, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
 import { growBench, readBench } from "./bench";
 import type { WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
@@ -32,7 +33,8 @@ const startHidden = process.argv.includes("--hidden");
 
 // One copy only, so a second launch (or launch at sign-in plus a manual open) doesn't
 // run two game watchers.
-if (!app.requestSingleInstanceLock()) app.quit();
+// (A verification run is a separate tool and may run next to the app.)
+if (!process.argv.includes("--verify-scan") && !app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", () => focusWindow());
 
 // Local media (recorded clips, linked VODs) is served through lcmedia://file/<encoded path>
@@ -64,6 +66,55 @@ function createWindow() {
 }
 
 const send = (channel: string, payload: unknown) => win?.webContents.send(channel, payload);
+
+// ---- Coaching overlay: a transparent, click-through window over the League replay ----
+let overlay: BrowserWindow | null = null;
+let overlayMatch: string | null = null;
+
+function openOverlay(matchId: string) {
+  overlay?.destroy();
+  overlayMatch = matchId;
+  // League runs borderless on the primary display; cover it edge to edge.
+  const d = screen.getPrimaryDisplay();
+  overlay = new BrowserWindow({
+    ...d.bounds,
+    transparent: true,
+    frame: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    title: "League Coach overlay",
+    show: false,
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
+  });
+  overlay.setAlwaysOnTop(true, "screen-saver");
+  overlay.setIgnoreMouseEvents(true, { forward: true });
+  overlay.setVisibleOnAllWorkspaces(true);
+  const dev = process.env.VITE_DEV_SERVER_URL;
+  const hash = `overlay/${encodeURIComponent(matchId)}`;
+  if (dev) overlay.loadURL(`${dev}#${hash}`);
+  else overlay.loadFile(path.join(__dirname, "../../dist-renderer/index.html"), { hash });
+  overlay.once("ready-to-show", () => overlay?.showInactive());
+  overlay.on("closed", () => {
+    overlay = null;
+  });
+  win?.minimize();
+}
+
+function closeOverlay(finished: boolean) {
+  const matchId = overlayMatch;
+  overlay?.destroy();
+  overlay = null;
+  overlayMatch = null;
+  if (matchId) send("overlay:closed", { matchId, finished });
+  focusWindow();
+}
 
 function focusWindow() {
   if (!win) return;
@@ -203,6 +254,64 @@ async function readReplay(matchId: string): Promise<GameReport> {
   return report;
 }
 
+/**
+ * Module 1 verification run: `League Coach --verify-scan <matchId> [--until <sec>] [--out <dir>]`.
+ * Opens the replay, does a full read with frame dumps, checks every stream against
+ * Riot's exact events, writes verify-<matchId>.json, and quits.
+ */
+async function verifyScan(matchId: string, untilSec: number, outDir: string) {
+  const s = await store.readSettings();
+  const { gameName, tagLine } = parseRiotId(s.riotId);
+  const riot = new RiotClient(s.apiKey.trim(), s.region, store.cache());
+  const puuid = await riot.getPuuid(gameName, tagLine);
+  const match = await riot.getMatch(matchId);
+  const timeline = await riot.getTimeline(matchId);
+  const players = match.info.participants.map((p) => ({ id: p.participantId, champion: p.championName, teamId: p.teamId }));
+  const meP = match.info.participants.find((p) => p.puuid === puuid) ?? match.info.participants[0];
+  const me = { id: meP.participantId, champion: meP.championName, teamId: meP.teamId };
+  const lc = await league();
+  await openReplay(lc, matchId, (l) => console.log(l));
+  const debugDir = path.join(outDir, `frames-${matchId}`);
+  const t0 = Date.now();
+  const waves = await scanReplay(lc, matchId, (p) => console.log(p.label), () => false, players, me, untilSec, debugDir);
+  const wallSec = Math.round((Date.now() - t0) / 1000);
+  await store.writeJson(wavesFile(matchId), waves);
+  const until = untilSec * 1000;
+  const events = timeline.info.frames.flatMap((f) => f.events ?? []);
+  const champOf = (id: number) => players.find((p) => p.id === id)?.champion ?? "";
+  const polls = waves.live ?? [];
+  const changes = invChanges(polls);
+  const allies = players.filter((p) => p.teamId === me.teamId).map((p) => p.id);
+  const aliveAt = (id: number, t: number) => {
+    let best = null as (typeof polls)[number] | null;
+    for (const p of polls) if (p.t <= t && (!best || p.t > best.t)) best = p;
+    const lp = best?.players.find((x) => x.championName === champOf(id));
+    return !lp?.isDead;
+  };
+  const checks = [
+    checkPositions(waves, events, until),
+    checkAllies(waves, allies, aliveAt),
+    checkItems(changes, events, champOf, until),
+    checkLevels(changes, events, champOf, until),
+    checkCs(polls, timeline, champOf, until),
+  ];
+  const report = {
+    matchId,
+    me,
+    until: untilSec,
+    wallSec,
+    viewTeam: waves.viewTeam,
+    scanInfo: waves.scanInfo,
+    samples: waves.samples.length,
+    champSamples: waves.champs?.length ?? 0,
+    checks: checks.map(({ detail, ...c }) => c),
+    positionErrors: checks[0].detail,
+  };
+  await fs.mkdir(outDir, { recursive: true });
+  await fs.writeFile(path.join(outDir, `verify-${matchId}.json`), JSON.stringify(report, null, 2));
+  console.log(JSON.stringify(report, null, 2));
+}
+
 function handle<T>(channel: string, fn: (...args: any[]) => Promise<T> | T) {
   ipcMain.handle(channel, async (_e, ...args) => {
     try {
@@ -308,6 +417,15 @@ app.whenReady().then(async () => {
     return true;
   });
   handle("stage:focus", () => focusWindow());
+  handle("overlay:open", (matchId: string) => openOverlay(matchId));
+  handle("overlay:close", (finished: boolean) => closeOverlay(!!finished));
+  handle("overlay:interactive", (on: boolean) => overlay?.setIgnoreMouseEvents(!on, { forward: true }));
+  handle("overlay:focus", () => {
+    if (!overlay) return;
+    overlay.setIgnoreMouseEvents(false);
+    overlay.focus();
+    overlay.setIgnoreMouseEvents(true, { forward: true });
+  });
   handle("replay:read", (matchId: string) => readReplay(matchId));
   handle("replay:readCancel", () => {
     scanCancelled = true;
@@ -361,6 +479,18 @@ app.whenReady().then(async () => {
   });
   handle("postgame:status", () => watcher?.status);
   applyLoginItem(await store.readSettings());
+
+  const vi = process.argv.indexOf("--verify-scan");
+  if (vi >= 0) {
+    const arg = (k: string) => (process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : undefined);
+    try {
+      await verifyScan(process.argv[vi + 1], Number(arg("--until") ?? 900), arg("--out") ?? path.join(app.getPath("userData"), "verify"));
+    } catch (e) {
+      console.error("verify failed:", (e as Error).message);
+    }
+    app.exit(0);
+    return;
+  }
 
   Menu.setApplicationMenu(null);
   createWindow();

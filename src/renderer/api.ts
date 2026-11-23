@@ -103,6 +103,12 @@ export interface CoachApi {
   stageGlide(target: { cameraPosition: Vec3; cameraRotation: Vec3; fieldOfView?: number }, ms?: number): Promise<Result<boolean>>;
   stageFocus(): Promise<Result<void>>;
   onStageProgress(cb: (label: string) => void): () => void;
+  /** Coaching overlay over the League replay window. */
+  overlayOpen(matchId: string): Promise<Result<void>>;
+  overlayClose(finished: boolean): Promise<Result<void>>;
+  overlayInteractive(on: boolean): Promise<Result<void>>;
+  overlayFocus(): Promise<Result<void>>;
+  onOverlayClosed(cb: (e: { matchId: string; finished: boolean }) => void): () => void;
 
   vodFind(matchId: string): Promise<Result<Vod | null>>;
   vodPick(matchId: string): Promise<Result<Vod | null>>;

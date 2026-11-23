@@ -105,47 +105,6 @@ function useFrameTime(clock: Clock, on: boolean): number {
   return t;
 }
 
-// ---------------------------------------------------------------------------
-// The League window, streamed in.
-
-function useReplayStream(active: boolean) {
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    let s: MediaStream | null = null;
-    (async () => {
-      setError(null);
-      const src = await coach().stageSource();
-      if (!src.ok || !src.value) {
-        if (!cancelled) setError("Can't find the League replay window. Keep it open (not minimized).");
-        return;
-      }
-      try {
-        s = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { mandatory: { chromeMediaSource: "desktop", chromeMediaSourceId: src.value.id, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 60 } },
-        } as unknown as MediaStreamConstraints);
-        if (cancelled) s.getTracks().forEach((t) => t.stop());
-        else {
-          setStream(s);
-          s.getVideoTracks()[0]?.addEventListener("ended", () => setAttempt((a) => a + 1));
-        }
-      } catch (e) {
-        if (!cancelled) setError(`Couldn't stream the replay window (${(e as Error).message}).`);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      s?.getTracks().forEach((t) => t.stop());
-      setStream(null);
-    };
-  }, [active, attempt]);
-  return { stream, error, retry: () => setAttempt((a) => a + 1) };
-}
-
 /** The live camera, polled while world-space marks are on screen. */
 function useCamera(active: boolean): Cam | null {
   const [cam, setCam] = useState<Cam | null>(null);
@@ -171,6 +130,17 @@ function useCamera(active: boolean): Cam | null {
   return cam;
 }
 
+/**
+ * The overlay window ignores the mouse so League stays usable underneath; while the
+ * pointer is over one of our panels it takes clicks.
+ */
+let hits = 0;
+function hit(on: boolean) {
+  hits = Math.max(0, hits + (on ? 1 : -1));
+  coach().overlayInteractive?.(hits > 0);
+}
+const hitProps = { onMouseEnter: () => hit(true), onMouseLeave: () => hit(false) };
+
 // ---------------------------------------------------------------------------
 
 export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; source: Source; onExit: () => void; onFinished: () => void }) {
@@ -182,7 +152,6 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
   const replayClock = useReplayClock(live);
   const localClock = useLocalClock();
   const clock = live ? replayClock : localClock;
-  const { stream, error: streamError, retry } = useReplayStream(live);
 
   const [idx, setIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("intro");
@@ -215,7 +184,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
       .stageRender()
       .then((x) => {
         original = x.ok ? x.value : null;
-        render({ interfaceChat: false, interfaceTimeline: false, interfaceAnnounce: false, interfaceKillCallouts: false, interfaceQuests: false });
+        render({ interfaceChat: false, interfaceTimeline: false, interfaceReplay: false, interfaceTarget: false, interfaceAnnounce: false, interfaceKillCallouts: false, interfaceQuests: false });
       });
     return () => {
       coach().stagePlayback({ paused: true });
@@ -258,6 +227,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     if (phase === "lead" && t >= ch.root) {
       clock.set({ time: ch.root / 1000, paused: true });
       setPhase("decide");
+      if (live) coach().overlayFocus?.();
     } else if (phase === "playout") {
       // Speed through quiet stretches, real time near the outcome.
       const toOutcome = ch.outcome - t;
@@ -268,7 +238,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
         setPhase("debrief");
       }
     }
-  }, [t, phase, ch, clock]);
+  }, [t, phase, ch, clock, live]);
 
   const choose = useCallback(
     (i: number) => {
@@ -348,16 +318,13 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
   const paused = clock.paused();
 
   return (
-    <div className="wt">
+    <div className={`wt ${live ? "overlay" : ""}`}>
       <div className="wt-main">
         <Stage
           r={r}
           ch={ch}
           t={t}
           live={live}
-          stream={stream}
-          streamError={streamError}
-          onRetry={retry}
           phase={phase}
           beat={beat}
           marks={marks}
@@ -372,9 +339,11 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
           {phase === "debrief" && <DebriefCard ch={ch} last={idx + 1 >= chapters.length} onReplay={() => startChapter(idx)} onNext={next} />}
         </Stage>
 
-        <Scrubber ch={ch} t={t} onSeek={(ms) => clock.set({ time: ms / 1000 })} />
+        <div className="wt-scrub-wrap" {...(live ? hitProps : {})}>
+          <Scrubber ch={ch} t={t} onSeek={(ms) => clock.set({ time: ms / 1000 })} />
+        </div>
 
-        <div className="wt-transport">
+        <div className="wt-transport" {...(live ? hitProps : {})}>
           <button className="wt-ctl" onClick={() => nudge(-5000)} title="Back 5s (←)"><Rewind size={16} /></button>
           <button className="wt-ctl primary" onClick={togglePause} disabled={phase === "decide" || phase === "reveal"} title="Play / pause (Space)">
             {paused || phase === "debrief" ? <Play size={18} fill="currentColor" /> : <Pause size={18} fill="currentColor" />}
@@ -392,7 +361,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
         </div>
       </div>
 
-      <aside className="wt-rail">
+      <aside className="wt-rail" {...(live ? hitProps : {})}>
         <div className="wt-rail-head">
           <ChampIcon name={me} size={40} />
           <div>
@@ -463,9 +432,6 @@ function Stage(props: {
   ch: Chapter;
   t: number;
   live: boolean;
-  stream: MediaStream | null;
-  streamError: string | null;
-  onRetry: () => void;
   phase: Phase;
   beat: Beat | null;
   marks: Mark[];
@@ -476,65 +442,29 @@ function Stage(props: {
   count: number;
   children?: React.ReactNode;
 }) {
-  const { r, ch, t, live, stream, phase, beat, marks } = props;
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const { r, ch, t, live, phase, beat, marks } = props;
   const boxRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ x: 0, y: 0, w: 0, h: 0 });
   const world = live && (phase === "reveal" || phase === "decide" || phase === "playout" || phase === "lead") && marks.some((m) => m.kind !== "ghost");
   const cam = useCamera(world);
 
-  useEffect(() => {
-    const v = videoRef.current;
-    if (v && stream && v.srcObject !== stream) {
-      v.srcObject = stream;
-      v.play().catch(() => undefined);
-    }
-  }, [stream]);
-
-  // Where the picture actually sits inside the stage (object-fit: contain).
+  // The overlay covers the League window edge to edge, so the replay's picture is the stage.
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
-    const measure = () => {
-      const W = el.clientWidth;
-      const H = el.clientHeight;
-      const v = videoRef.current;
-      const ar = v && v.videoWidth ? v.videoWidth / v.videoHeight : 16 / 9;
-      const w = Math.min(W, H * ar);
-      const h = w / ar;
-      setBox({ x: (W - w) / 2, y: (H - h) / 2, w, h });
-    };
+    const measure = () => setBox({ x: 0, y: 0, w: el.clientWidth, h: el.clientHeight });
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    videoRef.current?.addEventListener("loadedmetadata", measure);
     return () => ro.disconnect();
-  }, [live, stream]);
+  }, [live]);
 
   const dim = phase === "decide" || phase === "reveal" || phase === "debrief";
   const tactical = !live || phase === "decide" || phase === "reveal" || phase === "debrief";
 
   return (
     <div className={`wt-stage ${dim ? "dim" : ""} ${phase}`} ref={boxRef}>
-      {live ? (
-        <>
-          <video ref={videoRef} className="wt-video" muted autoPlay playsInline />
-          {!stream && (
-            <div className="wt-stage-msg">
-              {props.streamError ? (
-                <>
-                  <p>{props.streamError}</p>
-                  <Button size="sm" onClick={props.onRetry}>Try again</Button>
-                </>
-              ) : (
-                <><Spinner /> Connecting to the replay…</>
-              )}
-            </div>
-          )}
-        </>
-      ) : (
-        <MapStage r={r} t={t} ch={ch} marks={marks} fogOff={props.fogOff} vision={props.vision} big />
-      )}
+      {!live && <MapStage r={r} t={t} ch={ch} marks={marks} fogOff={props.fogOff} vision={props.vision} big />}
 
       {live && cam && world && box.w > 0 && (
         <svg className="wt-world" style={{ left: box.x, top: box.y, width: box.w, height: box.h }} viewBox={`0 0 ${box.w} ${box.h}`}>
@@ -577,7 +507,11 @@ function Stage(props: {
         </div>
       )}
 
-      {props.children && <div className="wt-card-layer">{props.children}</div>}
+      {props.children && (
+        <div className="wt-card-layer">
+          <div className="wt-card-hit" {...(live ? hitProps : {})}>{props.children}</div>
+        </div>
+      )}
     </div>
   );
 }

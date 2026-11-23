@@ -173,6 +173,14 @@ function ReviewPlayer({
   const chapters = useMemo(() => buildChapters(r), [r]);
   const [theater, setTheater] = useState<null | "replay" | "map">(null);
   const [opening, setOpening] = useState<string | null>(null);
+  useEffect(
+    () =>
+      coach().onOverlayClosed((e) => {
+        if (e.matchId === m.matchId && e.finished) finishRef.current?.();
+      }),
+    [m.matchId],
+  );
+  const finishRef = useRef<(() => void) | null>(null);
   const { state: progress, award } = useProgress();
   const [idx, setIdx] = useState(() => Math.max(0, startKind ? moments.findIndex((mo) => mo.main?.kind === startKind || mo.leak?.kind === startKind || mo.extra.some((x) => x.kind === startKind)) : 0));
   const [playing, setPlaying] = useState(autoplay && moments.length > 0);
@@ -270,6 +278,7 @@ function ReviewPlayer({
     await award({ type: "game", matchId: m.matchId });
   }, [award, m.matchId]);
 
+  finishRef.current = () => void finish();
   const go = useCallback(
     async (to: number) => {
       if (moment) await award({ type: "moment", id: moment.key });
@@ -391,7 +400,8 @@ function ReviewPlayer({
             off();
             setOpening(null);
             if (!res.ok) return toast.error("Couldn't open the replay", { description: res.error });
-            setTheater("replay");
+            // The review runs in a transparent layer drawn over the League replay window.
+            await coach().overlayOpen(m.matchId);
           }}
         />
       ) : (

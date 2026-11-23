@@ -76,6 +76,10 @@ export interface WaveTrack {
   champs?: ChampSample[];
   /** Whose fog the "team" view showed. Vision reads are only used when it's yours. */
   viewTeam?: number;
+  /** Live Client Data polls taken during the pass (only the ones around a change). */
+  live?: import("./telemetry").LivePoll[];
+  /** How the pass ran: capture cost, sample counts, calibration. */
+  scanInfo?: { captureMsMedian: number; captureMsP90: number; samples: number; polls: number; minimap: { x: number; y: number; w: number; h: number }; screen: { w: number; h: number }; until: number };
 }
 
 export function sampleFromDots(t: number, dots: Dot[]): WaveSample {
