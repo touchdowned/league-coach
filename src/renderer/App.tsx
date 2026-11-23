@@ -5,6 +5,7 @@ import type { GameReport } from "../core/types";
 import { coach, PostGameStatus, Settings, TaskProgress } from "./api";
 import { PlayerCard, ProgressProvider, useProgress } from "./progress";
 import { Button, Skeleton } from "./ui";
+import { firstOpenStep, SessionBar, SessionStep } from "./session";
 import { ChampionsView } from "./views/Champions";
 import { CoachView } from "./views/Coach";
 import { MechanicsView } from "./views/Mechanics";
@@ -38,10 +39,23 @@ function Shell() {
   const [tab, setTab] = useState<Tab>("coach");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [games, setGames] = useState<GameReport[] | null>(null);
-  const [reviewTarget, setReviewTarget] = useState<{ matchId: string; autoplay: boolean } | null>(null);
+  const [reviewTarget, setReviewTarget] = useState<{ matchId: string; autoplay: boolean; kind?: string } | null>(null);
   const [sync, setSync] = useState<TaskProgress | null>(null);
   const [postGame, setPostGame] = useState<PostGameStatus | null>(null);
   const { state: progress } = useProgress();
+  // One-button daily training: review, then puzzles, then a lane lab set.
+  const [session, setSession] = useState<SessionStep | null>(null);
+  function goStep(step: SessionStep) {
+    setSession(step);
+    if (step === "review") {
+      const next = games?.find((g) => g.mistakes.length > 0 && !progress.reviewedGames.includes(g.metrics.matchId)) ?? games?.[0];
+      if (next) openReview(next.metrics.matchId, true);
+      else setTab("review");
+    } else setTab(step);
+  }
+  function startSession() {
+    goStep(firstOpenStep(progress) ?? "review");
+  }
 
   // After a ranked game the app syncs it on its own and asks to open its review.
   useEffect(() => {
@@ -82,8 +96,8 @@ function Shell() {
     });
   }
 
-  function openReview(matchId: string, autoplay = false) {
-    setReviewTarget({ matchId, autoplay });
+  function openReview(matchId: string, autoplay = false, kind?: string) {
+    setReviewTarget({ matchId, autoplay, kind });
     setTab("review");
   }
 
@@ -126,10 +140,11 @@ function Shell() {
       </aside>
 
       <main className="main" key={tab}>
+        {session && games && <SessionBar progress={progress} current={session} games={games} onGo={goStep} onEnd={() => setSession(null)} />}
         {loading ? (
           <LoadingPage />
         ) : tab === "coach" ? (
-          <CoachView games={games} onReview={openReview} onPuzzles={() => setTab("puzzles")} onMechanics={() => setTab("mechanics")} onSync={runSync} syncing={!!sync} canSync={!!settings.apiKey} />
+          <CoachView games={games} onReview={openReview} onPuzzles={() => setTab("puzzles")} onMechanics={() => setTab("mechanics")} onStartSession={startSession} onSync={runSync} syncing={!!sync} canSync={!!settings.apiKey} />
         ) : tab === "review" ? (
           <ReviewView games={games} target={reviewTarget} settings={settings} onTargetConsumed={() => setReviewTarget(null)} onPuzzles={() => setTab("puzzles")} />
         ) : tab === "puzzles" ? (

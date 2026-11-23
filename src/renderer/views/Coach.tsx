@@ -20,14 +20,16 @@ export function CoachView({
   onReview,
   onPuzzles,
   onMechanics,
+  onStartSession,
   onSync,
   syncing,
   canSync,
 }: {
   games: GameReport[];
-  onReview: (matchId: string, autoplay?: boolean) => void;
+  onReview: (matchId: string, autoplay?: boolean, kind?: string) => void;
   onPuzzles: () => void;
   onMechanics?: () => void;
+  onStartSession?: () => void;
   onSync: () => void;
   syncing: boolean;
   canSync: boolean;
@@ -70,6 +72,11 @@ export function CoachView({
           <p className="eyebrow">Coach</p>
           <h1>{plan.current ? "Here's what to fix next." : "No major leaks right now."}</h1>
         </div>
+        {onStartSession && (
+          <Button variant="primary" onClick={onStartSession}>
+            <Play size={15} fill="currentColor" /> Start today's training
+          </Button>
+        )}
         <div className="seg">
           {(["ALL", ...roles] as (Position | "ALL")[]).map((r) => (
             <button key={r} className={role === r ? "on" : ""} onClick={() => setRole(r)}>
@@ -209,7 +216,7 @@ const TRAIN: Record<string, { drill: "jungle" | "decisions" | "mechanics"; kind?
   losing_lane: { drill: "mechanics" },
 };
 
-function NextStep({ plan, games, onReview, onPuzzles, onMechanics }: { plan: CoachPlan; games: GameReport[]; onReview: (id: string, autoplay?: boolean) => void; onPuzzles: () => void; onMechanics?: () => void }) {
+function NextStep({ plan, games, onReview, onPuzzles, onMechanics }: { plan: CoachPlan; games: GameReport[]; onReview: (id: string, autoplay?: boolean, kind?: string) => void; onPuzzles: () => void; onMechanics?: () => void }) {
   const c = plan.current;
   if (!c) return <div className="hero quiet">{plan.verdict}</div>;
   const passed = c.results.filter((x) => x === true).length;
@@ -246,7 +253,7 @@ function NextStep({ plan, games, onReview, onPuzzles, onMechanics }: { plan: Coa
                 {t.drill === "jungle" ? "Drill it: where's the jungler?" : t.drill === "mechanics" ? "Drill it in the lane lab" : "Drill it: decision puzzles"}
               </Button>
               {example && (
-                <Button onClick={() => onReview(example.metrics.matchId, true)}>
+                <Button onClick={() => onReview(example.metrics.matchId, true, t.kind)}>
                   <Play size={14} /> Watch it happen ({example.metrics.champion}, {example.mistakes.filter((m) => m.kind === t.kind).length}x)
                 </Button>
               )}

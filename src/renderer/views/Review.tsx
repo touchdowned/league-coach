@@ -19,19 +19,22 @@ export function ReviewView({
   onPuzzles,
 }: {
   games: GameReport[];
-  target: { matchId: string; autoplay: boolean } | null;
+  target: { matchId: string; autoplay: boolean; kind?: string } | null;
   settings: Settings;
   onTargetConsumed: () => void;
   onPuzzles: () => void;
 }) {
   const { state: progress } = useProgress();
   const [selected, setSelected] = useState<string | null>(target?.matchId ?? null);
-  const [autoplay, setAutoplay] = useState(target?.autoplay ?? false);
+  // Low friction: opening Review starts playing; Space pauses.
+  const [autoplay, setAutoplay] = useState(target?.autoplay ?? true);
+  const [startKind, setStartKind] = useState<string | undefined>(target?.kind);
 
   useEffect(() => {
     if (target) {
       setSelected(target.matchId);
       setAutoplay(target.autoplay);
+      setStartKind(target.kind);
       onTargetConsumed();
     }
   }, [target, onTargetConsumed]);
@@ -48,7 +51,7 @@ export function ReviewView({
           const m = g.metrics;
           const done = progress.reviewedGames.includes(m.matchId);
           return (
-            <button key={m.matchId} className={`game-item ${m.win ? "w" : "l"} ${current.metrics.matchId === m.matchId ? "on" : ""}`} onClick={() => { setSelected(m.matchId); setAutoplay(false); }}>
+            <button key={m.matchId} className={`game-item ${m.win ? "w" : "l"} ${current.metrics.matchId === m.matchId ? "on" : ""}`} onClick={() => { setSelected(m.matchId); setAutoplay(true); setStartKind(undefined); }}>
               <ChampIcon name={m.champion} size={34} />
               <span className="gi-main">
                 <strong>{m.champion}</strong>
@@ -69,6 +72,7 @@ export function ReviewView({
           key={current.metrics.matchId}
           r={current}
           autoplay={autoplay}
+          startKind={current.metrics.matchId === selected ? startKind : undefined}
           settings={settings}
           next={nextUnreviewed}
           onNext={(id) => { setSelected(id); setAutoplay(true); }}
@@ -106,6 +110,7 @@ const FREEZE_MS = 4000; // freeze this long before the death (temporal occlusion
 function ReviewPlayer({
   r,
   autoplay,
+  startKind,
   settings,
   next,
   onNext,
@@ -113,6 +118,7 @@ function ReviewPlayer({
 }: {
   r: GameReport;
   autoplay: boolean;
+  startKind?: string;
   settings: Settings;
   next: GameReport | null;
   onNext: (matchId: string) => void;
@@ -121,7 +127,7 @@ function ReviewPlayer({
   const m = r.metrics;
   const moments = useMemo(() => toMoments(r), [r]);
   const { state: progress, award } = useProgress();
-  const [idx, setIdx] = useState(0);
+  const [idx, setIdx] = useState(() => Math.max(0, startKind ? moments.findIndex((mo) => mo.main.kind === startKind || mo.extra.some((x) => x.kind === startKind)) : 0));
   const [playing, setPlaying] = useState(autoplay && moments.length > 0);
   const [elapsed, setElapsed] = useState(0);
   // Predict, then reveal: the coaching stays hidden for the first few seconds so you

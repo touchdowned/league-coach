@@ -49,7 +49,7 @@ export function Rift({ track, teamId, meId, t, size = 520, hidden = [], ghosts =
         <text x={x} y={y + rr * 0.35}>{c.slice(0, 2)}</text>
       </g>
     );
-  const r = size * 0.032;
+  const r = size * 0.04;
 
   const recentKills = track.kills.filter((k) => k.t <= t && t - k.t < 6000);
   const recentObj = track.objectives.filter((o) => o.t <= t && t - o.t < 12000);

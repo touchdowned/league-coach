@@ -9,7 +9,7 @@ export interface ProgressState {
   lastActive: string | null;
   streak: number;
   bestStreak: number;
-  today: { date: string; moments: number; puzzles: number; puzzlesRight: number };
+  today: { date: string; moments: number; puzzles: number; puzzlesRight: number; drills?: number };
   reviewedMoments: string[]; // `${matchId}:${timeMs}`
   reviewedGames: string[];
 }
@@ -95,6 +95,7 @@ export function applyEvent(prev: ProgressState, e: ProgressEvent, now = new Date
     s.reviewedGames.push(e.matchId);
     gained += XP.gameReviewed;
   } else if (e.type === "drill") {
+    s.today.drills = (s.today.drills ?? 0) + 1;
     gained += Math.round(XP.drillSet * (1 + Math.max(0, Math.min(1, e.score))));
   } else {
     s.today.puzzles++;
