@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CHOICES, Choice, puzzleAt, puzzlesFromGames } from "../../core/puzzles";
 import type { GameReport } from "../../core/types";
 import { ChampIcon, MapBackdrop } from "../charts";
+import { Rift, useGameClock } from "../rift";
 import { useProgress } from "../progress";
 import { Button, Kbd } from "../ui";
 
@@ -164,7 +165,11 @@ function DecisionPuzzles({ games, seg }: { games: GameReport[]; seg: React.React
 
       <div className="puzzle">
         <div className="panel puzzle-map-card">
-          <PuzzleMap position={p.position} threats={p.threats} teamId={p.teamId} champion={p.champion} />
+          {(() => {
+            const g = p.matchId ? games.find((x) => x.metrics.matchId === p.matchId) : undefined;
+            if (g?.track && p.atMs != null && p.deathMs != null) return <RiftPuzzle game={g} at={p.atMs} death={p.deathMs} hideJungler={p.threats.length > 0} revealed={!!picked} />;
+            return <PuzzleMap position={p.position} threats={p.threats} teamId={p.teamId} champion={p.champion} />;
+          })()}
         </div>
         <div className={`panel puzzle-body ${picked ? (right ? "is-right" : "is-wrong") : ""}`} key={p.id}>
           <div className="puzzle-tag">
@@ -212,6 +217,21 @@ function DecisionPuzzles({ games, seg }: { games: GameReport[]; seg: React.React
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Your own game, frozen 10 seconds before you died. After you answer, it plays out. */
+function RiftPuzzle({ game, at, death, hideJungler, revealed }: { game: GameReport; at: number; death: number; hideJungler: boolean; revealed: boolean }) {
+  const track = game.track!;
+  const me = track.players.find((x) => x.champion === game.metrics.champion && x.teamId === game.teamId);
+  const jungler = track.players.find((x) => x.teamId !== game.teamId && x.role === "JUNGLE");
+  const t = useGameClock(at, Math.min(track.durationMs, death + 3000), 3, revealed);
+  return (
+    <div className="rift-puzzle">
+      <Rift track={track} teamId={game.teamId} meId={me?.id} t={t} hidden={hideJungler && !revealed && jungler ? [jungler.id] : []} />
+      <span className="rift-clock">{Math.floor(t / 60000)}:{String(Math.floor((t % 60000) / 1000)).padStart(2, "0")}</span>
+      {!revealed && <span className="rift-frozen">Frozen. What do you do?</span>}
     </div>
   );
 }

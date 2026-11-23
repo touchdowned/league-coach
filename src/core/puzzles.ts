@@ -39,6 +39,9 @@ export interface Puzzle {
   explanation: string;
   outcome: string | null;
   matchId: string | null;
+  /** Game time the puzzle is frozen at, and when the death happened (own-game puzzles only). */
+  atMs?: number;
+  deathMs?: number;
 }
 
 interface Template {
@@ -168,6 +171,8 @@ export function puzzlesFromGames(reports: GameReport[]): Puzzle[] {
         explanation: t.explanation,
         outcome: `${m.title}. ${m.detail}`,
         matchId: r.metrics.matchId,
+        atMs: Math.max(0, m.timeMs - 10000),
+        deathMs: m.timeMs,
       });
     }
   }
