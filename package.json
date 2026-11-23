@@ -5,13 +5,14 @@
   "description": "Personal post-game League of Legends coach: match review, mistake timeline and role finder.",
   "main": "dist/main/main.js",
   "scripts": {
-    "dev": "npm run build:main && concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "dev": "npm run build:main && npm run ensure-electron && concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "build": "npm run build:main && npm run build:renderer",
-    "start": "npm run build && electron .",
+    "start": "npm run build && npm run ensure-electron && electron .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "ensure-electron": "node scripts/ensure-electron.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
