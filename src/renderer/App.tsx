@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Brain, CircleAlert, Clapperboard, Compass, LoaderCircle, LucideIcon, PlayCircle, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
+import { Brain, CircleAlert, Clapperboard, Compass, Gamepad2, LoaderCircle, LucideIcon, PlayCircle, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import type { GameReport } from "../core/types";
 import { coach, PostGameStatus, Settings, TaskProgress } from "./api";
@@ -7,17 +7,19 @@ import { PlayerCard, ProgressProvider, useProgress } from "./progress";
 import { Button, Skeleton } from "./ui";
 import { ChampionsView } from "./views/Champions";
 import { CoachView } from "./views/Coach";
+import { MechanicsView } from "./views/Mechanics";
 import { PuzzlesView } from "./views/Puzzles";
 import { ReviewView } from "./views/Review";
 import { RoleView } from "./views/Role";
 import { SettingsView } from "./views/Settings";
 
-export type Tab = "coach" | "review" | "puzzles" | "champions" | "role" | "settings";
+export type Tab = "coach" | "review" | "puzzles" | "mechanics" | "champions" | "role" | "settings";
 
 const NAV: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "coach", label: "Coach", icon: Target },
   { id: "review", label: "Review", icon: Clapperboard },
   { id: "puzzles", label: "Puzzles", icon: Brain },
+  { id: "mechanics", label: "Mechanics", icon: Gamepad2 },
   { id: "champions", label: "Champions", icon: Swords },
   { id: "role", label: "Best role", icon: Compass },
   { id: "settings", label: "Settings", icon: SettingsIcon },
@@ -132,6 +134,8 @@ function Shell() {
           <ReviewView games={games} target={reviewTarget} settings={settings} onTargetConsumed={() => setReviewTarget(null)} onPuzzles={() => setTab("puzzles")} />
         ) : tab === "puzzles" ? (
           <PuzzlesView games={games} />
+        ) : tab === "mechanics" ? (
+          <MechanicsView games={games} />
         ) : tab === "champions" ? (
           <ChampionsView games={games} />
         ) : tab === "role" ? (
