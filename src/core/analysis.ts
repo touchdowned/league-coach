@@ -4,6 +4,8 @@ import type {
   GameReport,
   MatchDto,
   Mistake,
+  MistakeContext,
+  MistakeKind,
   Participant,
   ParticipantFrame,
   TimelineDto,
@@ -122,7 +124,10 @@ export function computeMetrics(match: MatchDto, timeline: TimelineDto, puuid: st
   };
 }
 
-/** Look at each of the player's deaths and flag what went wrong. */
+/**
+ * Look at each of the player's deaths, flag what went wrong, guess what the player
+ * was probably thinking from what they did, and say why that read was wrong.
+ */
 export function findMistakes(match: MatchDto, timeline: TimelineDto, puuid: string): Mistake[] {
   const me = findPlayer(match, puuid);
   const opp = findOpponent(match, me);
@@ -136,81 +141,12 @@ export function findMistakes(match: MatchDto, timeline: TimelineDto, puuid: stri
     const t = d.timestamp;
     const killer = d.killerId ? byId.get(d.killerId) : undefined;
     const helpers = (d.assistingParticipantIds ?? []).map((i) => byId.get(i)).filter(Boolean) as Participant[];
-    const involved = [killer, ...helpers].filter(Boolean) as Participant[];
+    const involved = [killer, ...helpers].filter((p): p is Participant => !!p && p.teamId !== me.teamId);
     const lanePhase = t < LANE_PHASE_END;
     const before = pf(timeline, t - 1, me.participantId);
+    const oppFrame = opp ? pf(timeline, t - 1, opp.participantId) : undefined;
+    const goldDiff = before && oppFrame ? before.totalGold - oppFrame.totalGold : null;
     const at = fmtTime(t);
-    let flagged = false;
-
-    // Ganked by the enemy jungler during laning.
-    if (lanePhase && involved.some((p) => p.teamPosition === "JUNGLE")) {
-      out.push({
-        kind: "ganked",
-        timeMs: t,
-        severity: 7,
-        title: `Ganked at ${at}`,
-        detail: `The enemy jungler${involved.length > 1 ? ` and ${involved.length - 1} other(s)` : ""} caught you during laning.`,
-        tip: "Before you push past the middle of the lane, check where the enemy jungler was last seen. If you don't know, assume they're nearby and play safe or ward the river.",
-      });
-      flagged = true;
-    }
-
-    // Died deep on the enemy's side of the map.
-    if (d.position && isDeepInEnemyHalf(me.teamId, d.position)) {
-      out.push({
-        kind: "overextended",
-        timeMs: t,
-        severity: lanePhase ? 6 : 7,
-        title: `Overextended at ${at}`,
-        detail: "You died deep on the enemy's half of the map.",
-        tip: "Only walk into enemy territory with vision, with your team nearby, or when you know where most enemies are.",
-      });
-      flagged = true;
-    }
-
-    // Gave a shutdown.
-    if ((d.shutdownBounty ?? 0) >= 300) {
-      out.push({
-        kind: "gave_shutdown",
-        timeMs: t,
-        severity: 8,
-        title: `Gave up a ${d.shutdownBounty}g shutdown at ${at}`,
-        detail: "You were worth a big bounty and the enemy collected it.",
-        tip: "When you're fed, you are the most valuable target on the map. Recall with your lead, and fight only with your team or with vision.",
-      });
-      flagged = true;
-    }
-
-    // Died holding a lot of unspent gold.
-    if (before && before.currentGold >= 1300) {
-      out.push({
-        kind: "died_with_gold",
-        timeMs: t,
-        severity: 5,
-        title: `Died holding ${before.currentGold}g at ${at}`,
-        detail: "You had enough gold for a big item but hadn't spent it.",
-        tip: "Recall when you have gold for a component (usually 1100g+) and the wave is pushed. Spending it makes you stronger for the next fight.",
-      });
-      flagged = true;
-    }
-
-    // Was ahead of the lane opponent and died, giving the lead back.
-    if (lanePhase && opp && before) {
-      const oppFrame = pf(timeline, t - 1, opp.participantId);
-      if (oppFrame && before.totalGold - oppFrame.totalGold >= 500) {
-        out.push({
-          kind: "threw_lead",
-          timeMs: t,
-          severity: 6,
-          title: `Gave back your lead at ${at}`,
-          detail: `You were ${before.totalGold - oppFrame.totalGold}g ahead of ${opp.championName} and died.`,
-          tip: "When you're ahead, push the wave, take plates or recall to buy. You don't need to take risky fights to stay ahead.",
-        });
-        flagged = true;
-      }
-    }
-
-    // Enemy took a big objective shortly after the death.
     const obj = events.find(
       (e) =>
         e.type === "ELITE_MONSTER_KILL" &&
@@ -219,28 +155,109 @@ export function findMistakes(match: MatchDto, timeline: TimelineDto, puuid: stri
         e.timestamp > t &&
         e.timestamp - t <= 90_000,
     );
-    if (obj) {
-      const name = MONSTER_NAMES[obj.monsterType ?? ""] ?? "an objective";
-      out.push({
-        kind: "died_before_objective",
-        timeMs: t,
-        severity: obj.monsterType === "BARON_NASHOR" ? 9 : 6,
-        title: `Death led to enemy ${name} at ${fmtTime(obj.timestamp)}`,
-        detail: `The enemy took ${name} ${Math.round((obj.timestamp - t) / 1000)}s after you died.`,
-        tip: "About a minute before an objective spawns, stop taking risks: reset, buy and group with your team.",
-      });
+    const objName = obj ? (MONSTER_NAMES[obj.monsterType ?? ""] ?? "an objective") : null;
+    const context: MistakeContext = {
+      minute: t / MIN,
+      currentGold: before?.currentGold ?? null,
+      goldDiff,
+      position: d.position ?? null,
+      killers: involved.map((p) => p.championName),
+      enemyJunglerInvolved: involved.some((p) => p.teamPosition === "JUNGLE"),
+      numberOfEnemies: involved.length,
+      deepInEnemyHalf: !!d.position && isDeepInEnemyHalf(me.teamId, d.position),
+      followedBy: objName && obj ? { name: objName, afterSec: Math.round((obj.timestamp - t) / 1000) } : null,
+      shutdownGiven: d.shutdownBounty ?? 0,
+    };
+    const add = (kind: MistakeKind, severity: number, title: string, detail: string, read: string, tip: string) =>
+      out.push({ kind, timeMs: t, severity, title, detail, read, tip, context });
+    let flagged = false;
+    const outnumbered = involved.length >= 2 ? ` You were caught ${involved.length}v1.` : "";
+
+    if (lanePhase && context.enemyJunglerInvolved) {
+      add(
+        "ganked",
+        7,
+        `Ganked at ${at}`,
+        `The enemy jungler${involved.length > 2 ? ` and ${involved.length - 2} more` : ""} killed you in lane.${outnumbered}`,
+        goldDiff !== null && goldDiff > 300
+          ? "You were ahead and pushing, so you likely assumed your lane opponent couldn't punish you and forgot the jungler exists."
+          : "You were likely focused on your lane opponent and the wave, and weren't tracking where the enemy jungler was.",
+        "You don't need to see the jungler to know where they are. Note their last sighting and which side they started. If you can't account for them, don't stand past the middle of your lane without a river ward.",
+      );
+      flagged = true;
+    }
+
+    if (context.deepInEnemyHalf) {
+      add(
+        "overextended",
+        lanePhase ? 6 : 7,
+        `Overextended at ${at}`,
+        `You died deep on the enemy's half of the map.${outnumbered}`,
+        lanePhase
+          ? "You likely chased a kill or kept pushing because the wave or a low-HP target looked free."
+          : "You likely walked forward to farm a side wave or check a bush without knowing where the enemy team was.",
+        "Count the enemies you can see. If 2 or more are missing, the space past river is theirs. Farm on your side and let the wave come to you.",
+      );
+      flagged = true;
+    }
+
+    if (context.shutdownGiven >= 300) {
+      add(
+        "gave_shutdown",
+        8,
+        `Gave up a ${context.shutdownGiven}g shutdown at ${at}`,
+        "You were the most valuable target on the map and the enemy collected it.",
+        "Being fed probably made you feel you could win any fight, so you took one without checking how many enemies could join.",
+        "A lead is a tool, not a shield. Spend it on items and objectives, and only fight when your team is close enough to help.",
+      );
+      flagged = true;
+    }
+
+    if (before && before.currentGold >= 1300) {
+      add(
+        "died_with_gold",
+        5,
+        `Died holding ${before.currentGold}g at ${at}`,
+        "You had a full item component unspent when you died.",
+        "You likely stayed for one more wave or a plate because leaving felt like losing farm.",
+        "Unspent gold does nothing. When you have 1,100g+ and your wave is pushed in, recall. You'll come back stronger than the farm you'd have taken.",
+      );
+      flagged = true;
+    }
+
+    if (lanePhase && goldDiff !== null && goldDiff >= 500 && opp) {
+      add(
+        "threw_lead",
+        6,
+        `Threw a ${goldDiff}g lead at ${at}`,
+        `You were ${goldDiff}g ahead of ${opp.championName} and died, giving most of it back.`,
+        "You were ahead, so you likely played as if the lead made you safe from everything, not just your lane opponent.",
+        "When you're ahead in lane, the only way to lose it is to die. Shove, take plates, recall on a good timer. Make them come to you.",
+      );
+      flagged = true;
+    }
+
+    if (obj && objName) {
+      add(
+        "died_before_objective",
+        obj.monsterType === "BARON_NASHOR" ? 9 : 6,
+        `Your death gave them ${objName}`,
+        `The enemy took ${objName} ${context.followedBy!.afterSec}s after you died.`,
+        `You likely weren't watching the objective timer, or you thought one more wave or play was worth it before ${objName}.`,
+        "Check objective timers every time you recall. From 60s before spawn, don't make risky plays: reset, buy and move with your team.",
+      );
       flagged = true;
     }
 
     if (!flagged && lanePhase) {
-      out.push({
-        kind: "early_death",
-        timeMs: t,
-        severity: 4,
-        title: `Died in lane at ${at}`,
-        detail: killer ? `Killed by ${killer.championName}.` : "Died during laning.",
-        tip: "Watch this in the replay. Ask: did I know their damage and cooldowns, and where the minion wave was?",
-      });
+      add(
+        "early_death",
+        4,
+        `Died in lane at ${at}`,
+        killer ? `${killer.championName} killed you${involved.length > 1 ? ` with help` : " 1v1"}.` : "You died during laning.",
+        "You likely misjudged how much damage they had, or traded when their key ability was up.",
+        "Before trading, check their level, items and whether their main spell is up. If you can't name their kill combo, trade only when it's on cooldown.",
+      );
     }
   }
 
@@ -262,7 +279,34 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
   if (m.visionPerMin >= bench.visionPerMin + 0.2) strengths.push(`Good vision (${m.visionPerMin.toFixed(2)} per min).`);
   if (m.soloKills >= 2) strengths.push(`${m.soloKills} solo kills.`);
 
-  return { metrics: m, mistakes, strengths, focus: pickFocus(m, all), grade: grade(m, all) };
+  const me = findPlayer(match, puuid);
+  const opp = findOpponent(match, me);
+  const series = timeline.info.frames.map((f) => {
+    const a = f.participantFrames[String(me.participantId)];
+    const b = opp ? f.participantFrames[String(opp.participantId)] : undefined;
+    return {
+      minute: Math.round(f.timestamp / MIN),
+      goldDiff: a && b ? a.totalGold - b.totalGold : null,
+      xpDiff: a && b ? a.xp - b.xp : null,
+      cs: cs(a),
+      oppCs: b ? cs(b) : null,
+    };
+  });
+  const kills = allEvents(timeline).filter((e) => e.type === "CHAMPION_KILL" && e.position);
+  const toMap = (e: TimelineEvent) => ({ timeMs: e.timestamp, x: e.position!.x, y: e.position!.y });
+
+  return {
+    metrics: m,
+    teamId: me.teamId,
+    gameVersion: match.info.gameVersion,
+    series,
+    deathsAt: kills.filter((e) => e.victimId === me.participantId).map(toMap),
+    killsAt: kills.filter((e) => e.killerId === me.participantId).map(toMap),
+    mistakes,
+    strengths,
+    focus: pickFocus(m, all),
+    grade: grade(m, all),
+  };
 }
 
 function pickFocus(m: GameMetrics, mistakes: Mistake[]): string {
@@ -275,7 +319,7 @@ function pickFocus(m: GameMetrics, mistakes: Mistake[]): string {
   if (m.cs10 < bench.cs10 - 10) return `Farm better in lane: aim for ${bench.cs10}+ CS at 10 minutes.`;
   if (count("died_before_objective") >= 1) return "Play safe in the minute before dragon and baron spawn.";
   if (m.visionPerMin < bench.visionPerMin - 0.2) return "Use your trinket on cooldown and buy a control ward every recall.";
-  return "Keep it up. Review your first death and ask what you could have known.";
+  return "No single leak stood out. Rewatch your first death and name what you could have known before it.";
 }
 
 function grade(m: GameMetrics, mistakes: Mistake[]): GameReport["grade"] {

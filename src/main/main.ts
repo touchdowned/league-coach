@@ -2,7 +2,6 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import path from "path";
 import { buildReport } from "../core/analysis";
 import { parseRiotId, RiotClient, SR_QUEUES } from "../core/riot";
-import { recommendRole } from "../core/roles";
 import type { GameReport } from "../core/types";
 import { JsonStore, Settings } from "./store";
 
@@ -47,11 +46,14 @@ async function sync(): Promise<GameReport[]> {
   }
   progress(ids.length, ids.length, "Done");
   reports = out.sort((a, b) => b.metrics.gameCreation - a.metrics.gameCreation);
+  await store.writeReports(reports);
   return reports;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   store = new JsonStore(app.getPath("userData"));
+  // Reports saved by an older version may lack newer fields; drop those so the UI never sees them.
+  reports = (await store.readReports<GameReport>()).filter((r) => Array.isArray(r.series));
 
   ipcMain.handle("settings:get", () => store.readSettings());
   ipcMain.handle("settings:set", (_e, s: Settings) => store.writeSettings(s));
@@ -63,7 +65,6 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle("games:list", () => reports);
-  ipcMain.handle("role:get", () => recommendRole(reports.map((r) => r.metrics)));
 
   createWindow();
   app.on("activate", () => BrowserWindow.getAllWindows().length === 0 && createWindow());

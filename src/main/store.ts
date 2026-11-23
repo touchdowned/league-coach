@@ -32,6 +32,19 @@ export class JsonStore {
     await fs.writeFile(this.file("settings.json"), JSON.stringify(s, null, 2));
   }
 
+  async readReports<T>(): Promise<T[]> {
+    try {
+      return JSON.parse(await fs.readFile(this.file("reports.json"), "utf8"));
+    } catch {
+      return [];
+    }
+  }
+
+  async writeReports(reports: unknown[]): Promise<void> {
+    await fs.mkdir(this.dir, { recursive: true });
+    await fs.writeFile(this.file("reports.json"), JSON.stringify(reports));
+  }
+
   /** Disk cache for match and timeline JSON. Matches never change, so no expiry. */
   cache(): Cache {
     const dir = path.join(this.dir, "cache");

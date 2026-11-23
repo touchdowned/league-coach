@@ -1,5 +1,4 @@
 import type { GameReport } from "../core/types";
-import type { RoleVerdict } from "../core/roles";
 
 export interface Settings {
   apiKey: string;
@@ -13,7 +12,6 @@ export interface CoachApi {
   setSettings(s: Settings): Promise<void>;
   sync(): Promise<{ ok: true; reports: GameReport[] } | { ok: false; error: string }>;
   listGames(): Promise<GameReport[]>;
-  getRole(): Promise<RoleVerdict>;
   onProgress(cb: (p: { done: number; total: number; label: string }) => void): () => void;
 }
 

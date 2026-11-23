@@ -77,13 +77,30 @@ export type MistakeKind =
   | "threw_lead"
   | "early_death";
 
+export interface MistakeContext {
+  minute: number;
+  currentGold: number | null;
+  goldDiff: number | null; // vs lane opponent, just before the death
+  position: { x: number; y: number } | null;
+  killers: string[];
+  enemyJunglerInvolved: boolean;
+  numberOfEnemies: number;
+  deepInEnemyHalf: boolean;
+  followedBy: { name: string; afterSec: number } | null;
+  shutdownGiven: number;
+}
+
 export interface Mistake {
   kind: MistakeKind;
   timeMs: number;
   severity: number; // 1-10
   title: string;
   detail: string;
+  /** What the player was probably thinking, inferred from what they did. */
+  read: string;
+  /** Why that read was wrong and what to do instead. */
   tip: string;
+  context: MistakeContext;
 }
 
 export interface GameMetrics {
@@ -112,8 +129,27 @@ export interface GameMetrics {
   damageShare: number; // 0-1
 }
 
+export interface SeriesPoint {
+  minute: number;
+  goldDiff: number | null; // vs lane opponent
+  xpDiff: number | null;
+  cs: number;
+  oppCs: number | null;
+}
+
+export interface MapEvent {
+  timeMs: number;
+  x: number;
+  y: number;
+}
+
 export interface GameReport {
   metrics: GameMetrics;
+  teamId: number;
+  gameVersion: string;
+  series: SeriesPoint[];
+  deathsAt: MapEvent[];
+  killsAt: MapEvent[];
   mistakes: Mistake[]; // top mistakes, most severe first
   strengths: string[];
   focus: string; // one thing to work on next game
