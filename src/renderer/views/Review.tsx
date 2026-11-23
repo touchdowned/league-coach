@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, Clapperboard, MonitorPlay, Pause, Play, Video } from "lucide-react";
+import { Check, ChevronLeft, Eye, ChevronRight, Clapperboard, MonitorPlay, Pause, Play, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { fmtTime } from "../../core/analysis";
@@ -55,7 +55,7 @@ export function ReviewView({
                 </small>
               </span>
               <span className="gi-side">
-                <b className={`grade-chip g-${g.grade}`}>{g.grade}</b>
+                <b className="grade-chip" title="Moments to review">{g.mistakes.length}</b>
                 {done ? <i className="check" /> : g.mistakes.length > 0 ? <span className="dot-new" /> : null}
               </span>
             </button>
@@ -119,6 +119,9 @@ function ReviewPlayer({
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(autoplay && moments.length > 0);
   const [elapsed, setElapsed] = useState(0);
+  // Predict, then reveal: the coaching stays hidden for the first few seconds so you
+  // commit to your own read first (generation effect), unless you reveal it.
+  const [revealed, setRevealed] = useState(false);
   const [finished, setFinished] = useState(false);
   const [clips, setClips] = useState<Record<string, string> | null>(null);
   const [vod, setVod] = useState<Vod | null | undefined>(undefined);
@@ -160,6 +163,7 @@ function ReviewPlayer({
   useEffect(() => {
     if (!moment) return;
     setElapsed(0);
+    setRevealed(false);
     const start = Math.max(0, moment.timeMs / 1000 - 12);
     if (media.kind === "vod" && videoRef.current) {
       videoRef.current.currentTime = Math.max(0, start + vodOffset);
@@ -225,7 +229,8 @@ function ReviewPlayer({
         e.preventDefault();
         if (finished) return;
         setPlaying((p) => !p);
-      } else if (e.key === "ArrowRight") go(idx + 1);
+      } else if (e.key === "r" || e.key === "R") setRevealed(true);
+      else if (e.key === "ArrowRight") go(idx + 1);
       else if (e.key === "ArrowLeft") setIdx((i) => Math.max(0, i - 1));
     };
     window.addEventListener("keydown", k);
@@ -241,6 +246,10 @@ function ReviewPlayer({
   }
 
   const reviewed = progress.reviewedGames.includes(m.matchId);
+  const revealAt = media.kind === "clip" ? 12 : Math.min(5, per * 0.35);
+  useEffect(() => {
+    if (!revealed && elapsed >= revealAt) setRevealed(true);
+  }, [elapsed, revealAt, revealed]);
   const timerPct = media.kind === "clip" ? elapsed / (videoRef.current?.duration || 19) : elapsed / per;
 
   return (
@@ -255,7 +264,7 @@ function ReviewPlayer({
             <span className={m.win ? "win" : "loss"}>{m.win ? "Victory" : "Defeat"}</span> · {ROLE_LABEL[m.role]} · {Math.round(m.durationMin)} min · {m.kills}/{m.deaths}/{m.assists} · {new Date(m.gameCreation).toLocaleDateString()}
           </p>
         </div>
-        <b className={`grade-big g-${r.grade}`}>{r.grade}</b>
+        <span className="moments-big"><b>{r.mistakes.length}</b><small>moments</small></span>
       </header>
 
       {moments.length === 0 ? (
@@ -296,8 +305,17 @@ function ReviewPlayer({
               <span className={`sev sev-${moment.main.severity >= 8 ? "hi" : moment.main.severity >= 6 ? "mid" : "lo"}`}>
                 {idx + 1}/{moments.length}
               </span>
-              <h2>{moment.main.title}</h2>
+              <h2>{revealed ? moment.main.title : `${fmtTime(moment.timeMs)}: you die here. Why?`}</h2>
             </div>
+            {!revealed && (
+              <button className="guess" onClick={() => setRevealed(true)}>
+                <Eye size={16} />
+                <span>
+                  <strong>Call it before you see it.</strong> Watch the moment and decide what went wrong. Revealing in {Math.max(1, Math.ceil(revealAt - elapsed))}s, or press <Kbd>R</Kbd>.
+                </span>
+              </button>
+            )}
+            <div className={`reveal ${revealed ? "on" : ""}`} aria-hidden={!revealed}>
             <p className="moment-detail">
               {moment.main.detail}
               {moment.extra.length > 0 && <> Also: {moment.extra.map((x) => x.title.replace(/ at \d+:\d+$/, "").toLowerCase()).join(", ")}.</>}
@@ -309,6 +327,7 @@ function ReviewPlayer({
             <div className="fix">
               <p className="eyebrow">Why that's wrong</p>
               <p>{moment.main.tip}</p>
+            </div>
             </div>
             <div className="controls">
               <Button variant="ghost" size="sm" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>

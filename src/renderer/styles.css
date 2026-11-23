@@ -511,3 +511,15 @@ h4 { font-size: 11px; margin: 18px 0 8px; color: var(--muted); text-transform: u
 .form h3 { display: flex; align-items: center; gap: 8px; }
 .stage-replay span { display: inline-flex; align-items: center; gap: 8px; }
 .puzzle-stats small { display: inline-flex; align-items: center; gap: 3px; }
+.tag-retry { background: rgba(167, 139, 250, 0.14); color: var(--xp); }
+.guess { display: flex; gap: 10px; align-items: flex-start; text-align: left; padding: 12px 14px; border-radius: 12px; background: var(--accent-soft); color: var(--text-2); box-shadow: 0 0 0 1px rgba(240, 181, 74, 0.25) inset; transition: transform 160ms var(--ease-out); }
+.guess:active { transform: scale(0.985); }
+.guess svg { flex: none; color: var(--accent); margin-top: 2px; }
+.guess strong { color: var(--text); }
+.reveal { display: grid; gap: 12px; filter: blur(7px); opacity: 0.35; pointer-events: none; user-select: none; transition: filter 260ms var(--ease-out), opacity 260ms var(--ease-out); }
+.reveal.on { filter: none; opacity: 1; pointer-events: auto; user-select: auto; }
+
+.moments-big { display: flex; flex-direction: column; align-items: flex-end; line-height: 1; }
+.moments-big b { font-size: 36px; font-weight: 800; letter-spacing: -0.03em; }
+.moments-big small { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.hero.tilt { margin-bottom: 16px; border-color: color-mix(in srgb, var(--accent) 40%, transparent); }

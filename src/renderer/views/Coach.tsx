@@ -77,6 +77,12 @@ export function CoachView({
         </div>
       </header>
 
+      {filtered.length >= 2 && !filtered[0].metrics.win && !filtered[1].metrics.win && Date.now() - filtered[0].metrics.gameCreation < 6 * 3600e3 && (
+        <div className="hero quiet tilt">
+          Two losses in a row. Take ten minutes off queue: review the last game or do a puzzle set before you play again.
+        </div>
+      )}
+
       <NextStep plan={plan} />
 
       <section className="grid-3">
@@ -136,9 +142,9 @@ export function CoachView({
               .slice()
               .reverse()
               .map((g) => (
-                <button key={g.metrics.matchId} className={`form-cell ${g.metrics.win ? "w" : "l"}`} onClick={() => onReview(g.metrics.matchId)} title={`${g.metrics.champion} ${g.grade}`}>
+                <button key={g.metrics.matchId} className={`form-cell ${g.metrics.win ? "w" : "l"}`} onClick={() => onReview(g.metrics.matchId)} title={`${g.metrics.champion}: ${g.mistakes.length} moments to review`}>
                   <ChampIcon name={g.metrics.champion} size={28} />
-                  <b className={`g-${g.grade}`}>{g.grade}</b>
+                  <b className={g.mistakes.length > 2 ? "g-D" : g.mistakes.length ? "g-C" : "g-A"}>{g.mistakes.length}</b>
                   {progress.reviewedGames.includes(g.metrics.matchId) && <i className="check" />}
                 </button>
               ))}

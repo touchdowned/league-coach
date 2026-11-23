@@ -8,17 +8,23 @@ import { Button, Kbd } from "../ui";
 
 const KEY = "lc.puzzles";
 interface Stats {
-  index: number;
+  index: number; // stream position of the puzzle on screen
+  cursor: number; // next new stream position
+  served: number; // puzzles shown so far
+  /** Missed puzzles come back a few puzzles later (spaced retrieval). */
+  retry: { stream: number; due: number }[];
+  isRetry: boolean;
   solved: number;
   attempted: number;
   streak: number;
   best: number;
 }
-const EMPTY: Stats = { index: 0, solved: 0, attempted: 0, streak: 0, best: 0 };
+const EMPTY: Stats = { index: 0, cursor: 1, served: 0, retry: [], isRetry: false, solved: 0, attempted: 0, streak: 0, best: 0 };
 
 function load(): Stats {
   try {
-    return { ...EMPTY, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") };
+    const saved = JSON.parse(localStorage.getItem(KEY) ?? "{}");
+    return { ...EMPTY, cursor: (saved.index ?? 0) + 1, ...saved };
   } catch {
     return EMPTY;
   }
@@ -53,13 +59,20 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
     }
     setStats((s) => {
       const streak = right ? s.streak + 1 : 0;
-      return { ...s, attempted: s.attempted + 1, solved: s.solved + (right ? 1 : 0), streak, best: Math.max(s.best, streak) };
+      const retry = right ? s.retry : [...s.retry, { stream: s.index, due: s.served + 4 }];
+      return { ...s, retry, attempted: s.attempted + 1, solved: s.solved + (right ? 1 : 0), streak, best: Math.max(s.best, streak) };
     });
   }
 
   function next() {
     setPicked((cur) => {
-      if (cur !== null) setStats((s) => ({ ...s, index: s.index + 1 }));
+      if (cur !== null)
+        setStats((s) => {
+          const served = s.served + 1;
+          const due = s.retry.find((r) => r.due <= served);
+          if (due) return { ...s, served, index: due.stream, isRetry: true, retry: s.retry.filter((r) => r !== due) };
+          return { ...s, served, index: s.cursor, cursor: s.cursor + 1, isRetry: false };
+        });
       return null;
     });
   }
@@ -83,7 +96,7 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
           <p className="eyebrow">Puzzles</p>
           <h1>What's the right play?</h1>
           <p className="muted">
-            {own.length} from your own deaths, then endless drills. <Kbd>1</Kbd>–<Kbd>4</Kbd> to answer, <Kbd>Enter</Kbd> for next.
+            {own.length} from your own deaths, then endless drills. Misses come back a few puzzles later. <Kbd>1</Kbd>–<Kbd>4</Kbd> to answer, <Kbd>Enter</Kbd> for next.
           </p>
         </div>
         <div className="puzzle-stats">
@@ -112,6 +125,7 @@ export function PuzzlesView({ games }: { games: GameReport[] }) {
         </div>
         <div className={`panel puzzle-body ${picked ? (right ? "is-right" : "is-wrong") : ""}`} key={p.id}>
           <div className="puzzle-tag">
+            {stats.isRetry && <span className="tag tag-retry">Second try</span>}
             <span className={`tag ${p.source === "your-game" ? "tag-hot" : ""}`}>{p.source === "your-game" ? "From your game" : "Drill"}</span>
             <span className="cell-champ">
               <ChampIcon name={p.champion} size={28} />
