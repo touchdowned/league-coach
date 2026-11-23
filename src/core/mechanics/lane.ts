@@ -198,8 +198,8 @@ export function createLane(o: LaneOptions): LaneState {
     nextId: 1,
   };
   const ranged = (k: Kit) => k.attackRange ?? 525;
-  s.you = unit(s, "blue", "champ", { x: 1550, y: 120 }, { speed: o.you.moveSpeed, range: ranged(o.you), ad: ranged(o.you) > 300 ? 55 : 68 }).id;
-  s.enemy = unit(s, "red", "champ", { x: 2650, y: -80 }, { speed: o.enemy.moveSpeed, range: ranged(o.enemy), ad: 58 }).id;
+  s.you = unit(s, "blue", "champ", { x: 1450, y: 330 }, { speed: o.you.moveSpeed, range: ranged(o.you), ad: ranged(o.you) > 300 ? 55 : 68 }).id;
+  s.enemy = unit(s, "red", "champ", { x: 2500, y: -200 }, { speed: o.enemy.moveSpeed, range: ranged(o.enemy), ad: 58 }).id;
   spawnWave(s);
   s.nextWave = WAVE_EVERY;
   return s;
@@ -344,6 +344,7 @@ export function step(s: LaneState, dt: number): void {
   if (s.mode !== "aim") botCasts(s);
 
   for (const u of s.units) moveAndAttack(s, u, dt);
+  separate(s);
   for (const shot of s.shots) stepLaneShot(s, shot, dt);
   s.shots = s.shots.filter((x) => !x.done);
   respawns(s, dt);
@@ -389,6 +390,33 @@ function moveAndAttack(s: LaneState, u: Unit, dt: number) {
     if (dist(u.pos, u.dest) < 1) u.dest = null;
   }
   u.vel = mul(sub(u.pos, before), 1 / dt);
+}
+
+/**
+ * Unit collision: overlapping units push apart, as in the game. Champions are
+ * heavier than minions so a wave can't shove you around, and units mid-cast
+ * or mid-attack hold their ground.
+ */
+function separate(s: LaneState) {
+  const live = s.units.filter((u) => !u.dead);
+  for (let i = 0; i < live.length; i++) {
+    for (let j = i + 1; j < live.length; j++) {
+      const a = live[i];
+      const b = live[j];
+      const d = sub(b.pos, a.pos);
+      const l = len(d);
+      const min = (a.radius + b.radius) * 0.85;
+      if (l >= min) continue;
+      const n = l > 1e-6 ? mul(d, 1 / l) : { x: 0, y: 1 };
+      const push = min - l;
+      const wa = a.casting > 0 || a.winding > 0 ? 0 : a.kind === "champ" ? 1 : 3;
+      const wb = b.casting > 0 || b.winding > 0 ? 0 : b.kind === "champ" ? 1 : 3;
+      if (!wa && !wb) continue;
+      const sa = wa / (wa + wb);
+      a.pos = clampLane(sub(a.pos, mul(n, push * sa)), a.radius);
+      b.pos = clampLane(add(b.pos, mul(n, push * (1 - sa))), b.radius);
+    }
+  }
 }
 
 function walk(u: Unit, to: Vec, dt: number, stopAt: number) {

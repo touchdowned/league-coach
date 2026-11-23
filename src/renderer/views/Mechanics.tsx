@@ -90,6 +90,8 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
     setSummary(null);
     setActive(d);
     setRunId((n) => n + 1);
+    // The set fills the screen: bring the stage to the top so the ability bar is visible.
+    requestAnimationFrame(() => document.querySelector(".mech-running")?.scrollIntoView({ block: "start" }));
   }
 
   function finished(s: SetSummary) {
@@ -111,57 +113,61 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
         : null;
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <p className="eyebrow">Mechanics</p>
-          <h1>Lane lab</h1>
-          <p className="muted">A real lane with your champion, your lane opponents and live minion waves. The enemy laner gets sharper as you beat it.</p>
-        </div>
-        <div className="mech-daily">
-          <Ring value={today / DAILY_SETS} size={52} tone={today >= DAILY_SETS ? "good" : "accent"}>
-            <b>{Math.min(today, DAILY_SETS)}</b>
-          </Ring>
+    <div className={`page ${active ? "mech-running" : ""}`}>
+      {!active && (
+        <>
+        <div className="page-head">
           <div>
-            <b>{today >= DAILY_SETS ? "Warm-up done" : `${DAILY_SETS - Math.min(today, DAILY_SETS)} sets to go`}</b>
-            <p className="muted small">today</p>
+            <p className="eyebrow">Mechanics</p>
+            <h1>Lane lab</h1>
+            <p className="muted">A real lane with your champion, your lane opponents and live minion waves. The enemy laner gets sharper as you beat it.</p>
+          </div>
+          <div className="mech-daily">
+            <Ring value={today / DAILY_SETS} size={52} tone={today >= DAILY_SETS ? "good" : "accent"}>
+              <b>{Math.min(today, DAILY_SETS)}</b>
+            </Ring>
+            <div>
+              <b>{today >= DAILY_SETS ? "Warm-up done" : `${DAILY_SETS - Math.min(today, DAILY_SETS)} sets to go`}</b>
+              <p className="muted small">today</p>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="mech-pick">
-        <div>
-          <p className="eyebrow">You play</p>
-          <div className="champ-chips mech-pool">
-            {pool.map((p) => (
-              <button key={p.champion} className={`champ-chip ${p.champion === champion ? "active" : ""}`} disabled={!!active} onClick={() => setChampion(p.champion)}>
-                <ChampIcon name={p.champion} size={28} />
-                <span>{p.champion}</span>
-                {p.games > 0 && <span className="muted small">{p.games} games</span>}
-              </button>
-            ))}
-            <select className="mech-other" value={pool.some((p) => p.champion === champion) ? "" : champion} disabled={!!active} onChange={(e) => e.target.value && setChampion(e.target.value)}>
-              <option value="">Other champion…</option>
-              {CURATED_CHAMPIONS.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
+        <div className="mech-pick">
+          <div>
+            <p className="eyebrow">You play</p>
+            <div className="champ-chips mech-pool">
+              {pool.map((p) => (
+                <button key={p.champion} className={`champ-chip ${p.champion === champion ? "active" : ""}`} disabled={!!active} onClick={() => setChampion(p.champion)}>
+                  <ChampIcon name={p.champion} size={28} />
+                  <span>{p.champion}</span>
+                  {p.games > 0 && <span className="muted small">{p.games} games</span>}
+                </button>
               ))}
-            </select>
+              <select className="mech-other" value={pool.some((p) => p.champion === champion) ? "" : champion} disabled={!!active} onChange={(e) => e.target.value && setChampion(e.target.value)}>
+                <option value="">Other champion…</option>
+                {CURATED_CHAMPIONS.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <p className="eyebrow">Into</p>
+            <div className="champ-chips mech-pool">
+              {opponents.map((o) => (
+                <button key={o} className={`champ-chip ${o === opp ? "active enemy" : ""}`} disabled={!!active} onClick={() => setOpponent(o)}>
+                  <ChampIcon name={o} size={28} />
+                  <span>{o}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-        <div>
-          <p className="eyebrow">Into</p>
-          <div className="champ-chips mech-pool">
-            {opponents.map((o) => (
-              <button key={o} className={`champ-chip ${o === opp ? "active enemy" : ""}`} disabled={!!active} onClick={() => setOpponent(o)}>
-                <ChampIcon name={o} size={28} />
-                <span>{o}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+        </>
+      )}
 
       {active ? (
         <div className="panel lane-panel">
