@@ -472,7 +472,7 @@ export function findRings(frame: Frame, bg?: Frame, opts: { minCover?: number } 
     // Too small to hold an arc of a ring, or too big to be a few icons.
     if (Math.max(bw, bh) < r0 * 1.1 || bw > r0 * 9 || bh > r0 * 9 || b.px.length < r0 * 2.5) continue;
     if (b.px.length / (bw * bh) > 0.6) continue; // filled: a structure, not icons
-    for (const c of houghRings(b, w, r0 - 1, opts.minCover ?? 0.42)) rings.push({ team: b.l === 1 ? 100 : 200, cx: c.cx, cy: c.cy, r: r0, cover: c.cover });
+    for (const c of houghRings(b, w, r0 - 1, opts.minCover ?? 0.3)) rings.push({ team: b.l === 1 ? 100 : 200, cx: c.cx, cy: c.cy, r: r0, cover: c.cover });
   }
   // One icon, two rings: a second circle found on the same icon (same team, close), or
   // portrait art of the other team's colour inside a ring (pink or red art in a blue ring).

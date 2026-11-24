@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { checkCs, checkItems, type InvChange, type LivePoll } from "../src/core/telemetry";
 import type { TimelineDto, TimelineEvent } from "../src/core/types";
+import { fillOcclusions } from "../src/core/vision";
 
 const champOf = (id: number) => ({ 1: "Jax", 2: "Mordekaiser" })[id as 1 | 2] ?? "";
 
@@ -26,11 +27,23 @@ describe("stream checks", () => {
   it("judges only buys a poll could see, inside the poll window", () => {
     const ev = (type: string, t: number, itemId: number): TimelineEvent => ({ type, timestamp: t, participantId: 1, itemId }) as TimelineEvent;
     const events = [ev("ITEM_PURCHASED", 10_000, 1055), ev("ITEM_PURCHASED", 131_000, 2055), ev("ITEM_DESTROYED", 132_500, 2055), ev("ITEM_PURCHASED", 192_700, 1036), ev("ITEM_PURCHASED", 300_000, 3044)];
-    const changes: InvChange[] = [{ t: 193_500, window: 2000, champion: "Jax", kind: "item+", item: 1036 }];
+    const changes: InvChange[] = [
+      { t: 193_500, window: 2000, champion: "Jax", kind: "item+", item: 1036 },
+      { t: 50_000, window: 2000, champion: "Mordekaiser", kind: "item+", item: 3044 }, // Live Client does list 3044
+    ];
     const r = checkItems(changes, events, champOf, 400_000, 64_000);
-    expect(r.n).toBe(2); // the 1:05 buy and the placed ward aren't judged
+    expect(r.n).toBe(2); // the 0:10 buy and the placed ward aren't judged
     expect(r.measured).toMatch(/50% matched \(1\/2\)/);
     expect(r.pass).toBe(false);
-    expect(r.detail).toEqual([{ t: 300_000, champion: "Jax", item: 3044 }]);
+    expect(r.detail).toEqual({ missed: [{ t: 300_000, champion: "Jax", item: 3044 }], unlisted: [] });
+  });
+
+  it("fills an ally hidden under another icon, between two reads", () => {
+    const champs = [0, 1000, 2000, 3000].map((t) => ({ t, fog: "team" as const, at: [{ id: 2, x: 9000 + t / 10, y: 1000 }, ...(t === 0 || t === 3000 ? [{ id: 1, x: 9000 + t / 10, y: 1050 }] : [])] }));
+    expect(fillOcclusions(champs, [1, 2], () => true)).toBe(2);
+    expect(champs[1].at.find((a) => a.id === 1)).toEqual({ id: 1, x: 9100, y: 1050, inferred: true });
+    // Dead in between: not filled.
+    const c2 = [0, 1000, 3000].map((t) => ({ t, fog: "team" as const, at: [{ id: 2, x: 9000, y: 1000 }, ...(t !== 1000 ? [{ id: 1, x: 9000, y: 1000 }] : [])] }));
+    expect(fillOcclusions(c2, [1, 2], (id, t) => !(id === 1 && t === 1000))).toBe(0);
   });
 });

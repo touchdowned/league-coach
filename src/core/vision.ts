@@ -161,3 +161,48 @@ export function dropJumps(champs: ChampSample[]): number {
   }
   return dropped;
 }
+
+/**
+ * Fills in a living champion who's missing from a frame because their icon is under
+ * another one. The fill is only made when all of these hold:
+ *  - they have a read before and after, at most 12 game seconds apart;
+ *  - those two reads are within walking distance of each other;
+ *  - an icon sits within 700 units of where they'd be (the icon covering them).
+ * Their position is interpolated between the two reads and marked `inferred`, so checks
+ * and coaching can tell a fill from a read.
+ */
+export function fillOcclusions(champs: ChampSample[], ids: number[], aliveAt: (id: number, t: number) => boolean, visibleIn: (id: number, fog: ChampSample["fog"]) => boolean = () => true): number {
+  let filled = 0;
+  for (const fog of ["off", "team"] as const) {
+    const ss = champs.filter((c) => c.fog === fog).sort((a, b) => a.t - b.t);
+    for (const id of ids) {
+      if (!visibleIn(id, fog)) continue;
+      const reads: { k: number; x: number; y: number }[] = [];
+      ss.forEach((s, k) => {
+        const a = s.at.find((x) => x.id === id && !x.inferred);
+        if (a) reads.push({ k, x: a.x, y: a.y });
+      });
+      for (let r = 1; r < reads.length; r++) {
+        const A = reads[r - 1];
+        const B = reads[r];
+        if (B.k - A.k < 2) continue;
+        const t0 = ss[A.k].t;
+        const t1 = ss[B.k].t;
+        if (t1 - t0 > 12_000) continue;
+        if (Math.hypot(B.x - A.x, B.y - A.y) > 1500 + ((t1 - t0) / 1000) * 500) continue;
+        for (let k = A.k + 1; k < B.k; k++) {
+          const s = ss[k];
+          if (!aliveAt(id, s.t)) continue;
+          const f = (s.t - t0) / (t1 - t0);
+          const x = Math.round(A.x + (B.x - A.x) * f);
+          const y = Math.round(A.y + (B.y - A.y) * f);
+          const cover = [...s.at, ...(s.unk ?? [])].some((o) => (!("id" in o) || o.id !== id) && Math.hypot(o.x - x, o.y - y) <= 700);
+          if (!cover) continue;
+          s.at.push({ id, x, y, inferred: true });
+          filled++;
+        }
+      }
+    }
+  }
+  return filled;
+}

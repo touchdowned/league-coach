@@ -1,7 +1,7 @@
 import { app, desktopCapturer, nativeImage, net, screen } from "electron";
 import { bgraToRgba, crop, detectChampions, detectDots, backgroundFrame, findMinimap, findRings, Frame, iconGrid, PortraitRef, Rect } from "../core/minimap";
 import { cameraLookingAt } from "../core/camera";
-import { dropJumps, nameRings } from "../core/vision";
+import { dropJumps, fillOcclusions, nameRings } from "../core/vision";
 import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
 import { gameIdOf, LeagueClient } from "./league";
 import { parseLive, type LivePoll } from "../core/telemetry";
@@ -420,6 +420,8 @@ export async function scanReplay(
       return lp ? !lp.isDead : true;
     };
     const named = nameRings(champs, teamOf, { aliveAt, ids: players.map((p) => p.id), myTeam: me.teamId });
+    // With your team's fog only allies are always on the map, so only they get filled there.
+    const filled = fillOcclusions(champs, players.map((p) => p.id), aliveAt, (id, fog) => fog === "off" || teamOf(id) === me.teamId);
     samples.sort((a, b) => a.t - b.t);
     onProgress({ phase: "done", label: "Done", done: 1, total: 1 });
     if (debugDir) await dumpFrame(debugDir, "background", bg, { rect: minimap });
@@ -440,7 +442,7 @@ export async function scanReplay(
       until: end * 1000,
       lastFrame,
       passes,
-      tracking: { dropped, named },
+      tracking: { dropped, named, filled },
     };
     return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, scanInfo };
   } finally {

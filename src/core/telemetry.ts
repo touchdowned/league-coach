@@ -167,16 +167,25 @@ export function checkPositions(w: WaveTrack, events: TimelineEvent[], until: num
 
 /** Your allies must be on your own minimap in every team-fog sample. */
 export function checkAllies(w: WaveTrack, allyIds: number[], aliveAt: (id: number, t: number) => boolean): StreamCheck {
-  let seen = 0;
+  let read = 0;
+  let filled = 0;
   let total = 0;
   for (const s of (w.champs ?? []).filter((x) => x.fog === "team")) {
     for (const id of allyIds) {
       if (!aliveAt(id, s.t)) continue;
       total++;
-      if (s.at.some((a) => a.id === id)) seen++;
+      const a = s.at.find((x) => x.id === id);
+      if (a && !a.inferred) read++;
+      else if (a) filled++;
     }
   }
-  return { name: "pos: allies shown in team-fog samples", measured: `${pct(seen, total)}% (${seen}/${total})`, bar: ">= 98%", pass: total > 0 && seen / total >= 0.98, n: total };
+  return {
+    name: "pos: allies placed in team-fog samples",
+    measured: `${pct(read + filled, total)}% (${read + filled}/${total}): ${pct(read, total)}% read off the minimap, ${pct(filled, total)}% filled in under another icon`,
+    bar: ">= 98% placed",
+    pass: total > 0 && (read + filled) / total >= 0.98,
+    n: total,
+  };
 }
 
 /**
@@ -199,6 +208,11 @@ export function checkItems(changes: InvChange[], events: TimelineEvent[], champO
   let early = 0;
   let consumed = 0;
   const missed: { t: number; champion: string; item: number }[] = [];
+  // Items no player's Live Client inventory ever shows, all game (e.g. Control Wards).
+  const listed = new Set<number>();
+  for (const c of changes) if (c.kind === "item+" || c.kind === "item-") listed.add(c.item);
+  const unlisted = new Set<number>();
+  let unlistedN = 0;
   for (const b of buys) {
     if (b.timestamp < firstPoll) {
       early++;
@@ -219,19 +233,25 @@ export function checkItems(changes: InvChange[], events: TimelineEvent[], champO
       lags.push(Math.max(0, Math.round(best.t + best.window / 2 - b.timestamp)));
       continue;
     }
-    const gone = events.some((e) => e.type === "ITEM_DESTROYED" && e.participantId === b.participantId && e.itemId === b.itemId && e.timestamp >= b.timestamp && e.timestamp - b.timestamp <= ITEM_LAG);
+    // Consumed straight after, or a copy built into something just before (buying an item
+    // that uses your old copy, then rebuying it): the count Live Client shows never changes.
+    const gone = events.some((e) => e.type === "ITEM_DESTROYED" && e.participantId === b.participantId && e.itemId === b.itemId && Math.abs(e.timestamp - b.timestamp) <= ITEM_LAG);
     if (gone) consumed++;
+    else if (!listed.has(b.itemId!)) {
+      unlisted.add(b.itemId!);
+      unlistedN++;
+    }
     else missed.push({ t: b.timestamp, champion: champ, item: b.itemId! });
   }
-  const judged = buys.length - early - consumed;
+  const judged = matched + missed.length;
   const p90 = quantile(lags, 0.9);
   return {
     name: "inv: item buys vs ITEM_PURCHASED",
-    measured: `${pct(matched, judged)}% matched (${matched}/${judged}); first seen ${isNaN(p90) ? "-" : `${median(lags)} ms after the buy (median), ${p90} ms (90th pct)`}; not judged: ${early} before the first poll, ${consumed} consumed within ${ITEM_LAG / 1000} s`,
+    measured: `${pct(matched, judged)}% matched (${matched}/${judged}); first seen ${isNaN(p90) ? "-" : `${median(lags)} ms after the buy (median), ${p90} ms (90th pct)`}; not judged: ${early} before the first poll, ${consumed} consumed or rebought within ${ITEM_LAG / 1000} s, ${unlistedN} of items Live Client never lists${unlisted.size ? ` (${[...unlisted].join(", ")})` : ""}`,
     bar: `100% of visible buys seen within ${ITEM_LAG / 1000} s`,
     pass: judged > 0 && matched === judged,
     n: judged,
-    detail: missed,
+    detail: { missed, unlisted: [...unlisted] },
   };
 }
 

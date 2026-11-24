@@ -65,7 +65,8 @@ export interface ChampSample {
   t: number;
   /** "team": your team's fog of war, what you could see. "off": everything. */
   fog: "team" | "off";
-  at: { id: number; x: number; y: number }[];
+  /** `inferred`: not read off the minimap, filled in while hidden under another icon (see fillOcclusions). */
+  at: { id: number; x: number; y: number; inferred?: true }[];
   /** Rings seen but not matched to a champion (named later by tracking, if they can be). */
   unk?: { team: 100 | 200; x: number; y: number }[];
 }
@@ -96,7 +97,7 @@ export interface WaveTrack {
     /** Each pass: frames read, frames per game second, wall time. */
     passes?: { fog: "off" | "team"; method: "recorder" | "screenshot"; frames: number; fps: number; wallMs: number; maxBacklog?: number }[];
     /** Champion reads dropped as impossible jumps, and unmatched rings named by tracking. */
-    tracking?: { dropped: number; named: number };
+    tracking?: { dropped: number; named: number; filled?: number };
   };
 }
 
