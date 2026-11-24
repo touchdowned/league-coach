@@ -138,84 +138,96 @@ type RectFor = (size: { w: number; h: number }) => Rect;
  * exact game times (frame k = from + k / fps), much faster than screen capture and
  * independent of what's on screen. Each frame is read, then deleted. Null when the
  * recorder isn't available.
+ *
+ * Never pause the replay mid-recording: with enforceFrameRate the recorder keeps writing
+ * frames of the paused moment, which breaks frame k = from + k / fps (seen on a real run:
+ * 1901 frames for a 1 fps pass of 835 s). If reading falls far behind (each frame is ~2 MB
+ * on disk), the recording is stopped, the frames on disk are read, and a new recording
+ * starts from the next frame's time.
  */
-async function recorderPass(lc: LeagueClient, from: number, to: number, fps: number, rectFor: RectFor, onFrame: OnFrame, isCancelled: () => boolean, onTime: (t: number) => void): Promise<{ frames: number; wallMs: number; maxBacklog: number } | null> {
-  const base = pathMod.join(app.getPath("temp"), "league-coach-frames", String(Date.now()));
-  await lc.setPlayback({ time: from, paused: true });
-  await sleep(1200);
-  if (!(await lc.startFrameRecording(base, from, to, fps))) return null;
+async function recorderPass(lc: LeagueClient, from: number, to: number, fps: number, rectFor: RectFor, onFrame: OnFrame, isCancelled: () => boolean, onTime: (t: number) => void): Promise<{ frames: number; wallMs: number; maxBacklog: number; expectedFrames: number; segments: number } | null> {
+  const root = pathMod.join(app.getPath("temp"), "league-coach-frames", String(Date.now()));
   const t0 = Date.now();
-  await lc.setPlayback({ time: from, paused: false, speed: 8 });
-  let next = 0;
-  let lastProgress = Date.now();
-  let dir: string | null = null;
-  // Reading can fall behind the recorder (each frame is ~2 MB on disk): hold the replay
-  // when too many frames wait, so disk use stays bounded on any PC.
-  let held = false;
+  let frames = 0;
   let maxBacklog = 0;
+  let segments = 0;
+  let segFrom = from;
+  const expectedFrames = Math.floor((to - from) * fps + 1e-6) + 1;
   try {
-    while (true) {
-      if (isCancelled()) {
-        await lc.stopRecording();
-        break;
-      }
-      if (!dir) {
-        const subs = await fsp.readdir(base, { withFileTypes: true }).catch(() => []);
-        const d = subs.find((e) => e.isDirectory());
-        dir = d ? pathMod.join(base, d.name) : null;
-      }
-      const st = await lc.recordingState();
-      const done = !st || !st.recording;
-      if (dir) {
-        const files = (await fsp.readdir(dir).catch(() => [] as string[])).filter((f) => /^\d+\.png$/i.test(f)).sort();
-        const have = new Set(files.map((f) => parseInt(f, 10)));
-        const backlog = files.length;
-        if (backlog > maxBacklog) maxBacklog = backlog;
-        if (!held && backlog > 24) {
-          held = true;
-          await lc.setPaused(true);
-        } else if (held && backlog < 6) {
-          held = false;
-          await lc.setPaused(false);
+    while (segFrom <= to && !isCancelled()) {
+      const base = pathMod.join(root, String(segments));
+      await lc.setPlayback({ time: segFrom, paused: true });
+      await sleep(1200);
+      if (!(await lc.startFrameRecording(base, segFrom, to, fps))) return segments ? { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments } : null;
+      segments++;
+      await lc.setPlayback({ time: segFrom, paused: false, speed: 8 });
+      let next = 0;
+      let lastProgress = Date.now();
+      let dir: string | null = null;
+      let stopped = false;
+      while (true) {
+        if (isCancelled()) {
+          await lc.stopRecording();
+          break;
         }
-        for (const f of files) {
-          const k = parseInt(f, 10);
-          if (k < next) continue;
-          // A file is complete once the next one exists, or the recorder has stopped.
-          if (!done && !have.has(k + 1)) break;
-          const file = pathMod.join(dir, f);
-          const img = nativeImage.createFromPath(file);
-          if (img.isEmpty()) {
-            if (!done) break;
-          } else {
-            const sz = img.getSize();
-            // Crop before converting: only the minimap's pixels get copied.
-            await onFrame(imageToFrame(img.crop(toRectangle(rectFor({ w: sz.width, h: sz.height })))), Math.round((from + k / fps) * 1000));
+        if (!dir) {
+          const subs = await fsp.readdir(base, { withFileTypes: true }).catch(() => []);
+          const d = subs.find((e) => e.isDirectory());
+          dir = d ? pathMod.join(base, d.name) : null;
+        }
+        const st = await lc.recordingState();
+        const done = stopped || !st || !st.recording;
+        if (dir) {
+          const files = (await fsp.readdir(dir).catch(() => [] as string[])).filter((f) => /^\d+\.png$/i.test(f)).sort();
+          const have = new Set(files.map((f) => parseInt(f, 10)));
+          if (files.length > maxBacklog) maxBacklog = files.length;
+          if (!done && files.length > 80) {
+            await lc.stopRecording();
+            stopped = true;
+            await sleep(500);
+            continue;
           }
-          await fsp.unlink(file).catch(() => undefined);
-          next = k + 1;
-          lastProgress = Date.now();
-          onTime(from + k / fps);
+          for (const f of files) {
+            const k = parseInt(f, 10);
+            if (k < next) continue;
+            // A file is complete once the next one exists, or the recorder has stopped.
+            if (!done && !have.has(k + 1)) break;
+            const file = pathMod.join(dir, f);
+            const img = nativeImage.createFromPath(file);
+            if (!img.isEmpty()) {
+              const sz = img.getSize();
+              // Crop before converting: only the minimap's pixels get copied.
+              await onFrame(imageToFrame(img.crop(toRectangle(rectFor({ w: sz.width, h: sz.height })))), Math.round((segFrom + k / fps) * 1000));
+            } else if (!done) break;
+            await fsp.unlink(file).catch(() => undefined);
+            next = k + 1;
+            frames++;
+            lastProgress = Date.now();
+            onTime(segFrom + k / fps);
+          }
         }
-      }
-      if (done) break;
-      // The recorder only advances while the replay plays.
-      if (!held) {
+        if (done) break;
+        // The recorder only advances while the replay plays.
         const pb = await lc.playback();
         if (pb?.paused) await lc.setPaused(false);
+        if (Date.now() - lastProgress > 25_000) {
+          await lc.stopRecording();
+          if (frames === 0) return null;
+          stopped = true;
+          break;
+        }
+        await sleep(150);
       }
-      if (Date.now() - lastProgress > 25_000) {
-        await lc.stopRecording();
-        if (next === 0) return null;
-        break;
-      }
-      await sleep(150);
+      await lc.setPaused(true);
+      const segEnd = segFrom + Math.max(0, next - 1) / fps;
+      if (!stopped || isCancelled() || next === 0) break;
+      segFrom = segEnd + 1 / fps;
     }
   } finally {
     await lc.setPaused(true);
-    await fsp.rm(base, { recursive: true, force: true }).catch(() => undefined);
+    await fsp.rm(root, { recursive: true, force: true }).catch(() => undefined);
   }
-  return { frames: next, wallMs: Date.now() - t0, maxBacklog };
+  return { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments };
 }
 
 /**
@@ -398,7 +410,7 @@ export async function scanReplay(
       if (method === "recorder") {
         const r = await recorderPass(lc, from, end, fps, rectFor, reader(fog), isCancelled, label);
         if (r) {
-          passes.push({ fog, method, frames: r.frames, fps, wallMs: r.wallMs, maxBacklog: r.maxBacklog });
+          passes.push({ fog, method, frames: r.frames, fps, wallMs: r.wallMs, maxBacklog: r.maxBacklog, expectedFrames: r.expectedFrames, segments: r.segments });
           return;
         }
         method = "screenshot";

@@ -296,6 +296,14 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
     const lp = best?.players.find((x) => x.championName === champOf(id));
     return !lp?.isDead;
   };
+  // Frame times are from + k / fps: they're only right if each pass gave the frames its span implies.
+  const framesCheck = {
+    name: "scan: frames per pass vs game time covered",
+    measured: (waves.scanInfo?.passes ?? []).map((p) => `${p.fog}: ${p.frames}/${p.expectedFrames ?? "?"} in ${p.segments ?? 1} recording(s), ${Math.round(p.wallMs / 1000)} s`).join("; "),
+    bar: "every pass within 0.5% of expected",
+    pass: (waves.scanInfo?.passes ?? []).every((p) => p.method !== "recorder" || (p.expectedFrames && Math.abs(p.frames - p.expectedFrames) <= p.expectedFrames * 0.005)),
+    n: waves.scanInfo?.passes?.length ?? 0,
+  };
   const checks = [
     checkPositions(waves, events, until),
     checkAllies(waves, allies, aliveAt),
@@ -313,7 +321,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
     scanInfo: waves.scanInfo,
     samples: waves.samples.length,
     champSamples: waves.champs?.length ?? 0,
-    checks: checks.map(({ detail, ...c }) => c),
+    checks: [framesCheck, ...checks.map(({ detail, ...c }) => c)],
     positionErrors: checks[0].detail,
     missedBuys: checks[2].detail,
     csDetail: checks[4].detail,
