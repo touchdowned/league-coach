@@ -58,6 +58,10 @@ export interface TimelineEvent {
   wardType?: string;
   participantId?: number;
   itemId?: number;
+  /** ITEM_UNDO: the item before and after, and the gold it gave back. */
+  beforeId?: number;
+  afterId?: number;
+  goldGain?: number;
   /** BUILDING_KILL / TURRET_PLATE_DESTROYED: the team that lost it. */
   teamId?: number;
   laneType?: string;

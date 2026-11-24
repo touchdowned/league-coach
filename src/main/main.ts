@@ -10,6 +10,7 @@ import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
 import { openReplay, scanReplay } from "./scan";
 import { checkAllies, checkCs, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
+import { checkGold, itemTable } from "../core/gold";
 import { growBench, readBench } from "./bench";
 import type { WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
@@ -266,7 +267,7 @@ async function readReplay(matchId: string): Promise<GameReport> {
  * Opens the replay, does a full read with frame dumps, checks every stream against
  * Riot's exact events, writes verify-<matchId>.json, and quits.
  */
-async function verifyScan(matchId: string, untilSec: number, outDir: string) {
+async function verifyScan(matchId: string, untilSec: number, outDir: string, reuse = false) {
   const s = await store.readSettings();
   const { gameName, tagLine } = parseRiotId(s.riotId);
   const riot = new RiotClient(s.apiKey.trim(), s.region, store.cache());
@@ -283,13 +284,22 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
   }
   if (!meP) throw new Error("You're not in this match.");
   const me = { id: meP.participantId, champion: meP.championName, teamId: meP.teamId };
-  const lc = await league();
-  await openReplay(lc, matchId, (l) => console.log(l));
-  const debugDir = path.join(outDir, `frames-${matchId}`);
   const t0 = Date.now();
-  const waves = await scanReplay(lc, matchId, (p) => console.log(p.label), () => false, players, me, untilSec, debugDir);
+  // --reuse: re-run the checks on the last scan's file, no replay needed.
+  let waves = reuse ? await store.readJson<WaveTrack | null>(wavesFile(matchId), null) : null;
+  if (!waves) {
+    const lc = await league();
+    await openReplay(lc, matchId, (l) => console.log(l));
+    const debugDir = path.join(outDir, `frames-${matchId}`);
+    waves = await scanReplay(lc, matchId, (p) => console.log(p.label), () => false, players, me, untilSec, debugDir);
+    await store.writeJson(wavesFile(matchId), waves);
+  }
   const wallSec = Math.round((Date.now() - t0) / 1000);
-  await store.writeJson(wavesFile(matchId), waves);
+  // Item prices and recipes for the gold estimate, from the Data Dragon version of this patch.
+  const versions = (await (await net.fetch("https://ddragon.leagueoflegends.com/api/versions.json")).json()) as string[];
+  const patch = match.info.gameVersion.split(".").slice(0, 2).join(".");
+  const ddv = versions.find((v) => v.startsWith(patch + ".")) ?? versions[0];
+  const items = itemTable(await (await net.fetch(`https://ddragon.leagueoflegends.com/cdn/${ddv}/data/en_US/item.json`)).json());
   // Only judge what was actually read: a pass that stopped early shouldn't fail on frames it never saw.
   const until = Math.min(untilSec * 1000, waves.scanInfo?.lastFrame || untilSec * 1000);
   const events = timeline.info.frames.flatMap((f) => f.events ?? []);
@@ -317,6 +327,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
     checkItems(changes, events, champOf, until, polls[0]?.t ?? 0),
     checkLevels(changes, events, champOf, until),
     checkCs(polls, timeline, champOf, until),
+    checkGold(timeline, items, until),
   ];
   const report = {
     matchId,
@@ -332,6 +343,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
     positionErrors: checks[0].detail,
     missedBuys: checks[2].detail,
     csDetail: checks[4].detail,
+    itemsVersion: ddv,
   };
   await fs.mkdir(outDir, { recursive: true });
   await fs.writeFile(path.join(outDir, `verify-${matchId}.json`), JSON.stringify(report, null, 2));
@@ -510,7 +522,7 @@ app.whenReady().then(async () => {
   if (vi >= 0) {
     const arg = (k: string) => (process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : undefined);
     try {
-      await verifyScan(process.argv[vi + 1], Number(arg("--until") ?? 900), arg("--out") ?? path.join(app.getPath("userData"), "verify"));
+      await verifyScan(process.argv[vi + 1], Number(arg("--until") ?? 900), arg("--out") ?? path.join(app.getPath("userData"), "verify"), process.argv.includes("--reuse"));
     } catch (e) {
       console.error("verify failed:", (e as Error).message);
     }
