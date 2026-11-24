@@ -46,7 +46,8 @@ app.whenReady().then(async () => {
   const nameOf = (id) => refs.find((r) => r.id === id)?.name;
   const sweep = (process.env.MIN_COVER || "0.42,0.36,0.3").split(",").map(Number);
   const runs = [];
-  for (const minCover of sweep) {
+  const fills = (process.env.MIN_FILL || "0.45").split(",").map(Number);
+  for (const minCover of sweep) for (const minFill of fills) {
   const tot = { labelled: 0, ringed: 0, named: 0, wrongName: 0, falseRings: 0, stackedLabelled: 0, stackedRinged: 0, minionErr: [] };
   const frames = [];
   for (const [file, l] of Object.entries(labels)) {
@@ -88,7 +89,7 @@ app.whenReady().then(async () => {
     const isOff = !/team/.test(file);
     let minions = null;
     if (isOff && l.minions) {
-      const dots = mm.detectDots(f, bg, { exclude: rings });
+      const dots = mm.detectDots(f, bg, { exclude: rings, minFill });
       const s = waves.sampleFromDots(0, dots);
       // Each blob, for looking at what was counted where.
       var blobs = dots.map((d) => ({ team: d.team, at: Object.values(mm.gameToPixel(d.x, d.y, f.w)).map(Math.round), area: d.area, n: d.n }));
@@ -107,6 +108,7 @@ app.whenReady().then(async () => {
   const e = tot.minionErr.sort((a, b) => a - b);
   const summary = {
     minCover,
+    minFill,
     frames: frames.length,
     ringRecall: `${tot.ringed}/${tot.labelled}`,
     stackedRingRecall: `${tot.stackedRinged}/${tot.stackedLabelled}`,

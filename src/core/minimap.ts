@@ -137,6 +137,10 @@ export interface DotOpts {
   /** Blob size limits as a fraction of the minimap's width (diameter). */
   minD?: number;
   maxD?: number;
+  /** Filled share of a blob's box below which it's an arc or a chevron, not a dot. */
+  minFill?: number;
+  /** Override for where structure icons are drawn (see STRUCTURE_SCALE). */
+  structureScale?: number;
   /** Champion rings: anything inside one is part of the icon, not a minion. */
   exclude?: { cx: number; cy: number; r: number }[];
 }
@@ -160,7 +164,13 @@ export const STRUCTURES: { x: number; y: number }[] = [
   { x: 11261, y: 13676 }, { x: 11598, y: 11667 }, { x: 13604, y: 11316 },
   { x: 12611, y: 13084 }, { x: 13052, y: 12612 },
 ];
-const STRUCTURE_R = 380;
+/**
+ * Measured on a real replay's minimap: structure icons sit about 4.5% further from the
+ * map centre than gameToPixel puts their game positions, up to 6 px out at the corners.
+ * The mask is placed where the icons are drawn, with a radius that covers the icon.
+ */
+const STRUCTURE_SCALE = 1.045;
+const STRUCTURE_R_PX = 7.5;
 
 /** Fountains, where champion icons sit and no minion ever is (game units). */
 export const FOUNTAINS = [
@@ -184,7 +194,8 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
   }
   for (const st of STRUCTURES) {
     const c = gameToPixel(st.x, st.y, w);
-    markDisc(masked, w, h, c.px, c.py, (STRUCTURE_R / (RIFT.maxX - RIFT.minX)) * w);
+    const k = o.structureScale ?? STRUCTURE_SCALE;
+    markDisc(masked, w, h, w / 2 + (c.px - w / 2) * k, h / 2 + (c.py - h / 2) * k, STRUCTURE_R_PX * (w / 247));
   }
   for (const e of o.exclude ?? []) markDisc(masked, w, h, e.cx, e.cy, e.r + 2);
   for (let p = 0; p < w * h; p++) {
@@ -231,7 +242,7 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
     const bh = maxY - minY + 1;
     if (bw > maxD || bh > maxD) continue; // a ring or bar, not a dot
     // Minion dots are filled; a thin arc (a ring edge, an ability circle) is not.
-    if (bw * bh >= 9 && area / (bw * bh) < 0.45) continue;
+    if (bw * bh >= 9 && area / (bw * bh) < (o.minFill ?? 0.45)) continue;
     const g = pixelToGame(sx / area + 0.5, sy / area + 0.5, w);
     dots.push({ team: l === 1 ? 100 : 200, x: Math.round(g.x), y: Math.round(g.y), area });
   }
