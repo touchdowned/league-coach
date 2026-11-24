@@ -166,14 +166,15 @@ export function dropJumps(champs: ChampSample[]): number {
  * Fills in a living champion who's missing from a frame because their icon is under
  * another one, marked `inferred` so checks and coaching can tell a fill from a read:
  *  - Only short gaps (reads either side at most 6 game seconds apart, within walking
- *    distance), with an icon within 700 units of the spot: interpolated between the two
+ *    distance), with an icon (either team's) within an icon's width of the spot: interpolated between the two
  *    reads. Held-out reads on a real replay put this at median 94 units, 90% under 302
  *    for 1-2 s gaps, and median 303, 90% under 742 for ~5 s gaps; longer gaps were
  *    worse, hence the 6 s cap.
  */
 export function fillOcclusions(champs: ChampSample[], ids: number[], aliveAt: (id: number, t: number) => boolean, visibleIn: (id: number, fog: ChampSample["fog"]) => boolean = () => true): number {
   let filled = 0;
-  const near = 700;
+  // A covering icon's centre is up to one icon width away (icons are ~24 px, ~1400 units).
+  const near = 1400;
   for (const fog of ["off", "team"] as const) {
     const ss = champs.filter((c) => c.fog === fog).sort((a, b) => a.t - b.t);
     const readOf = (s: ChampSample, id: number) => s.at.find((x) => x.id === id && !x.inferred);

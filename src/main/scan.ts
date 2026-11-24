@@ -127,6 +127,9 @@ function scaleRect(r: Rect, from: { w: number; h: number }, to: { w: number; h: 
 }
 
 /** Called with each frame's minimap crop and its game time (ms). */
+/** Verify runs only: override the ring cover threshold to compare settings on a real replay. */
+const MIN_COVER = Number(process.env.LEAGUE_COACH_MIN_COVER) || 0;
+
 const toRectangle = (r: Rect) => ({ x: r.x, y: r.y, width: r.w, height: r.h });
 
 type OnFrame = (minimap: Frame, t: number) => Promise<void> | void;
@@ -364,7 +367,7 @@ export async function scanReplay(
     const reader = (fog: ChampSample["fog"]): OnFrame => async (frame, t) => {
       // Minimap scale differs from the background's? (recorder at another resolution)
       const okBg = frame.w === bg.w && frame.h === bg.h;
-      const rings = findRings(frame, okBg ? bg : undefined);
+      const rings = findRings(frame, okBg ? bg : undefined, MIN_COVER ? { minCover: MIN_COVER } : {});
       const dots = fog === "off" && okBg ? detectDots(frame, bg, { exclude: rings }) : [];
       if (fog === "off") samples.push(sampleFromDots(t, dots));
       if (refs.length) {

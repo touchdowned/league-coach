@@ -293,7 +293,11 @@ export function checkCs(polls: LivePoll[], timeline: TimelineDto, champOf: (id: 
       const lp = best.players.find((x) => x.championName === name);
       if (!lp) continue;
       const total = pf.minionsKilled + pf.jungleMinionsKilled;
-      const good = [total - 2, total, total + 2].some((c) => Math.floor(Math.max(0, c) / 10) * 10 === lp.cs);
+      // The poll is up to 1.5 s off the frame: allow the CS a laner can take in that time
+      // (about 4 a second when a wave dies) on top of 2 for the frame's own rounding.
+      const k = 2 + Math.ceil((Math.abs(best.t - f.timestamp) / 1000) * 4);
+      let good = false;
+      for (let c = total - k; c <= total + k && !good; c++) good = Math.floor(Math.max(0, c) / 10) * 10 === lp.cs;
       n++;
       seen[name] = (seen[name] ?? 0) + 1;
       if (good) ok++;
