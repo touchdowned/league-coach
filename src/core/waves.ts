@@ -97,7 +97,7 @@ export interface WaveTrack {
     /** Each pass: frames read, frames per game second, wall time. */
     passes?: { fog: "off" | "team"; method: "recorder" | "screenshot"; frames: number; fps: number; wallMs: number; maxBacklog?: number }[];
     /** Champion reads dropped as impossible jumps, and unmatched rings named by tracking. */
-    tracking?: { dropped: number; named: number; filled?: number };
+    tracking?: { dropped: number; named: number; filled?: number; rematched?: number };
   };
 }
 

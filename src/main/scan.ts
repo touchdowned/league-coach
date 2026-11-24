@@ -1,5 +1,5 @@
 import { app, desktopCapturer, nativeImage, net, screen } from "electron";
-import { bgraToRgba, crop, detectChampions, detectDots, backgroundFrame, findMinimap, findRings, Frame, iconGrid, PortraitRef, Rect } from "../core/minimap";
+import { bgraToRgba, crop, detectChampions, detectDots, backgroundFrame, findMinimap, findRings, Frame, rematch, iconGrid, PortraitRef, Rect } from "../core/minimap";
 import { cameraLookingAt } from "../core/camera";
 import { dropJumps, fillOcclusions, nameRings } from "../core/vision";
 import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
@@ -346,6 +346,8 @@ export async function scanReplay(
     const captureMs: number[] = [];
     const passes: NonNullable<NonNullable<WaveTrack["scanInfo"]>["passes"]> = [];
     let dumped = 0;
+    const learned = new Map<number, { team: 100 | 200; grids: number[][] }>();
+    const unknownGrids: { sample: ChampSample; i: number; grid: number[]; team: 100 | 200 }[] = [];
     const rectFor: RectFor = (size) => scaleRect(minimap, screenSize, size);
     const reader = (fog: ChampSample["fog"]): OnFrame => async (frame, t) => {
       // Minimap scale differs from the background's? (recorder at another resolution)
@@ -356,8 +358,18 @@ export async function scanReplay(
       if (refs.length) {
         const found = detectChampions(frame, refs, 38, rings);
         const at = found.filter((c) => c.id > 0).map(({ id, x, y }) => ({ id, x, y }));
-        const unk = found.filter((c) => c.id === 0).map(({ team, x, y }) => ({ team, x, y }));
-        champs.push({ t, fog, at, ...(unk.length ? { unk } : {}) });
+        const unkF = found.filter((c) => c.id === 0);
+        const unk = unkF.map(({ team, x, y }) => ({ team, x, y }));
+        const sample: ChampSample = { t, fog, at, ...(unk.length ? { unk } : {}) };
+        champs.push(sample);
+        // Learn this replay's own icons from confident, uncovered matches.
+        for (const c of found) {
+          if (c.id === 0 || c.score > 20 || c.cover < 0.95) continue;
+          const l = learned.get(c.id) ?? learned.set(c.id, { team: c.team, grids: [] }).get(c.id)!;
+          if (l.grids.length < 24) l.grids.push(c.grid);
+          else l.grids[(Math.random() * 24) | 0] = c.grid;
+        }
+        unkF.forEach((c, i) => unknownGrids.push({ sample, i, grid: c.grid, team: c.team }));
         if (debugDir && dumped++ % 12 === 0) await dumpFrame(debugDir, `${String(t).padStart(7, "0")}-${fog}`, frame, { t, fog, dots, rings, champs: found });
       }
     };
@@ -402,6 +414,28 @@ export async function scanReplay(
     if (isCancelled()) throw new Error("Stopped.");
     champs.sort((a, b) => a.t - b.t);
     const teamOf = (id: number) => players.find((p) => p.id === id)?.teamId ?? 0;
+    // Second look at unmatched rings, against the icons learned from this replay.
+    const ids = rematch(
+      unknownGrids.map((u) => ({ grid: u.grid, team: u.team, taken: new Set(u.sample.at.map((a) => a.id)) })),
+      learned,
+    );
+    let rematched = 0;
+    const takenNow = new Map<ChampSample, Set<number>>();
+    unknownGrids.forEach((u, k) => {
+      const id = ids[k];
+      if (!id) return;
+      const taken = takenNow.get(u.sample) ?? takenNow.set(u.sample, new Set(u.sample.at.map((a) => a.id))).get(u.sample)!;
+      if (taken.has(id)) return;
+      taken.add(id);
+      const r = u.sample.unk![u.i];
+      u.sample.at.push({ id, x: r.x, y: r.y });
+      (r as { done?: true }).done = true;
+      rematched++;
+    });
+    for (const s of champs) if (s.unk) {
+      s.unk = s.unk.filter((r) => !(r as { done?: true }).done);
+      if (!s.unk.length) delete s.unk;
+    }
     const dropped = dropJumps(champs);
     // Who's alive when, from Live Client's isDead (polls are sorted by game time).
     const aliveAt = (id: number, t: number) => {
@@ -442,7 +476,7 @@ export async function scanReplay(
       until: end * 1000,
       lastFrame,
       passes,
-      tracking: { dropped, named, filled },
+      tracking: { dropped, named, filled, rematched },
     };
     return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, scanInfo };
   } finally {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { checkCs, checkItems, type InvChange, type LivePoll } from "../src/core/telemetry";
 import type { TimelineDto, TimelineEvent } from "../src/core/types";
 import { fillOcclusions } from "../src/core/vision";
+import { rematch } from "../src/core/minimap";
 
 const champOf = (id: number) => ({ 1: "Jax", 2: "Mordekaiser" })[id as 1 | 2] ?? "";
 
@@ -41,15 +42,30 @@ describe("stream checks", () => {
   it("fills an ally hidden under another icon, between two reads", () => {
     const champs = [0, 1000, 2000, 3000].map((t) => ({ t, fog: "team" as const, at: [{ id: 2, x: 9000 + t / 10, y: 1000 }, ...(t === 0 || t === 3000 ? [{ id: 1, x: 9000 + t / 10, y: 1050 }] : [])] }));
     expect(fillOcclusions(champs, [1, 2], () => true)).toBe(2);
-    expect(champs[1].at.find((a) => a.id === 1)).toEqual({ id: 1, x: 9100, y: 1000, inferred: true }); // riding along on 2
+    expect(champs[1].at.find((a) => a.id === 1)).toEqual({ id: 1, x: 9100, y: 1050, inferred: true });
     // Dead in between: not filled.
     const c2 = [0, 1000, 3000].map((t) => ({ t, fog: "team" as const, at: [{ id: 2, x: 9000, y: 1000 }, ...(t !== 1000 ? [{ id: 1, x: 9000, y: 1000 }] : [])] }));
     expect(fillOcclusions(c2, [1, 2], (id, t) => !(id === 1 && t === 1000))).toBe(0);
   });
+});
 
-  it("keeps a lane partner on their duo through a long stack", () => {
-    const champs = Array.from({ length: 30 }, (_, k) => ({ t: k * 1000, fog: "team" as const, at: [{ id: 2, x: 12000 + k * 10, y: 1500 }, ...(k === 0 || k === 29 ? [{ id: 1, x: 12000 + k * 10 + 100, y: 1550 }] : [])] }));
-    expect(fillOcclusions(champs, [1, 2], () => true)).toBe(28);
-    expect(champs[15].at.find((a) => a.id === 1)).toEqual({ id: 1, x: 12150, y: 1500, inferred: true });
+describe("second look at unmatched rings", () => {
+  it("names a ring from this replay's own icons only with a clear margin", () => {
+    const g = (v: number) => Array.from({ length: 192 }, (_, i) => ((i * 37 + v * 11) % 97) * 2);
+    const learned = new Map([
+      [9, { team: 200 as const, grids: [g(1)] }],
+      [10, { team: 200 as const, grids: [g(2)] }],
+    ]);
+    const ids = rematch(
+      [
+        { grid: g(1).map((x) => x + 3), team: 200, taken: new Set<number>() },
+        { grid: g(1), team: 200, taken: new Set([9]) },
+        { grid: g(1), team: 100, taken: new Set<number>() },
+      ],
+      learned,
+    );
+    expect(ids[0]).toBe(9);
+    expect(ids[1]).toBe(0); // 9 already in the frame; 10 doesn't fit
+    expect(ids[2]).toBe(0); // wrong team
   });
 });

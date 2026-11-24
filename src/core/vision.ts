@@ -164,12 +164,8 @@ export function dropJumps(champs: ChampSample[]): number {
 
 /**
  * Fills in a living champion who's missing from a frame because their icon is under
- * another one, two ways, both marked `inferred` so checks and coaching can tell a fill
- * from a read:
- *  - Riding along: the reads either side of the gap both sit within 700 units of the
- *    same other champion, who is read in every frame between. The hidden champion is
- *    placed on that champion (a lane duo stacked for minutes). Any gap length.
- *  - Short gaps (reads either side at most 6 game seconds apart, within walking
+ * another one, marked `inferred` so checks and coaching can tell a fill from a read:
+ *  - Only short gaps (reads either side at most 6 game seconds apart, within walking
  *    distance), with an icon within 700 units of the spot: interpolated between the two
  *    reads. Held-out reads on a real replay put this at median 94 units, 90% under 302
  *    for 1-2 s gaps, and median 303, 90% under 742 for ~5 s gaps; longer gaps were
@@ -183,6 +179,8 @@ export function fillOcclusions(champs: ChampSample[], ids: number[], aliveAt: (i
     const readOf = (s: ChampSample, id: number) => s.at.find((x) => x.id === id && !x.inferred);
     for (const id of ids) {
       if (!visibleIn(id, fog)) continue;
+      // Placing a long-stacked champion on the icon over them was measured too: median
+      // 600-700 units off at best, worse than interpolation at every gap length. Not used.
       const reads: { k: number; x: number; y: number }[] = [];
       ss.forEach((s, k) => {
         const a = readOf(s, id);
@@ -194,24 +192,6 @@ export function fillOcclusions(champs: ChampSample[], ids: number[], aliveAt: (i
         if (B.k - A.k < 2) continue;
         const t0 = ss[A.k].t;
         const t1 = ss[B.k].t;
-        // Riding along with someone read at both ends and all through the gap.
-        const host = ss[A.k].at.find((o) => {
-          if (o.id === id || o.inferred || Math.hypot(o.x - A.x, o.y - A.y) > near) return false;
-          const end = readOf(ss[B.k], o.id);
-          if (!end || Math.hypot(end.x - B.x, end.y - B.y) > near) return false;
-          for (let k = A.k + 1; k < B.k; k++) if (!readOf(ss[k], o.id)) return false;
-          return true;
-        });
-        if (host) {
-          for (let k = A.k + 1; k < B.k; k++) {
-            const s = ss[k];
-            if (!aliveAt(id, s.t)) continue;
-            const h = readOf(s, host.id)!;
-            s.at.push({ id, x: h.x, y: h.y, inferred: true });
-            filled++;
-          }
-          continue;
-        }
         if (t1 - t0 > 6000) continue;
         if (Math.hypot(B.x - A.x, B.y - A.y) > 1500 + ((t1 - t0) / 1000) * 500) continue;
         for (let k = A.k + 1; k < B.k; k++) {

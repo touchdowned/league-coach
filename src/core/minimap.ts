@@ -276,7 +276,7 @@ export function iconGrid(icon: Frame): number[] {
   return portraitGrid(icon, icon.w / 2, icon.h / 2, icon.w / 2);
 }
 
-function gridDiff(a: number[], b: number[]): number {
+export function gridDiff(a: number[], b: number[]): number {
   // Compare shapes of colour, not brightness: fogged or dimmed portraits stay matchable.
   const mean = (v: number[]) => v.reduce((s, x) => s + x, 0) / v.length;
   const ma = mean(a);
@@ -497,31 +497,60 @@ export function findRings(frame: Frame, bg?: Frame, opts: { minCover?: number } 
  * portrait inside against the ten champions in the game. Rings that match no one well
  * enough come back with id 0, so tracking can still name them.
  */
-export function detectChampions(frame: Frame, refs: PortraitRef[], maxScore = 38, rings = findRings(frame)): (ChampDot & { team: 100 | 200 })[] {
+export type FoundChamp = ChampDot & { team: 100 | 200; /** The ring's portrait grid and how much of the ring showed, for matching later. */ grid: number[]; cover: number };
+
+export function detectChampions(frame: Frame, refs: PortraitRef[], maxScore = 38, rings = findRings(frame)): FoundChamp[] {
   const w = frame.w;
   const pairs: { ring: number; ref: PortraitRef; score: number }[] = [];
+  const grids: number[][] = [];
   rings.forEach((ring, i) => {
     // A covered ring's portrait is partly someone else's: judge it more loosely.
     const g = portraitGrid(frame, ring.cx, ring.cy, ring.r);
+    grids[i] = g;
     const slack = ring.cover < 0.9 ? 1 + (0.9 - ring.cover) : 1;
     for (const ref of refs) if (ref.team === ring.team) pairs.push({ ring: i, ref, score: gridDiff(g, ref.grid) / slack });
   });
   pairs.sort((a, b) => a.score - b.score);
   const usedRing = new Set<number>();
   const usedRef = new Set<number>();
-  const out: (ChampDot & { team: 100 | 200 })[] = [];
+  const out: FoundChamp[] = [];
   for (const p of pairs) {
     if (p.score > maxScore || usedRing.has(p.ring) || usedRef.has(p.ref.id)) continue;
     usedRing.add(p.ring);
     usedRef.add(p.ref.id);
     const ring = rings[p.ring];
     const g = pixelToGame(ring.cx + 0.5, ring.cy + 0.5, w);
-    out.push({ id: p.ref.id, team: ring.team, x: Math.round(g.x), y: Math.round(g.y), score: Math.round(p.score) });
+    out.push({ id: p.ref.id, team: ring.team, x: Math.round(g.x), y: Math.round(g.y), score: Math.round(p.score), grid: grids[p.ring], cover: ring.cover });
   }
   rings.forEach((ring, i) => {
     if (usedRing.has(i)) return;
     const g = pixelToGame(ring.cx + 0.5, ring.cy + 0.5, w);
-    out.push({ id: 0, team: ring.team, x: Math.round(g.x), y: Math.round(g.y), score: 999 });
+    out.push({ id: 0, team: ring.team, x: Math.round(g.x), y: Math.round(g.y), score: 999, grid: grids[i], cover: ring.cover });
   });
   return out;
+}
+
+/**
+ * Second look at rings nobody matched, against portraits learned from this replay's own
+ * minimap: the grids of confident matches (Data Dragon's square art differs from the
+ * in-game minimap icon for some champions). A ring is named only when one champion
+ * clearly fits best, by a margin over the next, and isn't already in that frame.
+ */
+export function rematch(
+  unknowns: { grid: number[]; team: 100 | 200; taken: Set<number> }[],
+  learned: Map<number, { team: 100 | 200; grids: number[][] }>,
+  maxScore = 30,
+  margin = 6,
+): (number | 0)[] {
+  return unknowns.map((u) => {
+    const scores: { id: number; s: number }[] = [];
+    for (const [id, l] of learned) {
+      if (l.team !== u.team || u.taken.has(id) || !l.grids.length) continue;
+      scores.push({ id, s: Math.min(...l.grids.map((g) => gridDiff(u.grid, g))) });
+    }
+    scores.sort((a, b) => a.s - b.s);
+    if (!scores.length || scores[0].s > maxScore) return 0;
+    if (scores.length > 1 && scores[1].s - scores[0].s < margin) return 0;
+    return scores[0].id;
+  });
 }
