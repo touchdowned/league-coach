@@ -440,7 +440,7 @@ function houghRings(b: Blob, w: number, r: number, minCover: number): { cx: numb
  * blobs that are several touching rings, or a ring partly under another icon, are split
  * with a circle search at the ring size the clean ones show.
  */
-export function findRings(frame: Frame, bg?: Frame): Ring[] {
+export function findRings(frame: Frame, bg?: Frame, opts: { minCover?: number } = {}): Ring[] {
   const { w, h } = frame;
   const all = blobs(teamLabels(frame, bg), w, h);
   const minD = w * 0.045;
@@ -472,9 +472,24 @@ export function findRings(frame: Frame, bg?: Frame): Ring[] {
     // Too small to hold an arc of a ring, or too big to be a few icons.
     if (Math.max(bw, bh) < r0 * 1.1 || bw > r0 * 9 || bh > r0 * 9 || b.px.length < r0 * 2.5) continue;
     if (b.px.length / (bw * bh) > 0.6) continue; // filled: a structure, not icons
-    for (const c of houghRings(b, w, r0 - 1, 0.42)) rings.push({ team: b.l === 1 ? 100 : 200, cx: c.cx, cy: c.cy, r: r0, cover: c.cover });
+    for (const c of houghRings(b, w, r0 - 1, opts.minCover ?? 0.42)) rings.push({ team: b.l === 1 ? 100 : 200, cx: c.cx, cy: c.cy, r: r0, cover: c.cover });
   }
-  return rings;
+  // One icon, two rings: a second circle found on the same icon (same team, close), or
+  // portrait art of the other team's colour inside a ring (pink or red art in a blue ring).
+  // Keep the ring that more of the circle backs.
+  const keep = rings.map(() => true);
+  const order = rings.map((_, i) => i).sort((a, b) => rings[b].cover - rings[a].cover);
+  for (let a = 0; a < order.length; a++) {
+    const A = rings[order[a]];
+    if (!keep[order[a]]) continue;
+    for (let b = a + 1; b < order.length; b++) {
+      const B = rings[order[b]];
+      if (!keep[order[b]]) continue;
+      const d = Math.hypot(A.cx - B.cx, A.cy - B.cy);
+      if (d < (A.team === B.team ? 0.75 : 0.5) * r0) keep[order[b]] = false;
+    }
+  }
+  return rings.filter((_, i) => keep[i]);
 }
 
 /**

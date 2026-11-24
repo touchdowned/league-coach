@@ -58,20 +58,31 @@ export function mergeReplayPositions(track: Track, w: WaveTrack | undefined): Tr
 
 /**
  * Names rings the portrait matcher couldn't (icons stacked on each other, a portrait
- * dimmed by an ability). A ring of team T is champion X when X is the only one of T's
- * missing champions whose last read, within 6 game seconds, is close enough to have
- * walked there (champions move under 500 units a second; 3500 units allows for blinks).
+ * dimmed by an ability), in two ways:
+ *  1. Tracking: a ring of team T is champion X when X is the only one of T's missing
+ *     champions whose last read, within 6 game seconds, is close enough to have walked
+ *     there (under 500 units a second; up to 3500 units allows for blinks).
+ *  2. Elimination: every living champion is on the minimap with fog off, and every
+ *     living ally is with your team's fog. So when a frame has exactly as many unnamed
+ *     rings of a team as it has living champions of that team missing, they pair up,
+ *     nearest last read first. `aliveAt` (from Live Client's isDead) says who's living.
  * Works through both fog views in time order, and changes `champs` in place.
  */
-export function nameRings(champs: ChampSample[], teamOf: (id: number) => number): number {
+export function nameRings(champs: ChampSample[], teamOf: (id: number) => number, o: { aliveAt?: (id: number, t: number) => boolean; ids?: number[]; myTeam?: number } = {}): number {
   let named = 0;
   for (const fog of ["off", "team"] as const) {
     const last = new Map<number, { t: number; x: number; y: number }>();
     for (const s of champs.filter((c) => c.fog === fog).sort((a, b) => a.t - b.t)) {
       if (s.unk?.length) {
         const present = new Set(s.at.map((a) => a.id));
-        const left: typeof s.unk = [];
-        // Pair rings with candidates closest first, so two unknowns don't swap.
+        const usedU = new Set<number>();
+        const take = (u: number, id: number) => {
+          usedU.add(u);
+          present.add(id);
+          s.at.push({ id, x: s.unk![u].x, y: s.unk![u].y });
+          named++;
+        };
+        // 1. Tracking. Pair rings with candidates closest first, so two unknowns don't swap.
         const pairs: { u: number; id: number; d: number }[] = [];
         s.unk.forEach((u, i) => {
           for (const [id, p] of last) {
@@ -81,18 +92,31 @@ export function nameRings(champs: ChampSample[], teamOf: (id: number) => number)
           }
         });
         pairs.sort((a, b) => a.d - b.d);
-        const usedU = new Set<number>();
         for (const p of pairs) {
           if (usedU.has(p.u) || present.has(p.id)) continue;
           // Ambiguous: another candidate nearly as close to the same ring.
           const rival = pairs.find((q) => q.u === p.u && q.id !== p.id && !present.has(q.id) && q.d < p.d + 400);
           if (rival) continue;
-          usedU.add(p.u);
-          present.add(p.id);
-          s.at.push({ id: p.id, x: s.unk[p.u].x, y: s.unk[p.u].y });
-          named++;
+          take(p.u, p.id);
         }
-        s.unk.forEach((u, i) => !usedU.has(i) && left.push(u));
+        // 2. Elimination.
+        if (o.aliveAt && o.ids) {
+          for (const team of [100, 200]) {
+            if (fog === "team" && team !== o.myTeam) continue;
+            const rings = s.unk.map((u, i) => ({ u, i })).filter((x) => x.u.team === team && !usedU.has(x.i));
+            const missing = o.ids.filter((id) => teamOf(id) === team && !present.has(id) && o.aliveAt!(id, s.t));
+            if (!rings.length || rings.length !== missing.length) continue;
+            const cand: { u: number; id: number; d: number }[] = [];
+            for (const r of rings)
+              for (const id of missing) {
+                const p = last.get(id);
+                cand.push({ u: r.i, id, d: p ? Math.hypot(p.x - r.u.x, p.y - r.u.y) : 1e9 });
+              }
+            cand.sort((a, b) => a.d - b.d);
+            for (const c of cand) if (!usedU.has(c.u) && !present.has(c.id)) take(c.u, c.id);
+          }
+        }
+        const left = s.unk.filter((_, i) => !usedU.has(i));
         if (left.length) s.unk = left;
         else delete s.unk;
       }

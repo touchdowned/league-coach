@@ -403,7 +403,23 @@ export async function scanReplay(
     champs.sort((a, b) => a.t - b.t);
     const teamOf = (id: number) => players.find((p) => p.id === id)?.teamId ?? 0;
     const dropped = dropJumps(champs);
-    const named = nameRings(champs, teamOf);
+    // Who's alive when, from Live Client's isDead (polls are sorted by game time).
+    const aliveAt = (id: number, t: number) => {
+      const name = players.find((p) => p.id === id)?.champion;
+      let lo = 0;
+      let hi = live.length - 1;
+      let at = -1;
+      while (lo <= hi) {
+        const m = (lo + hi) >> 1;
+        if (live[m].t <= t) {
+          at = m;
+          lo = m + 1;
+        } else hi = m - 1;
+      }
+      const lp = at >= 0 ? live[at].players.find((x) => x.championName === name) : undefined;
+      return lp ? !lp.isDead : true;
+    };
+    const named = nameRings(champs, teamOf, { aliveAt, ids: players.map((p) => p.id), myTeam: me.teamId });
     samples.sort((a, b) => a.t - b.t);
     onProgress({ phase: "done", label: "Done", done: 1, total: 1 });
     if (debugDir) await dumpFrame(debugDir, "background", bg, { rect: minimap });

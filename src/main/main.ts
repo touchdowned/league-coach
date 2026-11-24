@@ -315,6 +315,8 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
     champSamples: waves.champs?.length ?? 0,
     checks: checks.map(({ detail, ...c }) => c),
     positionErrors: checks[0].detail,
+    missedBuys: checks[2].detail,
+    csDetail: checks[4].detail,
   };
   await fs.mkdir(outDir, { recursive: true });
   await fs.writeFile(path.join(outDir, `verify-${matchId}.json`), JSON.stringify(report, null, 2));

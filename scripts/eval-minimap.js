@@ -41,14 +41,18 @@ app.whenReady().then(async () => {
   const bg = load(path.join(dir, "background.png"));
   // The ten champions, from the labels.
   const names = new Map();
-  for (const l of Object.values(labels)) for (const c of l.champs || []) names.set(c.name, c.team);
+  for (const [k, l] of Object.entries(labels)) if (!k.startsWith("_")) for (const c of l.champs || []) names.set(c.name, c.team);
   const refs = await refsFor([...names].map(([name, team]) => ({ name, team })));
   const nameOf = (id) => refs.find((r) => r.id === id)?.name;
+  const sweep = (process.env.MIN_COVER || "0.42,0.36,0.3").split(",").map(Number);
+  const runs = [];
+  for (const minCover of sweep) {
   const tot = { labelled: 0, ringed: 0, named: 0, wrongName: 0, falseRings: 0, stackedLabelled: 0, stackedRinged: 0, minionErr: [] };
   const frames = [];
   for (const [file, l] of Object.entries(labels)) {
+    if (file.startsWith("_")) continue;
     const f = load(path.join(dir, file));
-    const rings = mm.findRings(f, bg);
+    const rings = mm.findRings(f, bg, { minCover });
     const found = mm.detectChampions(f, refs, 38, rings);
     const px = found.map((c) => ({ ...c, ...mm.gameToPixel(c.x, c.y, f.w) }));
     const used = new Set();
@@ -96,6 +100,7 @@ app.whenReady().then(async () => {
   }
   const e = tot.minionErr.sort((a, b) => a - b);
   const summary = {
+    minCover,
     frames: frames.length,
     ringRecall: `${tot.ringed}/${tot.labelled}`,
     stackedRingRecall: `${tot.stackedRinged}/${tot.stackedLabelled}`,
@@ -104,7 +109,9 @@ app.whenReady().then(async () => {
     falseRings: tot.falseRings,
     minionCountErr: e.length ? { median: e[e.length >> 1], max: e[e.length - 1], exact: `${e.filter((x) => x === 0).length}/${e.length}`, within1: `${e.filter((x) => x <= 1).length}/${e.length}` } : null,
   };
-  const report = { summary, frames };
+  runs.push({ summary, frames });
+  }
+  const report = { summaries: runs.map((r) => r.summary), runs };
   if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
   app.exit(0);
