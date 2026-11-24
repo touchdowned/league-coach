@@ -10,7 +10,6 @@
  *  - detectDots: small saturated blue/red blobs that aren't part of the empty map.
  *    Champion icons and structures are much bigger and are skipped by size.
  */
-import { RIFT } from "./track";
 
 /** RGBA pixels, row by row. */
 export interface Frame {
@@ -107,7 +106,7 @@ export function backgroundFrame(early: Frame[], later: Frame[]): Frame {
   const m = new Uint8Array(bg.w * bg.h);
   for (const f of FOUNTAINS) {
     const c = gameToPixel(f.x, f.y, bg.w);
-    markDisc(m, bg.w, bg.h, c.px, c.py, (f.r / (RIFT.maxX - RIFT.minX)) * bg.w);
+    markDisc(m, bg.w, bg.h, c.px, c.py, (f.r / (E.maxX - E.minX)) * bg.w);
   }
   for (let p = 0; p < m.length; p++) if (m[p]) for (let k = 0; k < 4; k++) bg.data[p * 4 + k] = late.data[p * 4 + k];
   return bg;
@@ -120,15 +119,25 @@ export function teamColor(r: number, g: number, b: number): 0 | 100 | 200 {
   return 0;
 }
 
+/**
+ * The game area the minimap crop shows. Fitted on a real replay from two independent
+ * measurements that agree: kill positions vs champion reads (best fit 0.955 scale about
+ * the centre, +20 units) and turret icons vs their game positions (4.5% out). Using the
+ * whole RIFT bounds instead put every read ~4.5% too far from the centre (kill check
+ * median 372 units before, ~100 after).
+ */
+export const MINIMAP_EXTENT = { minX: 237, maxX: 14553, minY: 240, maxY: 14660 };
+const E = MINIMAP_EXTENT;
+
 export function pixelToGame(px: number, py: number, size: number): { x: number; y: number } {
   return {
-    x: RIFT.minX + (px / size) * (RIFT.maxX - RIFT.minX),
-    y: RIFT.maxY - (py / size) * (RIFT.maxY - RIFT.minY),
+    x: E.minX + (px / size) * (E.maxX - E.minX),
+    y: E.maxY - (py / size) * (E.maxY - E.minY),
   };
 }
 
 export function gameToPixel(x: number, y: number, size: number): { px: number; py: number } {
-  return { px: ((x - RIFT.minX) / (RIFT.maxX - RIFT.minX)) * size, py: ((RIFT.maxY - y) / (RIFT.maxY - RIFT.minY)) * size };
+  return { px: ((x - E.minX) / (E.maxX - E.minX)) * size, py: ((E.maxY - y) / (E.maxY - E.minY)) * size };
 }
 
 export interface DotOpts {
@@ -169,7 +178,7 @@ export const STRUCTURES: { x: number; y: number }[] = [
  * map centre than gameToPixel puts their game positions, up to 6 px out at the corners.
  * The mask is placed where the icons are drawn, with a radius that covers the icon.
  */
-const STRUCTURE_SCALE = 1.045;
+const STRUCTURE_SCALE = 1; // the 4.5% was the mapping: see MINIMAP_EXTENT
 const STRUCTURE_R_PX = 7.5;
 
 /** Fountains, where champion icons sit and no minion ever is (game units). */
@@ -189,7 +198,7 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
   const masked = new Uint8Array(w * h);
   for (const f of FOUNTAINS) {
     const c = gameToPixel(f.x, f.y, w);
-    const r = (f.r / (RIFT.maxX - RIFT.minX)) * w;
+    const r = (f.r / (E.maxX - E.minX)) * w;
     markDisc(masked, w, h, c.px, c.py, r);
   }
   for (const st of STRUCTURES) {
