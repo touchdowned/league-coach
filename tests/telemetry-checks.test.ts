@@ -41,9 +41,15 @@ describe("stream checks", () => {
   it("fills an ally hidden under another icon, between two reads", () => {
     const champs = [0, 1000, 2000, 3000].map((t) => ({ t, fog: "team" as const, at: [{ id: 2, x: 9000 + t / 10, y: 1000 }, ...(t === 0 || t === 3000 ? [{ id: 1, x: 9000 + t / 10, y: 1050 }] : [])] }));
     expect(fillOcclusions(champs, [1, 2], () => true)).toBe(2);
-    expect(champs[1].at.find((a) => a.id === 1)).toEqual({ id: 1, x: 9100, y: 1050, inferred: true });
+    expect(champs[1].at.find((a) => a.id === 1)).toEqual({ id: 1, x: 9100, y: 1000, inferred: true }); // riding along on 2
     // Dead in between: not filled.
     const c2 = [0, 1000, 3000].map((t) => ({ t, fog: "team" as const, at: [{ id: 2, x: 9000, y: 1000 }, ...(t !== 1000 ? [{ id: 1, x: 9000, y: 1000 }] : [])] }));
     expect(fillOcclusions(c2, [1, 2], (id, t) => !(id === 1 && t === 1000))).toBe(0);
+  });
+
+  it("keeps a lane partner on their duo through a long stack", () => {
+    const champs = Array.from({ length: 30 }, (_, k) => ({ t: k * 1000, fog: "team" as const, at: [{ id: 2, x: 12000 + k * 10, y: 1500 }, ...(k === 0 || k === 29 ? [{ id: 1, x: 12000 + k * 10 + 100, y: 1550 }] : [])] }));
+    expect(fillOcclusions(champs, [1, 2], () => true)).toBe(28);
+    expect(champs[15].at.find((a) => a.id === 1)).toEqual({ id: 1, x: 12150, y: 1500, inferred: true });
   });
 });

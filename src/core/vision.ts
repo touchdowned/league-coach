@@ -164,22 +164,28 @@ export function dropJumps(champs: ChampSample[]): number {
 
 /**
  * Fills in a living champion who's missing from a frame because their icon is under
- * another one. The fill is only made when all of these hold:
- *  - they have a read before and after, at most 12 game seconds apart;
- *  - those two reads are within walking distance of each other;
- *  - an icon sits within 700 units of where they'd be (the icon covering them).
- * Their position is interpolated between the two reads and marked `inferred`, so checks
- * and coaching can tell a fill from a read.
+ * another one, two ways, both marked `inferred` so checks and coaching can tell a fill
+ * from a read:
+ *  - Riding along: the reads either side of the gap both sit within 700 units of the
+ *    same other champion, who is read in every frame between. The hidden champion is
+ *    placed on that champion (a lane duo stacked for minutes). Any gap length.
+ *  - Short gaps (reads either side at most 6 game seconds apart, within walking
+ *    distance), with an icon within 700 units of the spot: interpolated between the two
+ *    reads. Held-out reads on a real replay put this at median 94 units, 90% under 302
+ *    for 1-2 s gaps, and median 303, 90% under 742 for ~5 s gaps; longer gaps were
+ *    worse, hence the 6 s cap.
  */
 export function fillOcclusions(champs: ChampSample[], ids: number[], aliveAt: (id: number, t: number) => boolean, visibleIn: (id: number, fog: ChampSample["fog"]) => boolean = () => true): number {
   let filled = 0;
+  const near = 700;
   for (const fog of ["off", "team"] as const) {
     const ss = champs.filter((c) => c.fog === fog).sort((a, b) => a.t - b.t);
+    const readOf = (s: ChampSample, id: number) => s.at.find((x) => x.id === id && !x.inferred);
     for (const id of ids) {
       if (!visibleIn(id, fog)) continue;
       const reads: { k: number; x: number; y: number }[] = [];
       ss.forEach((s, k) => {
-        const a = s.at.find((x) => x.id === id && !x.inferred);
+        const a = readOf(s, id);
         if (a) reads.push({ k, x: a.x, y: a.y });
       });
       for (let r = 1; r < reads.length; r++) {
@@ -188,7 +194,25 @@ export function fillOcclusions(champs: ChampSample[], ids: number[], aliveAt: (i
         if (B.k - A.k < 2) continue;
         const t0 = ss[A.k].t;
         const t1 = ss[B.k].t;
-        if (t1 - t0 > 12_000) continue;
+        // Riding along with someone read at both ends and all through the gap.
+        const host = ss[A.k].at.find((o) => {
+          if (o.id === id || o.inferred || Math.hypot(o.x - A.x, o.y - A.y) > near) return false;
+          const end = readOf(ss[B.k], o.id);
+          if (!end || Math.hypot(end.x - B.x, end.y - B.y) > near) return false;
+          for (let k = A.k + 1; k < B.k; k++) if (!readOf(ss[k], o.id)) return false;
+          return true;
+        });
+        if (host) {
+          for (let k = A.k + 1; k < B.k; k++) {
+            const s = ss[k];
+            if (!aliveAt(id, s.t)) continue;
+            const h = readOf(s, host.id)!;
+            s.at.push({ id, x: h.x, y: h.y, inferred: true });
+            filled++;
+          }
+          continue;
+        }
+        if (t1 - t0 > 6000) continue;
         if (Math.hypot(B.x - A.x, B.y - A.y) > 1500 + ((t1 - t0) / 1000) * 500) continue;
         for (let k = A.k + 1; k < B.k; k++) {
           const s = ss[k];
@@ -196,7 +220,7 @@ export function fillOcclusions(champs: ChampSample[], ids: number[], aliveAt: (i
           const f = (s.t - t0) / (t1 - t0);
           const x = Math.round(A.x + (B.x - A.x) * f);
           const y = Math.round(A.y + (B.y - A.y) * f);
-          const cover = [...s.at, ...(s.unk ?? [])].some((o) => (!("id" in o) || o.id !== id) && Math.hypot(o.x - x, o.y - y) <= 700);
+          const cover = [...s.at, ...(s.unk ?? [])].some((o) => (!("id" in o) || o.id !== id) && Math.hypot(o.x - x, o.y - y) <= near);
           if (!cover) continue;
           s.at.push({ id, x, y, inferred: true });
           filled++;
