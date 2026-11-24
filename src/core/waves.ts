@@ -106,7 +106,7 @@ export function sampleFromDots(t: number, dots: Dot[]): WaveSample {
   for (const d of dots) {
     const p = projectLane(d);
     if (!p) continue;
-    lanes[p.lane][d.team === 100 ? "b" : "r"].push(Math.round(p.s * 100) / 100);
+    for (let k = 0; k < (d.n ?? 1); k++) lanes[p.lane][d.team === 100 ? "b" : "r"].push(Math.round(p.s * 100) / 100);
   }
   return { t, lanes };
 }

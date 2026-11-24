@@ -86,7 +86,10 @@ app.whenReady().then(async () => {
     const isOff = !/team/.test(file);
     let minions = null;
     if (isOff && l.minions) {
-      const s = waves.sampleFromDots(0, mm.detectDots(f, bg, { exclude: rings }));
+      const dots = mm.detectDots(f, bg, { exclude: rings });
+      const s = waves.sampleFromDots(0, dots);
+      // Each blob, for looking at what was counted where.
+      var blobs = dots.map((d) => ({ team: d.team, at: Object.values(mm.gameToPixel(d.x, d.y, f.w)).map(Math.round), area: d.area, n: d.n }));
       minions = {};
       for (const [team, k] of [["blue", "b"], ["red", "r"]])
         for (const [lane, L] of [["top", "TOP"], ["mid", "MIDDLE"], ["bot", "BOTTOM"]]) {
@@ -96,7 +99,8 @@ app.whenReady().then(async () => {
           if (typeof want === "number") tot.minionErr.push(Math.abs(got - want));
         }
     }
-    frames.push({ file, champs: rows, falseRings: extra, minions });
+    frames.push({ file, champs: rows, falseRings: extra, minions, blobs: typeof blobs === "undefined" ? undefined : blobs });
+    blobs = undefined;
   }
   const e = tot.minionErr.sort((a, b) => a - b);
   const summary = {

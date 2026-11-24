@@ -30,6 +30,8 @@ export interface Dot {
   x: number;
   y: number;
   area: number;
+  /** Minions in this blob: touching minions merge into one blob, counted by area. */
+  n?: number;
 }
 
 const diffAt = (a: Frame["data"], b: Frame["data"], i: number) => Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
@@ -208,6 +210,11 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
     const g = pixelToGame(sx / area + 0.5, sy / area + 0.5, w);
     dots.push({ team: l === 1 ? 100 : 200, x: Math.round(g.x), y: Math.round(g.y), area });
   }
+  // One minion's dot area on this minimap: the median blob when there are enough to tell
+  // (most blobs are single minions), else the expected size for this minimap width.
+  const areas = dots.map((d) => d.area).sort((a, b) => a - b);
+  const single = areas.length >= 6 ? areas[Math.floor(areas.length * 0.4)] : Math.max(minA, ((o.minD ?? 0.008) * w * 1.6) ** 2 * 0.78);
+  for (const d of dots) d.n = Math.max(1, Math.round(d.area / Math.max(1, single)));
   return dots;
 }
 
