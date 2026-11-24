@@ -11,9 +11,12 @@ describe("gold between frames", () => {
       { type: "ITEM_PURCHASED", timestamp: 1000, participantId: 1, itemId: 3133 },
       { type: "ITEM_DESTROYED", timestamp: 1000, participantId: 1, itemId: 1036 },
       { type: "ITEM_DESTROYED", timestamp: 1000, participantId: 1, itemId: 1036 },
-      { type: "ITEM_DESTROYED", timestamp: 1000, participantId: 1, itemId: 2003 }, // a potion drunk, not a component
+      { type: "ITEM_DESTROYED", timestamp: 1000, participantId: 1, itemId: 2003 }, // not in the recipe, but used up at the same moment
     ];
-    expect(spendOf(ev[0], ev, items)).toBe(400);
+    expect(spendOf(ev[0], ev, items)).toBe(350); // the potion goes too: a built item ate it
+    // A plain buy never credits what else was destroyed.
+    const ward: TimelineEvent[] = [{ type: "ITEM_PURCHASED", timestamp: 5, participantId: 1, itemId: 2003 }, { type: "ITEM_DESTROYED", timestamp: 5, participantId: 1, itemId: 1036 }];
+    expect(spendOf(ward[0], ward, items)).toBe(50);
   });
 
   it("spreads income over the minute, puts bounties on the kill and takes off purchases", () => {

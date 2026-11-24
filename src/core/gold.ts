@@ -41,8 +41,11 @@ export function spendOf(e: TimelineEvent, all: TimelineEvent[], items: ItemTable
     for (const d of all) {
       if (d.type !== "ITEM_DESTROYED" || d.participantId !== e.participantId || Math.abs(d.timestamp - e.timestamp) > 50) continue;
       const k = recipe.indexOf(d.itemId!);
-      if (k < 0) continue;
-      recipe.splice(k, 1);
+      // Built items can also eat a part Data Dragon's recipe doesn't list (seen on a real
+      // replay: a jungle item's Glowing Mote); anything else destroyed at the same moment
+      // as a built item counts as used up by it. Plain buys (a ward, a potion) never do.
+      if (k < 0 && !it.from?.length) continue;
+      if (k >= 0) recipe.splice(k, 1);
       credit += items[d.itemId!]?.total ?? 0;
     }
     return it.total - credit;
