@@ -128,15 +128,24 @@ function nearest(samples: ChampSample[], t: number, fog: ChampSample["fog"], wit
 
 /**
  * Checks the minimap champion reads against every kill's exact victim position.
- * A victim is still standing on the kill spot in the last sample before the event.
+ * A victim is still standing on the kill spot in their last read before the event.
  */
 export function checkPositions(w: WaveTrack, events: TimelineEvent[], until: number): StreamCheck {
   const errs: { t: number; victim: number; err: number }[] = [];
   let missing = 0;
   const kills = events.filter((e) => e.type === "CHAMPION_KILL" && e.position && e.victimId && e.timestamp <= until);
   for (const k of kills) {
-    const s = nearest(w.champs ?? [], k.timestamp - 700, "off", 1500);
-    const a = s?.at.find((x) => x.id === k.victimId);
+    // The victim's last read in the 2 s before the kill (they're on the kill spot by then).
+    let a: { x: number; y: number } | undefined;
+    let at = -Infinity;
+    for (const s of w.champs ?? []) {
+      if (s.fog !== "off" || s.t > k.timestamp || s.t < k.timestamp - 2000 || s.t <= at) continue;
+      const r = s.at.find((x) => x.id === k.victimId);
+      if (r) {
+        a = r;
+        at = s.t;
+      }
+    }
     if (!a) {
       missing++;
       continue;
@@ -170,33 +179,54 @@ export function checkAllies(w: WaveTrack, allyIds: number[], aliveAt: (id: numbe
   return { name: "pos: allies shown in team-fog samples", measured: `${pct(seen, total)}% (${seen}/${total})`, bar: ">= 98%", pass: total > 0 && seen / total >= 0.98, n: total };
 }
 
-/** Every ITEM_PURCHASED in the timeline should show up in the Live Client stream within a second. */
-export function checkItems(changes: InvChange[], events: TimelineEvent[], champOf: (id: number) => string, until: number): StreamCheck {
+/**
+ * Every ITEM_PURCHASED should show up in the Live Client stream as an item+ change whose
+ * poll window contains the purchase. Two kinds can't, and are counted apart, not hidden:
+ *  - bought before the first poll (starting items are already there at the first poll);
+ *  - consumed before any poll could see it (an ITEM_DESTROYED of that item within 3 s,
+ *    e.g. a Control Ward placed straight away, or a component built into an item).
+ * Time precision is the poll window, reported as its own number.
+ */
+export function checkItems(changes: InvChange[], events: TimelineEvent[], champOf: (id: number) => string, until: number, firstPoll = 0): StreamCheck {
   const buys = events.filter((e) => e.type === "ITEM_PURCHASED" && e.itemId && e.participantId && e.timestamp <= until);
   const used = new Set<InvChange>();
-  const offsets: number[] = [];
+  const windows: number[] = [];
   let matched = 0;
+  let early = 0;
+  let consumed = 0;
+  const missed: { t: number; champion: string; item: number }[] = [];
   for (const b of buys) {
+    if (b.timestamp < firstPoll) {
+      early++;
+      continue;
+    }
     const champ = champOf(b.participantId!);
     let best: InvChange | null = null;
     for (const c of changes) {
       if (c.kind !== "item+" || c.champion !== champ || c.item !== b.itemId || used.has(c)) continue;
-      if (Math.abs(c.t - b.timestamp) > 3000) continue;
+      // The change happened somewhere in (t - window/2, t + window/2]; allow 250 ms of clock slack.
+      if (Math.abs(c.t - b.timestamp) > c.window / 2 + 250) continue;
       if (!best || Math.abs(c.t - b.timestamp) < Math.abs(best.t - b.timestamp)) best = c;
     }
     if (best) {
       used.add(best);
       matched++;
-      offsets.push(Math.abs(best.t - b.timestamp));
+      windows.push(best.window);
+      continue;
     }
+    const gone = events.some((e) => e.type === "ITEM_DESTROYED" && e.participantId === b.participantId && e.itemId === b.itemId && e.timestamp >= b.timestamp && e.timestamp - b.timestamp <= 3000);
+    if (gone) consumed++;
+    else missed.push({ t: b.timestamp, champion: champ, item: b.itemId! });
   }
-  const p90 = quantile(offsets, 0.9);
+  const judged = buys.length - early - consumed;
+  const p90 = quantile(windows, 0.9);
   return {
     name: "inv: item buys vs ITEM_PURCHASED",
-    measured: `${pct(matched, buys.length)}% matched (${matched}/${buys.length}), 90th pct offset ${isNaN(p90) ? "-" : `${p90} ms`}`,
-    bar: "100% matched within 1 game s",
-    pass: buys.length > 0 && matched / buys.length >= 0.95 && p90 <= 1000,
-    n: buys.length,
+    measured: `${pct(matched, judged)}% matched (${matched}/${judged}); poll window 90th pct ${isNaN(p90) ? "-" : `${p90} ms`}; not judged: ${early} before the first poll, ${consumed} consumed within 3 s`,
+    bar: "100% of visible buys inside their poll window",
+    pass: judged > 0 && matched === judged,
+    n: judged,
+    detail: missed,
   };
 }
 
@@ -215,9 +245,18 @@ export function checkLevels(changes: InvChange[], events: TimelineEvent[], champ
   return { name: "inv: level-ups vs LEVEL_UP", measured: `${pct(matched, ups.length)}% (${matched}/${ups.length}), median offset ${median(offsets)} ms`, bar: ">= 95% within 1 game s", pass: ups.length > 0 && matched / ups.length >= 0.95, n: ups.length };
 }
 
-/** CS from Live Client vs the timeline's per-minute minion + jungle counts. */
+/**
+ * CS from Live Client vs the timeline's per-minute minion + jungle counts. Live Client's
+ * creepScore only moves in steps of 10 (it reads floor(cs / 10) * 10), so it's compared
+ * on that, with 2 CS of slack either side of a step for the poll's timing. Players whose
+ * stream disagrees at every checkpoint after the first are listed: that's a broken
+ * stream for that player, not noise.
+ */
 export function checkCs(polls: LivePoll[], timeline: TimelineDto, champOf: (id: number) => string, until: number): StreamCheck {
-  const diffs: number[] = [];
+  let ok = 0;
+  let n = 0;
+  const off: Record<string, number> = {};
+  const seen: Record<string, number> = {};
   for (const f of timeline.info.frames) {
     if (f.timestamp <= 0 || f.timestamp > until) continue;
     let best: LivePoll | null = null;
@@ -225,10 +264,24 @@ export function checkCs(polls: LivePoll[], timeline: TimelineDto, champOf: (id: 
     if (!best || Math.abs(best.t - f.timestamp) > 1500) continue;
     for (const id in f.participantFrames) {
       const pf = f.participantFrames[id];
-      const lp = best.players.find((x) => x.championName === champOf(Number(id)));
-      if (lp) diffs.push(Math.abs(lp.cs - (pf.minionsKilled + pf.jungleMinionsKilled)));
+      const name = champOf(Number(id));
+      const lp = best.players.find((x) => x.championName === name);
+      if (!lp) continue;
+      const total = pf.minionsKilled + pf.jungleMinionsKilled;
+      const good = [total - 2, total, total + 2].some((c) => Math.floor(Math.max(0, c) / 10) * 10 === lp.cs);
+      n++;
+      seen[name] = (seen[name] ?? 0) + 1;
+      if (good) ok++;
+      else off[name] = (off[name] ?? 0) + 1;
     }
   }
-  const within = diffs.filter((d) => d <= 2).length;
-  return { name: "inv: CS vs timeline frames", measured: `${pct(within, diffs.length)}% within 2 CS (${diffs.length} checks), max off ${diffs.length ? Math.max(...diffs) : "-"}`, bar: ">= 95% within 2 CS", pass: diffs.length > 0 && within / diffs.length >= 0.95, n: diffs.length };
+  const broken = Object.keys(off).filter((c) => seen[c] >= 3 && off[c] >= seen[c] - 1);
+  return {
+    name: "inv: CS vs timeline frames (Live Client counts in 10s)",
+    measured: `${pct(ok, n)}% agree (${ok}/${n})${broken.length ? `; stream wrong throughout for ${broken.join(", ")}` : ""}`,
+    bar: ">= 95% agree",
+    pass: n > 0 && ok / n >= 0.95,
+    n,
+    detail: { off, broken },
+  };
 }

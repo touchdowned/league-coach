@@ -299,7 +299,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
   const checks = [
     checkPositions(waves, events, until),
     checkAllies(waves, allies, aliveAt),
-    checkItems(changes, events, champOf, until),
+    checkItems(changes, events, champOf, until, polls[0]?.t ?? 0),
     checkLevels(changes, events, champOf, until),
     checkCs(polls, timeline, champOf, until),
   ];
