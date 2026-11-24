@@ -270,11 +270,18 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string) {
   const s = await store.readSettings();
   const { gameName, tagLine } = parseRiotId(s.riotId);
   const riot = new RiotClient(s.apiKey.trim(), s.region, store.cache());
-  const puuid = await riot.getPuuid(gameName, tagLine);
+  // Match and timeline come from the cache when they're there, so a re-run needs no live
+  // API key. You're found by Riot ID in the match; the key is only asked for if that fails.
   const match = await riot.getMatch(matchId);
   const timeline = await riot.getTimeline(matchId);
   const players = match.info.participants.map((p) => ({ id: p.participantId, champion: p.championName, teamId: p.teamId }));
-  const meP = match.info.participants.find((p) => p.puuid === puuid) ?? match.info.participants[0];
+  const same = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+  let meP = match.info.participants.find((p) => same(p.riotIdGameName, gameName) && same((p as { riotIdTagline?: string }).riotIdTagline, tagLine));
+  if (!meP) {
+    const puuid = await riot.getPuuid(gameName, tagLine);
+    meP = match.info.participants.find((p) => p.puuid === puuid);
+  }
+  if (!meP) throw new Error("You're not in this match.");
   const me = { id: meP.participantId, champion: meP.championName, teamId: meP.teamId };
   const lc = await league();
   await openReplay(lc, matchId, (l) => console.log(l));
