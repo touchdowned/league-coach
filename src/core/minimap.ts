@@ -141,6 +141,27 @@ export interface DotOpts {
   exclude?: { cx: number; cy: number; r: number }[];
 }
 
+/**
+ * Turrets and inhibitors (game units). Their icons change through the game (plates fall,
+ * towers die), so they don't match the empty map from the first minute: minion dots are
+ * not read on them. A minion under a turret icon is hidden by it anyway.
+ */
+export const STRUCTURES: { x: number; y: number }[] = [
+  // Blue: top, mid, bot (outer, inner, inhibitor turret), inhibitors, nexus turrets.
+  { x: 981, y: 10441 }, { x: 1512, y: 6699 }, { x: 1169, y: 4287 },
+  { x: 5846, y: 6396 }, { x: 5048, y: 4812 }, { x: 3651, y: 3696 },
+  { x: 10504, y: 1029 }, { x: 6919, y: 1483 }, { x: 4281, y: 1253 },
+  { x: 1171, y: 3571 }, { x: 3203, y: 3208 }, { x: 3452, y: 1236 },
+  { x: 1748, y: 2270 }, { x: 2177, y: 1807 },
+  // Red.
+  { x: 4318, y: 13875 }, { x: 7943, y: 13411 }, { x: 10481, y: 13650 },
+  { x: 8955, y: 8510 }, { x: 9767, y: 10113 }, { x: 11134, y: 11207 },
+  { x: 13866, y: 4505 }, { x: 13327, y: 8226 }, { x: 13624, y: 10572 },
+  { x: 11261, y: 13676 }, { x: 11598, y: 11667 }, { x: 13604, y: 11316 },
+  { x: 12611, y: 13084 }, { x: 13052, y: 12612 },
+];
+const STRUCTURE_R = 380;
+
 /** Fountains, where champion icons sit and no minion ever is (game units). */
 export const FOUNTAINS = [
   { x: 400, y: 420, r: 1500 },
@@ -160,6 +181,10 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
     const c = gameToPixel(f.x, f.y, w);
     const r = (f.r / (RIFT.maxX - RIFT.minX)) * w;
     markDisc(masked, w, h, c.px, c.py, r);
+  }
+  for (const st of STRUCTURES) {
+    const c = gameToPixel(st.x, st.y, w);
+    markDisc(masked, w, h, c.px, c.py, (STRUCTURE_R / (RIFT.maxX - RIFT.minX)) * w);
   }
   for (const e of o.exclude ?? []) markDisc(masked, w, h, e.cx, e.cy, e.r + 2);
   for (let p = 0; p < w * h; p++) {
@@ -212,10 +237,20 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
   }
   // One minion's dot area on this minimap: the median blob when there are enough to tell
   // (most blobs are single minions), else the expected size for this minimap width.
-  const areas = dots.map((d) => d.area).sort((a, b) => a - b);
-  const single = areas.length >= 6 ? areas[Math.floor(areas.length * 0.4)] : Math.max(minA, ((o.minD ?? 0.008) * w * 1.6) ** 2 * 0.78);
-  for (const d of dots) d.n = Math.max(1, Math.round(d.area / Math.max(1, single)));
-  return dots;
+  // Measured on a 247 px minimap: a clear single minion dot is 10-13 px. Take the median
+  // of the blobs near that size in this frame when there are enough, else that size scaled.
+  const expected = 11.5 * (w / 247) ** 2;
+  const near = dots.map((d) => d.area).filter((a) => a >= expected * 0.7 && a <= expected * 1.4).sort((a, b) => a - b);
+  const single = near.length >= 4 ? near[near.length >> 1] : expected;
+  const out: Dot[] = [];
+  for (const d of dots) {
+    // Slivers (ring edges, vision-circle fringe, ping marks) are far smaller than a minion.
+    // A minion half under an icon is still about a third of a dot.
+    if (d.area < single * 0.3) continue;
+    d.n = Math.min(4, Math.max(1, Math.round(d.area / single)));
+    out.push(d);
+  }
+  return out;
 }
 
 function markDisc(m: Uint8Array, w: number, h: number, cx: number, cy: number, r: number) {

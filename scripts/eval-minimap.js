@@ -81,7 +81,9 @@ app.whenReady().then(async () => {
       else if (got) tot.wrongName++;
       rows.push({ champ: c.name, ring: true, off: Math.round(bd * 10) / 10, named: got || null, score: px[best].score });
     }
-    const extra = px.filter((_, i) => !used.has(i)).map((d) => ({ at: [Math.round(d.px), Math.round(d.py)], team: d.team, named: nameOf(d.id) || null, score: d.score }));
+    // Frames labelled for minions only: don't score their rings.
+    const scoreRings = Array.isArray(l.champs) && l.champs.length > 0;
+    const extra = !scoreRings ? [] : px.filter((_, i) => !used.has(i)).map((d) => ({ at: [Math.round(d.px), Math.round(d.py)], team: d.team, named: nameOf(d.id) || null, score: d.score }));
     tot.falseRings += extra.length;
     const isOff = !/team/.test(file);
     let minions = null;
