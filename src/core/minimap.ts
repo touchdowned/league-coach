@@ -150,6 +150,8 @@ export interface DotOpts {
   minFill?: number;
   /** Override for where structure icons are drawn (see STRUCTURE_SCALE). */
   structureScale?: number;
+  /** When given, ward icons found are added here (they're never counted as minions). */
+  wards?: Dot[];
   /** Champion rings: anything inside one is part of the icon, not a minion. */
   exclude?: { cx: number; cy: number; r: number }[];
 }
@@ -250,6 +252,17 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
     const bw = maxX - minX + 1;
     const bh = maxY - minY + 1;
     if (bw > maxD || bh > maxD) continue; // a ring or bar, not a dot
+    // A ward: a team-coloured chevron, ~7x5 px with a notch, wider than tall and about
+    // half filled (seen on a real 247 px minimap). Not a minion; kept apart if asked for.
+    const k = w / 247;
+    const fill = area / (bw * bh);
+    if (bw >= 5.5 * k && bw <= 9.5 * k && bw >= bh * 1.25 && fill >= 0.28 && fill <= 0.62 && area >= 8 * k * k) {
+      if (o.wards) {
+        const g = pixelToGame(sx / area + 0.5, sy / area + 0.5, w);
+        o.wards.push({ team: l === 1 ? 100 : 200, x: Math.round(g.x), y: Math.round(g.y), area });
+      }
+      continue;
+    }
     // Minion dots are filled; a thin arc (a ring edge, an ability circle) is not.
     if (bw * bh >= 9 && area / (bw * bh) < (o.minFill ?? 0.45)) continue;
     const g = pixelToGame(sx / area + 0.5, sy / area + 0.5, w);

@@ -11,6 +11,7 @@ import { PostGameWatcher } from "./postgame";
 import { openReplay, scanReplay } from "./scan";
 import { checkAllies, checkCs, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
 import { checkGold, itemTable } from "../core/gold";
+import { checkWards, placeWards } from "../core/wards";
 import { growBench, readBench } from "./bench";
 import type { WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
@@ -328,6 +329,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     checkLevels(changes, events, champOf, until),
     checkCs(polls, timeline, champOf, until),
     checkGold(timeline, items, until),
+    checkWards(placeWards(waves.samples, waves.champs ?? [], events, (id) => players.find((p) => p.id === id)?.teamId ?? 0, until)),
   ];
   const report = {
     matchId,
@@ -344,6 +346,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     missedBuys: checks[2].detail,
     csDetail: checks[4].detail,
     itemsVersion: ddv,
+    unplacedWards: checks[6].detail,
   };
   await fs.mkdir(outDir, { recursive: true });
   await fs.writeFile(path.join(outDir, `verify-${matchId}.json`), JSON.stringify(report, null, 2));

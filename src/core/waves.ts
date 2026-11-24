@@ -50,7 +50,30 @@ export function projectLane(p: Pt): { lane: Lane; s: number } | null {
     const a = along(lane, p);
     if (a.off <= MAX_OFF && (!best || a.off < best.off)) best = { lane, ...a };
   }
-  return best && { lane: best.lane, s: best.s };
+  if (best) return { lane: best.lane, s: best.s };
+  // In a base, between the nexus and the lane's inhibitor: a wave that just spawned, or one
+  // walking home. Counted in the lane it belongs to, at that lane's end.
+  for (const [team, nexus] of [[100, NEXUS[100]], [200, NEXUS[200]]] as const) {
+    if (Math.hypot(p.x - nexus.x, p.y - nexus.y) > 3600) continue;
+    let pick: { lane: Lane; off: number } | null = null;
+    for (const lane of LANES) {
+      const end = team === 100 ? PATH[lane][0] : PATH[lane][PATH[lane].length - 1];
+      const off = segDist(p, nexus, end);
+      if (off <= MAX_OFF && (!pick || off < pick.off)) pick = { lane, off };
+    }
+    if (pick) return { lane: pick.lane, s: team === 100 ? 0 : 1 };
+  }
+  return null;
+}
+
+/** Nexus positions (game units). */
+const NEXUS = { 100: { x: 1550, y: 1660 }, 200: { x: 13230, y: 13250 } };
+
+function segDist(p: Pt, a: Pt, b: Pt): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
 }
 
 export interface WaveSample {
@@ -58,6 +81,8 @@ export interface WaveSample {
   t: number;
   /** Progress of each minion along the lane, per team (b = blue, r = red), 2 decimals. */
   lanes: Record<Lane, { b: number[]; r: number[] }>;
+  /** Ward icons on the fog-off minimap (game units). */
+  wards?: { team: 100 | 200; x: number; y: number }[];
 }
 
 /** Champions read off the minimap at one moment, in one view. */

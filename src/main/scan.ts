@@ -1,5 +1,5 @@
 import { app, desktopCapturer, nativeImage, net, screen } from "electron";
-import { bgraToRgba, crop, detectChampions, detectDots, backgroundFrame, findMinimap, findRings, Frame, rematch, iconGrid, PortraitRef, Rect } from "../core/minimap";
+import { bgraToRgba, crop, detectChampions, detectDots, backgroundFrame, Dot, findMinimap, findRings, Frame, rematch, iconGrid, PortraitRef, Rect } from "../core/minimap";
 import { cameraLookingAt } from "../core/camera";
 import { dropJumps, fillOcclusions, nameRings } from "../core/vision";
 import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
@@ -368,8 +368,9 @@ export async function scanReplay(
       // Minimap scale differs from the background's? (recorder at another resolution)
       const okBg = frame.w === bg.w && frame.h === bg.h;
       const rings = findRings(frame, okBg ? bg : undefined, MIN_COVER ? { minCover: MIN_COVER } : {});
-      const dots = fog === "off" && okBg ? detectDots(frame, bg, { exclude: rings }) : [];
-      if (fog === "off") samples.push(sampleFromDots(t, dots));
+      const wardDots: Dot[] = [];
+      const dots = fog === "off" && okBg ? detectDots(frame, bg, { exclude: rings, wards: wardDots }) : [];
+      if (fog === "off") samples.push({ ...sampleFromDots(t, dots), ...(wardDots.length ? { wards: wardDots.map(({ team, x, y }) => ({ team, x, y })) } : {}) });
       if (refs.length) {
         const found = detectChampions(frame, refs, 38, rings);
         const at = found.filter((c) => c.id > 0).map(({ id, x, y }) => ({ id, x, y }));

@@ -48,7 +48,7 @@ app.whenReady().then(async () => {
   const runs = [];
   const fills = (process.env.MIN_FILL || "0.45").split(",").map(Number);
   for (const minCover of sweep) for (const minFill of fills) {
-  const tot = { labelled: 0, ringed: 0, named: 0, wrongName: 0, falseRings: 0, stackedLabelled: 0, stackedRinged: 0, minionErr: [] };
+  const tot = { labelled: 0, ringed: 0, named: 0, wrongName: 0, falseRings: 0, stackedLabelled: 0, stackedRinged: 0, minionErr: [], wardsLabelled: 0, wardsFound: 0, wardsFalse: 0 };
   const frames = [];
   for (const [file, l] of Object.entries(labels)) {
     if (file.startsWith("_")) continue;
@@ -89,7 +89,22 @@ app.whenReady().then(async () => {
     const isOff = !/team/.test(file);
     let minions = null;
     if (isOff && l.minions) {
-      const dots = mm.detectDots(f, bg, { exclude: rings, minFill });
+      const wardDots = [];
+      const dots = mm.detectDots(f, bg, { exclude: rings, minFill, wards: wardDots });
+      if (Array.isArray(l.wards)) {
+        const wpx = wardDots.map((d) => ({ team: d.team, ...mm.gameToPixel(d.x, d.y, f.w) }));
+        const hit = new Set();
+        for (const lw of l.wards) {
+          tot.wardsLabelled++;
+          const i = wpx.findIndex((d, k) => !hit.has(k) && d.team === lw.team && Math.hypot(d.px - lw.px, d.py - lw.py) <= 4);
+          if (i >= 0) {
+            hit.add(i);
+            tot.wardsFound++;
+          }
+        }
+        tot.wardsFalse += wpx.length - hit.size;
+        var wardRows = { labelled: l.wards.length, found: hit.size, falseAt: wpx.filter((_, k) => !hit.has(k)).map((d) => [Math.round(d.px), Math.round(d.py), d.team]) };
+      }
       const s = waves.sampleFromDots(0, dots);
       // Each blob, for looking at what was counted where.
       var blobs = dots.map((d) => ({ team: d.team, at: Object.values(mm.gameToPixel(d.x, d.y, f.w)).map(Math.round), area: d.area, n: d.n }));
@@ -102,7 +117,8 @@ app.whenReady().then(async () => {
           if (typeof want === "number") tot.minionErr.push(Math.abs(got - want));
         }
     }
-    frames.push({ file, champs: rows, falseRings: extra, minions, blobs: typeof blobs === "undefined" ? undefined : blobs });
+    frames.push({ file, champs: rows, falseRings: extra, minions, wards: typeof wardRows === "undefined" ? undefined : wardRows, blobs: typeof blobs === "undefined" ? undefined : blobs });
+    wardRows = undefined;
     blobs = undefined;
   }
   const e = tot.minionErr.sort((a, b) => a - b);
@@ -115,6 +131,7 @@ app.whenReady().then(async () => {
     namedRight: `${tot.named}/${tot.ringed}`,
     namedWrong: tot.wrongName,
     falseRings: tot.falseRings,
+    wards: `${tot.wardsFound}/${tot.wardsLabelled} found, ${tot.wardsFalse} false`,
     minionCountErr: e.length ? { median: e[e.length >> 1], max: e[e.length - 1], exact: `${e.filter((x) => x === 0).length}/${e.length}`, within1: `${e.filter((x) => x <= 1).length}/${e.length}` } : null,
   };
   runs.push({ summary, frames });
