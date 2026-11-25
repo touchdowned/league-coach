@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { findOpponent, findPlayer } from "../src/core/analysis";
 import { readGame } from "../src/core/engine";
-import { crop, detectDots, findMinimap, Frame, gameToPixel, medianFrame } from "../src/core/minimap";
+import { crop, detectDots, Dot, findMinimap, Frame, gameToPixel, medianFrame } from "../src/core/minimap";
 import { buildTrack } from "../src/core/track";
 import type { TimelineEvent } from "../src/core/types";
 import { minionsAt, pointOnLane, projectLane, sampleFromDots, waveAt, WaveSample, WaveTrack } from "../src/core/waves";
@@ -79,6 +79,63 @@ describe("minimap reading", () => {
     const c = crop(f, { x: 10, y: 5, w: 20, h: 10 });
     expect(c.w).toBe(20);
     expect(c.data[0]).toBe(f.data[(5 * 50 + 10) * 4]);
+  });
+
+  it("reads a ward star once and does not count its pieces as minions", () => {
+    const size = 247;
+    const empty = blank(size, size, 5);
+    const withMinions = clone(empty);
+    for (const s of [0.4, 0.42, 0.44]) {
+      const p = pointOnLane("MIDDLE", s);
+      const { px, py } = gameToPixel(p.x, p.y, size);
+      paint(withMinions, px, py, 2, BLUE);
+    }
+    // A blue ward as drawn on a real 247 px minimap (copied from a replay frame):
+    // B team colour, # its dark navy outline, the rest map. Centre = row 4, column 7.
+    const STAR = [
+      "......#........",
+      "......#B##.....",
+      ".....#BBB#.....",
+      ".###.#BBB.####.",
+      ".#BB###B.##BB#.",
+      "..#BBB..#BBB##.",
+      "...#.BB.BBB##..",
+      "....##BBB###...",
+      ".....##B.#.....",
+      "......#B##.....",
+      "......##.......",
+    ];
+    const f = clone(withMinions);
+    const [cx, cy] = [60, 170]; // blue-side jungle: off the lanes, structures and fountain
+    STAR.forEach((row, dy) =>
+      [...row].forEach((c, dx) => {
+        if (c === ".") return;
+        const i = ((cy + dy - 4) * size + cx + dx - 7) * 4;
+        [f.data[i], f.data[i + 1], f.data[i + 2]] = c === "B" ? BLUE : [10, 35, 57];
+      }),
+    );
+    const before = detectDots(withMinions, empty).filter((d) => d.team === 100);
+    const wards: Dot[] = [];
+    const dots = detectDots(f, empty, { wards }).filter((d) => d.team === 100);
+    expect(wards).toHaveLength(1);
+    expect(wards[0].team).toBe(100);
+    const at = gameToPixel(wards[0].x, wards[0].y, size);
+    expect(Math.hypot(at.px - cx, at.py - cy)).toBeLessThan(2.5);
+    expect(dots.length).toBe(before.length);
+    expect(dots.reduce((n, d) => n + (d.n ?? 1), 0)).toBe(3);
+  });
+
+  it("counts two minions touching side by side as two, not as a bar", () => {
+    const size = 247;
+    const empty = blank(size, size, 5);
+    const f = clone(empty);
+    const p = pointOnLane("BOTTOM", 0.5);
+    const { px, py } = gameToPixel(p.x, p.y, size);
+    paint(f, px - 2, py, 2, BLUE);
+    paint(f, px + 2, py, 2, BLUE); // one 9x5 px blob, wider than one dot
+    const dots = detectDots(f, empty).filter((d) => d.team === 100);
+    expect(dots).toHaveLength(1);
+    expect(dots[0].n).toBe(2);
   });
 });
 

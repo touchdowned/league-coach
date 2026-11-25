@@ -146,7 +146,7 @@ export interface DotOpts {
   /** Blob size limits as a fraction of the minimap's width (diameter). */
   minD?: number;
   maxD?: number;
-  /** Filled share of a blob's box below which it's an arc or a chevron, not a dot. */
+  /** Filled share of a blob's box below which it's an arc, not a dot. */
   minFill?: number;
   /** Override for where structure icons are drawn (see STRUCTURE_SCALE). */
   structureScale?: number;
@@ -189,6 +189,104 @@ export const FOUNTAINS = [
   { x: 14340, y: 14390, r: 1500 },
 ];
 
+/**
+ * A ward on the minimap is a four-point star in the team's colour, about 13x11 px with its
+ * outline on a 247 px minimap: a 3 px nub on top, a wing to each side, a body and tail below,
+ * all ringed by a dark navy outline (about (10,35,57)) that also runs through the middle, so
+ * the colour breaks into several small pieces. Regions are offsets from the star's centre
+ * (the nub's column, the row of the wing tops), [x0, x1, y0, y1] inclusive, in 247 px units.
+ * Measured on 18 hand-placed wards in six frames of a real replay (NA1_5685324255).
+ */
+const STAR = {
+  nub: [-1, 1, -3, -1],
+  wingL: [-6, -3, -1, 2],
+  wingR: [3, 6, -1, 2],
+  tail: [-1, 1, 2, 5],
+  // Beside the nub above the wings, and beside the tail below them, a star is empty.
+  // A clump of minions fills these.
+  emptyUL: [-6, -3, -5, -3],
+  emptyUR: [3, 6, -5, -3],
+  emptyLL: [-7, -4, 4, 6],
+  emptyLR: [4, 7, 4, 6],
+} as const;
+/** The area a star covers: team-coloured pixels in here are the ward's, not a minion's. */
+const STAR_FOOTPRINT = [-7, 7, -4, 6] as const;
+
+/**
+ * Ward icons (four-point stars) in a minimap crop; their centres in pixels.
+ * Pixels under `masked` (structures, fountains, champion rings) never count as star colour.
+ *
+ * The rule and its numbers, measured on the 18 labelled wards against every minion blob
+ * in the same fixture (247 px minimap; counts scale with the area):
+ *  - star colour is the team colour and at least 40 off the empty map (the river is blue, so
+ *    a looser test reads the river; 70, the minion threshold, loses half of a star's pixels
+ *    where it sits on the river);
+ *  - nub >= 2 coloured px (wards: 2-7), each wing 2-9 (wards: 2-8; a horizontal row of
+ *    minions puts 9-13 in a wing), tail >= 3 (wards: 3-8, one cut by a minimap edge: 1);
+ *  - the tail area holds >= 3 dark px (max channel < 80) — the outline (wards: 3-8;
+ *    minion rows 0-2);
+ *  - the four empty corners hold <= 3 coloured px together (wards: 0-3; minion clumps more);
+ *  - colour is balanced across the diagonals: (upper-right + lower-left) and (upper-left +
+ *    lower-right) are within 3x of each other (wards: at most 1.6x; a diagonal chain of
+ *    top-lane minions that passed everything else: 32 vs 3).
+ * Of 18 labelled wards, all 18 pass; the best-scoring centre within 6 px wins.
+ */
+export function findWardStars(frame: Frame, bg: Frame, masked?: Uint8Array): { team: 100 | 200; px: number; py: number; colour: number }[] {
+  const { w, h, data } = frame;
+  const k = w / 247;
+  const k2 = k * k;
+  const col = new Uint8Array(w * h);
+  const dark = new Uint8Array(w * h);
+  for (let p = 0; p < w * h; p++) {
+    const i = p * 4;
+    if (Math.max(data[i], data[i + 1], data[i + 2]) < 80) dark[p] = 1;
+    if (masked?.[p] || diffAt(data, bg.data, i) < 40) continue;
+    const t = teamColor(data[i], data[i + 1], data[i + 2]);
+    if (t) col[p] = t === 100 ? 1 : 2;
+  }
+  const count = (m: Uint8Array, v: number, cx: number, cy: number, r: readonly number[]) => {
+    let n = 0;
+    for (let y = Math.max(0, Math.round(cy + r[2] * k)); y <= Math.min(h - 1, Math.round(cy + r[3] * k)); y++)
+      for (let x = Math.max(0, Math.round(cx + r[0] * k)); x <= Math.min(w - 1, Math.round(cx + r[1] * k)); x++) if (m[y * w + x] === v) n++;
+    return n;
+  };
+  const found: { team: 100 | 200; px: number; py: number; colour: number; score: number }[] = [];
+  const nubDy = Math.round(2 * k);
+  for (const team of [100, 200] as const) {
+    const v = team === 100 ? 1 : 2;
+    for (let cy = nubDy; cy < h; cy++)
+      for (let cx = 1; cx < w - 1; cx++) {
+        // Quick reject: the nub, two rows up, must have colour at or beside the centre column.
+        const q = (cy - nubDy) * w + cx;
+        if (col[q] !== v && col[q - 1] !== v && col[q + 1] !== v) continue;
+        const nub = count(col, v, cx, cy, STAR.nub);
+        if (nub < 2 * k2) continue;
+        const tail = count(col, v, cx, cy, STAR.tail);
+        if (tail < 3 * k2) continue;
+        const wl = count(col, v, cx, cy, STAR.wingL);
+        const wr = count(col, v, cx, cy, STAR.wingR);
+        if (wl < 2 * k2 || wr < 2 * k2 || wl > 9 * k2 || wr > 9 * k2) continue;
+        if (count(dark, 1, cx, cy, STAR.tail) < 3 * k2) continue;
+        const empty = count(col, v, cx, cy, STAR.emptyUL) + count(col, v, cx, cy, STAR.emptyUR) + count(col, v, cx, cy, STAR.emptyLL) + count(col, v, cx, cy, STAR.emptyLR);
+        if (empty > 3 * k2) continue;
+        // A star is balanced across both diagonals; a diagonal chain of minions is not.
+        const d1 = count(col, v, cx, cy, [1, 7, -4, 0]) + count(col, v, cx, cy, [-7, -1, 1, 6]);
+        const d2 = count(col, v, cx, cy, [-7, -1, -4, 0]) + count(col, v, cx, cy, [1, 7, 1, 6]);
+        if (Math.max(d1, d2) > 3 * Math.min(d1, d2)) continue;
+        // How star-like: each part present (capped so a big part can't make up for a missing
+        // one), less any colour in the empty corners.
+        const cap = 3 * k2;
+        const score = Math.min(nub, cap) + Math.min(wl, cap) + Math.min(wr, cap) + Math.min(tail, cap) - 2 * empty;
+        found.push({ team, px: cx, py: cy, colour: nub + wl + wr + tail, score });
+      }
+  }
+  found.sort((a, b) => b.score - a.score);
+  const keep: typeof found = [];
+  const sep = 6 * k;
+  for (const s of found) if (!keep.some((t) => Math.abs(t.px - s.px) <= sep && Math.abs(t.py - s.py) <= sep)) keep.push(s);
+  return keep.map(({ team, px, py, colour }) => ({ team, px, py, colour }));
+}
+
 /** Minion dots in a cropped minimap frame, given the empty map behind it. */
 export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
   const { w, h, data } = frame;
@@ -215,6 +313,19 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
     if (diffAt(data, bg.data, i) < diff) continue;
     const t = teamColor(data[i], data[i + 1], data[i + 2]);
     if (t) label[p] = t === 100 ? 1 : 2;
+  }
+  // Ward icons come out before minions are counted: each piece of a star is minion-sized
+  // and would otherwise be read as a minion.
+  const k = w / 247;
+  for (const s of findWardStars(frame, bg, masked)) {
+    const l = s.team === 100 ? 1 : 2;
+    const [x0, x1, y0, y1] = STAR_FOOTPRINT;
+    for (let y = Math.max(0, Math.round(s.py + y0 * k)); y <= Math.min(h - 1, Math.round(s.py + y1 * k)); y++)
+      for (let x = Math.max(0, Math.round(s.px + x0 * k)); x <= Math.min(w - 1, Math.round(s.px + x1 * k)); x++) if (label[y * w + x] === l) label[y * w + x] = 0;
+    if (o.wards) {
+      const g = pixelToGame(s.px + 0.5, s.py + 0.5, w);
+      o.wards.push({ team: s.team, x: Math.round(g.x), y: Math.round(g.y), area: s.colour });
+    }
   }
   const seen = new Uint8Array(w * h);
   const dots: Dot[] = [];
@@ -251,18 +362,10 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
     if (area < minA || area > maxA) continue;
     const bw = maxX - minX + 1;
     const bh = maxY - minY + 1;
-    if (bw > maxD || bh > maxD) continue; // a ring or bar, not a dot
-    // A ward: a team-coloured chevron, ~7x5 px with a notch, wider than tall and about
-    // half filled (seen on a real 247 px minimap). Not a minion; kept apart if asked for.
-    const k = w / 247;
-    const fill = area / (bw * bh);
-    if (bw >= 5.5 * k && bw <= 9.5 * k && bw >= bh * 1.25 && fill >= 0.28 && fill <= 0.62 && area >= 8 * k * k) {
-      if (o.wards) {
-        const g = pixelToGame(sx / area + 0.5, sy / area + 0.5, w);
-        o.wards.push({ team: l === 1 ? 100 : 200, x: Math.round(g.x), y: Math.round(g.y), area });
-      }
-      continue;
-    }
+    // A ring or bar, not a dot. Two or three minions touching in a line make a blob longer
+    // than one dot is wide (seen in the fixture: 8x4 and 9x4 px pairs on a 247 px map,
+    // dropped by a plain size cap), so only the short side is held to one dot.
+    if (Math.min(bw, bh) > maxD || Math.max(bw, bh) > 2.5 * maxD) continue;
     // Minion dots are filled; a thin arc (a ring edge, an ability circle) is not.
     if (bw * bh >= 9 && area / (bw * bh) < (o.minFill ?? 0.45)) continue;
     const g = pixelToGame(sx / area + 0.5, sy / area + 0.5, w);
