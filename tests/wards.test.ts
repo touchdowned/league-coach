@@ -40,4 +40,21 @@ describe("ward positions", () => {
     const away = champs.map((c) => ({ ...c, at: [{ id: 4, x: c.t < 65_000 ? 7100 : 11_000, y: 4000 }] }));
     expect(placeWards(samples, away, ev, () => 100, 120_000).placed).toEqual([]);
   });
+
+  it("lets a new ward take a spot once the earlier ward there is gone", () => {
+    // A trinket at (6900, 4100) from 61 s; it's gone from 70 s (cleared) and a new one is
+    // dropped on the same spot at 80 s.
+    const ts = Array.from({ length: 60 }, (_, k) => 60_000 + k * 500);
+    const icon = (t: number) => (t >= 61_000 && t < 70_000) || t >= 80_500;
+    const samples: WaveSample[] = ts.map((t) => ({ t, lanes, wards: icon(t) ? [{ team: 100 as const, x: 6900, y: 4100 }] : [] }));
+    const champs: ChampSample[] = ts.map((t) => ({ t, fog: "off" as const, at: [{ id: 4, x: 7100, y: 4000 }] }));
+    const ev: TimelineEvent[] = [
+      { type: "WARD_PLACED", timestamp: 60_700, creatorId: 4, wardType: "YELLOW_TRINKET" },
+      { type: "WARD_PLACED", timestamp: 80_200, creatorId: 4, wardType: "SIGHT_WARD" },
+    ];
+    expect(placeWards(samples, champs, ev, () => 100, 120_000).placed.map((p) => p.t)).toEqual([60_700, 80_200]);
+    // The first ward never left: the second can't be that same icon.
+    const stays: WaveSample[] = ts.map((t) => ({ t, lanes, wards: t >= 61_000 ? [{ team: 100 as const, x: 6900, y: 4100 }] : [] }));
+    expect(placeWards(stays, champs, ev, () => 100, 120_000).placed.map((p) => p.t)).toEqual([60_700]);
+  });
 });

@@ -32,13 +32,34 @@ const HIDDEN_MS = 30_000;
 const UNDER_ICON = 1300;
 /** Share of the reads in between that must have a champion on the spot (a read can miss). */
 const UNDER_SHARE = 0.85;
+/**
+ * A spot an earlier ward took frees up once that ward is gone: its icon missing for this long
+ * in a row (longer than a champion standing on it for a moment), or its lifetime over:
+ * trinket wards last 90-120 s by level, sight wards 150 s; control wards until killed.
+ */
+const GONE_MS = 3000;
+const LIFETIME: Record<string, number> = { YELLOW_TRINKET: 120_000, SIGHT_WARD: 150_000 };
 
 export function placeWards(samples: WaveSample[], champs: ChampSample[], events: TimelineEvent[], teamOf: (id: number) => number, until: number) {
   const s = [...samples].filter((x) => x.wards).sort((a, b) => a.t - b.t);
   const off = champs.filter((c) => c.fog === "off");
   const placed: PlacedWard[] = [];
   const unplaced: TimelineEvent[] = [];
-  const used = new Set<string>();
+  // Spots taken by placed wards, and when their icon was matched.
+  const used = new Map<string, { x: number; y: number; team: number; t: number; type: string }>();
+  const stillThere = (u: { x: number; y: number; team: number; t: number; type: string }, t: number) => {
+    if (t - u.t > (LIFETIME[u.type] ?? Infinity)) return false;
+    let goneSince: number | null = null;
+    for (const x of s) {
+      if (x.t <= u.t) continue;
+      if (x.t >= t) break;
+      const seen = x.wards!.some((w) => w.team === u.team && Math.hypot(w.x - u.x, w.y - u.y) < SAME_SPOT);
+      if (seen) goneSince = null;
+      else if (goneSince === null) goneSince = x.t;
+      else if (x.t - goneSince >= GONE_MS) return false;
+    }
+    return true;
+  };
   const wards = events.filter((e) => e.type === "WARD_PLACED" && e.creatorId && e.wardType !== "UNDEFINED" && e.timestamp <= until && e.timestamp >= (s[0]?.t ?? Infinity));
   for (const e of wards) {
     const team = teamOf(e.creatorId!);
@@ -58,7 +79,7 @@ export function placeWards(samples: WaveSample[], champs: ChampSample[], events:
     }
     // Icons there before the event aren't this ward.
     const before = s.filter((x) => x.t >= e.timestamp - 4000 && x.t <= e.timestamp - 500).flatMap((x) => x.wards!.filter((w) => w.team === team));
-    let best: { x: number; y: number; d: number; key: string } | null = null;
+    let best: { x: number; y: number; d: number; key: string; t: number } | null = null;
     // Hidden under a portrait from the event until `t`: nearly every fog-off read in between
     // has a champion on the spot.
     const hiddenUntil = (w: { x: number; y: number }, t: number) => {
@@ -74,18 +95,19 @@ export function placeWards(samples: WaveSample[], champs: ChampSample[], events:
         if (w.team !== team) continue;
         if (before.some((b) => Math.hypot(b.x - w.x, b.y - w.y) < SAME_SPOT)) continue;
         const key = `${Math.round(w.x / SAME_SPOT)}:${Math.round(w.y / SAME_SPOT)}:${team}`;
-        if (used.has(key)) continue;
+        const prev = used.get(key);
+        if (prev && stillThere(prev, e.timestamp)) continue;
         const d = Math.hypot(w.x - at.x, w.y - at.y);
         if (d > 1200 || (best && d >= best.d)) continue;
         if (x.t > e.timestamp + SHOWN_MS && !hiddenUntil(w, x.t)) continue;
-        best = { x: w.x, y: w.y, d, key };
+        best = { x: w.x, y: w.y, d, key, t: x.t };
       }
     }
     if (!best) {
       unplaced.push(e);
       continue;
     }
-    used.add(best.key);
+    used.set(best.key, { x: best.x, y: best.y, team, t: best.t, type: e.wardType ?? "" });
     placed.push({ t: e.timestamp, creatorId: e.creatorId!, wardType: e.wardType ?? "", x: best.x, y: best.y });
   }
   return { placed, unplaced, total: wards.length };

@@ -91,7 +91,7 @@ export interface ChampSample {
   /** "team": your team's fog of war, what you could see. "off": everything. */
   fog: "team" | "off";
   /** `inferred`: not read off the minimap, filled in while hidden under another icon (see fillOcclusions). */
-  at: { id: number; x: number; y: number; inferred?: true }[];
+  at: { id: number; x: number; y: number; inferred?: true; /** Portrait match score (lower is surer), when matched by portrait. */ score?: number }[];
   /** Rings seen but not matched to a champion (named later by tracking, if they can be). */
   unk?: { team: 100 | 200; x: number; y: number }[];
 }
@@ -123,6 +123,8 @@ export interface WaveTrack {
     passes?: { fog: "off" | "team"; method: "recorder" | "screenshot"; frames: number; fps: number; wallMs: number; maxBacklog?: number; /** Frames the pass should give at its fps: a mismatch means frame times are off. */ expectedFrames?: number; segments?: number }[];
     /** Champion reads dropped as impossible jumps, and unmatched rings named by tracking. */
     tracking?: { dropped: number; named: number; filled?: number; rematched?: number };
+    /** The replay's Fog of War team view set before each pass, as read back from the screen. */
+    views?: { fog: "off" | "team"; want: "All" | "Blue" | "Red"; read: "All" | "Blue" | "Red" | null }[];
   };
 }
 

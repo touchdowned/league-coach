@@ -2,6 +2,7 @@
  * What you could see versus what was true, from the replay's minimap read twice per
  * moment: once with your team's fog of war, once with fog off.
  */
+import { FOUNTAINS } from "./minimap";
 import type { Track } from "./track";
 import type { ChampSample, WaveTrack } from "./waves";
 
@@ -66,6 +67,14 @@ export function mergeReplayPositions(track: Track, w: WaveTrack | undefined): Tr
  *     living ally is with your team's fog. So when a frame has exactly as many unnamed
  *     rings of a team as it has living champions of that team missing, they pair up,
  *     nearest last read first. `aliveAt` (from Live Client's isDead) says who's living.
+ *     A ring is only given to a champion who could have got there (see `canReach`): on
+ *     NA1_5686076870 at 10:29 elimination gave Heimerdinger's top-lane ring to Master Yi,
+ *     last read 9.5 s before 12,000 units away in the bottom lane.
+ * Before both, a weak portrait match (score >= WEAK_SCORE) that puts a champion more than
+ * JUMP units off their own track gives way to an unnamed ring of their team that fits the
+ * track, and its own ring goes back to the unnamed ones. That 10:29 frame had
+ * Heimerdinger matched at score 34 in the bottom lane (cover 0.38) while his own ring,
+ * 460 units from his read 2 s before, sat unnamed in the top lane.
  * Works through both fog views in time order, and changes `champs` in place.
  */
 export function nameRings(champs: ChampSample[], teamOf: (id: number) => number, o: { aliveAt?: (id: number, t: number) => boolean; ids?: number[]; myTeam?: number } = {}): number {
@@ -73,6 +82,39 @@ export function nameRings(champs: ChampSample[], teamOf: (id: number) => number,
   for (const fog of ["off", "team"] as const) {
     const last = new Map<number, { t: number; x: number; y: number }>();
     for (const s of champs.filter((c) => c.fog === fog).sort((a, b) => a.t - b.t)) {
+      // 0a. A weak match its champion couldn't have reached at all (by canReach, from a read
+      // in the last REACH_MS) isn't them: the ring goes back to the unnamed ones. At 10:27.5
+      // Master Yi was matched at score 35 in the top lane, 14,600 units and 7.5 s from his
+      // last read in the bottom lane.
+      for (let k = s.at.length - 1; k >= 0; k--) {
+        const a = s.at[k];
+        const p = last.get(a.id);
+        if ((a.score ?? 0) < WEAK_SCORE || !p || s.t - p.t > REACH_MS || canReach(p, a, s.t - p.t, teamOf(a.id))) continue;
+        (s.unk ??= []).push({ team: teamOf(a.id) as 100 | 200, x: a.x, y: a.y });
+        s.at.splice(k, 1);
+      }
+      // 0b. A weak match far off its champion's track loses to a ring that fits the track.
+      if (s.unk?.length)
+        for (const a of s.at) {
+          const p = last.get(a.id);
+          if ((a.score ?? 0) < WEAK_SCORE || !p || s.t - p.t > TRACK_MS || Math.hypot(a.x - p.x, a.y - p.y) <= JUMP) continue;
+          let best = -1;
+          let bd = Infinity;
+          s.unk.forEach((u, i) => {
+            const d = Math.hypot(u.x - p.x, u.y - p.y);
+            if (u.team === teamOf(a.id) && d <= walkReach(s.t - p.t) && d < bd) {
+              best = i;
+              bd = d;
+            }
+          });
+          if (best < 0) continue;
+          const u = s.unk[best];
+          s.unk[best] = { team: u.team, x: a.x, y: a.y };
+          a.x = u.x;
+          a.y = u.y;
+          delete a.score;
+          named++;
+        }
       if (s.unk?.length) {
         const present = new Set(s.at.map((a) => a.id));
         const usedU = new Set<number>();
@@ -88,7 +130,7 @@ export function nameRings(champs: ChampSample[], teamOf: (id: number) => number,
           for (const [id, p] of last) {
             if (present.has(id) || teamOf(id) !== u.team || s.t - p.t > 6000) continue;
             const d = Math.hypot(p.x - u.x, p.y - u.y);
-            if (d <= Math.min(3500, 600 + ((s.t - p.t) / 1000) * 500)) pairs.push({ u: i, id, d });
+            if (d <= walkReach(s.t - p.t)) pairs.push({ u: i, id, d });
           }
         });
         pairs.sort((a, b) => a.d - b.d);
@@ -110,6 +152,7 @@ export function nameRings(champs: ChampSample[], teamOf: (id: number) => number,
             for (const r of rings)
               for (const id of missing) {
                 const p = last.get(id);
+                if (p && !canReach(p, r.u, s.t - p.t, teamOf(id))) continue;
                 cand.push({ u: r.i, id, d: p ? Math.hypot(p.x - r.u.x, p.y - r.u.y) : 1e9 });
               }
             cand.sort((a, b) => a.d - b.d);
@@ -120,10 +163,38 @@ export function nameRings(champs: ChampSample[], teamOf: (id: number) => number,
         if (left.length) s.unk = left;
         else delete s.unk;
       }
-      for (const a of s.at) last.set(a.id, { t: s.t, x: a.x, y: a.y });
+      for (const a of s.at) if (!a.inferred) last.set(a.id, { t: s.t, x: a.x, y: a.y });
     }
   }
   return named;
+}
+
+/** Portrait match score (mean colour difference) from which a match counts as weak: confident matches score under 20 (the bar for learning icons), and the misread at 10:29 scored 34. */
+const WEAK_SCORE = 30;
+/** How far off a champion's own track a weak match must be to give way: well past any blink or dash (Flash 400, the longest common dashes ~1000) plus read error. */
+const JUMP = 3000;
+/** How recent the track must be to judge a jump against it (the same 6 s tracking uses). */
+const TRACK_MS = 6000;
+/** How far back a read still says where a champion can't be (past this, a recall or teleport could explain anything). */
+const REACH_MS = 30_000;
+/** Walking reach used by tracking: 500 units a second (faster than any base move speed) plus 600 of slack for the read itself, at most 3500 (a blink or dash on top). */
+const walkReach = (dtMs: number) => Math.min(3500, 600 + (dtMs / 1000) * 500);
+/** Recall channel (8 s), after which a champion stands in their fountain. */
+const RECALL_MS = 8000;
+
+/**
+ * Could a champion last read at `p` be at `r` `dtMs` later? Walking (500 units a second plus
+ * 600, without the 3500 cap, since elimination can look back further than 6 s); or the ring
+ * is in their own fountain (respawn or recall); or there was time to recall and walk from
+ * the fountain. Teleport isn't allowed for: a teleported champion stays unnamed until a
+ * portrait match or tracking picks them up again.
+ */
+export function canReach(p: { x: number; y: number }, r: { x: number; y: number }, dtMs: number, teamId: number): boolean {
+  if (Math.hypot(r.x - p.x, r.y - p.y) <= 600 + (dtMs / 1000) * 500) return true;
+  const f = FOUNTAINS[teamId === 200 ? 1 : 0];
+  const fromBase = Math.hypot(r.x - f.x, r.y - f.y);
+  if (fromBase <= f.r) return true;
+  return dtMs > RECALL_MS && fromBase <= f.r + ((dtMs - RECALL_MS) / 1000) * 500;
 }
 
 /**

@@ -5,6 +5,8 @@ import { dropJumps, fillOcclusions, nameRings } from "../core/vision";
 import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
 import { gameIdOf, LeagueClient } from "./league";
 import { champKey, parseLive, type LivePoll } from "../core/telemetry";
+import { FogView, readFogDropdown, viewOf } from "../core/fogview";
+import { clickFogView } from "./fogswitch";
 import { promises as fsp } from "fs";
 import pathMod from "path";
 
@@ -373,7 +375,8 @@ export async function scanReplay(
       if (fog === "off") samples.push({ ...sampleFromDots(t, dots), ...(wardDots.length ? { wards: wardDots.map(({ team, x, y }) => ({ team, x, y })) } : {}) });
       if (refs.length) {
         const found = detectChampions(frame, refs, 38, rings);
-        const at = found.filter((c) => c.id > 0).map(({ id, x, y }) => ({ id, x, y }));
+        // Weak matches keep their score, so naming can overrule them against a champion's track.
+        const at = found.filter((c) => c.id > 0).map(({ id, x, y, score }) => ({ id, x, y, ...(score >= 30 ? { score: Math.round(score) } : {}) }));
         const unkF = found.filter((c) => c.id === 0);
         const unk = unkF.map(({ team, x, y }) => ({ team, x, y }));
         const sample: ChampSample = { t, fog, at, ...(unk.length ? { unk } : {}) };
@@ -390,23 +393,47 @@ export async function scanReplay(
       }
     };
 
-    // Live Client Data, polled as fast as it answers through both passes. The state is a
-    // function of game time, so polls from the two passes interleave into one finer stream.
+    // Live Client Data, polled as fast as it answers through the fog-off pass only. With
+    // the replay's Fog of War view on one team, Live Client reports the other team as that
+    // team sees them: on NA1_5686076870 Udyr's CS disagreed in 446 of 1272 polls taken under
+    // the Blue view, against 0 under All.
     const live: LivePoll[] = [];
-    let polling = true;
-    const pollLoop = (async () => {
-      while (polling && !isCancelled()) {
-        const p = parseLive(await lc.liveData());
-        if (p && p.t >= 0) live.push(p);
-        await sleep(30);
-      }
-    })();
+    let polling = false;
+    let pollLoop: Promise<void> = Promise.resolve();
+    const startPolling = () => {
+      polling = true;
+      pollLoop = (async () => {
+        while (polling && !isCancelled()) {
+          const p = parseLive(await lc.liveData());
+          if (p && p.t >= 0) live.push(p);
+          await sleep(30);
+        }
+      })();
+    };
 
     // 4. Two passes over 1:05 to the end: fog off (minions, true positions) at 2 frames
     // per game second, then your team's fog (what you could see) at 1.
     const from = 65;
     let method = opts.method ?? "recorder";
+    // Which units the minimap draws is the replay's own Fog of War dropdown: All for the
+    // fog-off pass, your team for the team pass. Clicked, then read back off the screen.
+    const views: NonNullable<NonNullable<WaveTrack["scanInfo"]>["views"]> = [];
+    const setView = async (want: FogView) => {
+      let read: FogView | null = null;
+      for (let tries = 0; tries < 3 && read !== want && !isCancelled(); tries++) {
+        const r = await clickFogView(want, screenSize).catch((e: Error) => e.message);
+        if (r === "no-window") throw new Error("The replay window closed.");
+        await sleep(500);
+        read = readFogDropdown(await captureScreen());
+      }
+      if (read !== want)
+        throw new Error(`Couldn't set the replay's Fog of War view to ${want} (it shows ${read ?? "nothing readable"}). Keep the replay in front and its controls visible, set it by hand (bottom left), and try again.`);
+      return read;
+    };
     const runPass = async (fog: ChampSample["fog"], fps: number) => {
+      const want: FogView = fog === "off" ? "All" : viewOf(me.teamId);
+      views.push({ fog, want, read: await setView(want) });
+      if (fog === "off") startPolling();
       await lc.setRender({ fogOfWar: fog === "team" });
       await sleep(300);
       const label = (t: number) =>
@@ -423,9 +450,10 @@ export async function scanReplay(
       passes.push({ fog, method: "screenshot", frames: r.frames, fps: r.frames / Math.max(1, end - from), wallMs: r.wallMs });
     };
     await runPass("off", 2);
-    if (!isCancelled()) await runPass("team", 1);
     polling = false;
     await pollLoop;
+    if (!isCancelled()) await runPass("team", 1);
+    if (!isCancelled()) await setView("All").catch(() => undefined);
     live.sort((a, b) => a.t - b.t);
     if (isCancelled()) throw new Error("Stopped.");
     champs.sort((a, b) => a.t - b.t);
@@ -493,6 +521,7 @@ export async function scanReplay(
       lastFrame,
       passes,
       tracking: { dropped, named, filled, rematched },
+      views,
     };
     return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, scanInfo };
   } finally {

@@ -322,6 +322,17 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     pass: (waves.scanInfo?.passes ?? []).every((p) => p.method !== "recorder" || (p.expectedFrames && Math.abs(p.frames - p.expectedFrames) <= p.expectedFrames * 0.005)),
     n: waves.scanInfo?.passes?.length ?? 0,
   };
+  // The Fog of War view each pass ran under (clicked and read back), and whose allies the
+  // team pass actually kept on the minimap.
+  const views = waves.scanInfo?.views ?? [];
+  const wantTeam = me.teamId === 100 ? "Blue" : "Red";
+  const viewCheck = {
+    name: "scan: fog view per pass (All, then your team)",
+    measured: `${views.map((v) => `${v.fog}: ${v.read ?? "?"}`).join(", ") || "not recorded"}; team pass kept team ${waves.viewTeam ?? "?"} on the minimap (you: ${me.teamId})`,
+    bar: `off pass All, team pass ${wantTeam}, and the team pass showing your team`,
+    pass: views.some((v) => v.fog === "off" && v.read === "All") && views.some((v) => v.fog === "team" && v.read === wantTeam) && waves.viewTeam === me.teamId,
+    n: views.length,
+  };
   const checks = [
     checkPositions(waves, events, until),
     checkAllies(waves, allies, aliveAt),
@@ -341,7 +352,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     scanInfo: waves.scanInfo,
     samples: waves.samples.length,
     champSamples: waves.champs?.length ?? 0,
-    checks: [framesCheck, checkFogOff(waves), ...checks.map(({ detail, ...c }) => c)],
+    checks: [framesCheck, viewCheck, checkFogOff(waves), ...checks.map(({ detail, ...c }) => c)],
     positionErrors: checks[0].detail,
     missedBuys: checks[2].detail,
     csDetail: checks[4].detail,
