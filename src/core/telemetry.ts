@@ -60,7 +60,11 @@ export function parseLive(raw: unknown): LivePoll | null {
   if (!d?.gameData || typeof d.gameData.gameTime !== "number" || !Array.isArray(d.allPlayers)) return null;
   const players = d.allPlayers.map((p) => {
     const sc = (p.scores ?? {}) as Record<string, number>;
-    const items = Array.isArray(p.items) ? (p.items as { itemID?: number }[]).map((i) => i.itemID ?? 0).filter((x) => x > 0) : [];
+    // A stack (potions, control wards) is one entry with a count: list each copy, so a
+    // second potion bought on top of the first shows as a change.
+    const items = Array.isArray(p.items)
+      ? (p.items as { itemID?: number; count?: number }[]).flatMap((i) => ((i.itemID ?? 0) > 0 ? Array<number>(Math.max(1, Math.min(20, Number(i.count) || 1))).fill(i.itemID!) : []))
+      : [];
     return {
       championName: liveChampion(p),
       team: String(p.team ?? ""),
@@ -180,6 +184,32 @@ export function checkPositions(w: WaveTrack, events: TimelineEvent[], until: num
   };
 }
 
+/**
+ * The fog-off pass must show both teams. fogOfWar:false only lifts the map's shading: which
+ * units the minimap draws is the replay's own "Fog of War" dropdown (All / Blue / Red),
+ * which the Replay API can't set. Left on one team, the other team's minions and wards
+ * mostly vanish from every pass. Measured: dropdown on All, red/blue minion dots 18459/21465
+ * (0.86); on Blue, 3473/21358 (0.16) and 4046/18808 (0.22) on another match.
+ */
+export function checkFogOff(w: WaveTrack): StreamCheck {
+  const n = { 100: 0, 200: 0 };
+  for (const s of w.samples) for (const L of Object.values(s.lanes)) {
+    n[100] += L.b.length;
+    n[200] += L.r.length;
+  }
+  const lo = Math.min(n[100], n[200]);
+  const hi = Math.max(n[100], n[200]);
+  const ratio = hi ? lo / hi : 0;
+  const fewer = n[100] < n[200] ? "blue" : "red";
+  return {
+    name: "scan: fog-off pass shows both teams",
+    measured: `minion dots blue ${n[100]}, red ${n[200]} (ratio ${ratio.toFixed(2)})${ratio < 0.5 ? `: ${fewer} is hidden, set the replay's Fog of War dropdown to All` : ""}`,
+    bar: "fewer team's dots >= 0.5x the other's",
+    pass: hi > 0 && ratio >= 0.5,
+    n: hi + lo,
+  };
+}
+
 /** Your allies must be on your own minimap in every team-fog sample. */
 export function checkAllies(w: WaveTrack, allyIds: number[], aliveAt: (id: number, t: number) => boolean): StreamCheck {
   let read = 0;
@@ -250,7 +280,13 @@ export function checkItems(changes: InvChange[], events: TimelineEvent[], champO
     }
     // Consumed straight after, or a copy built into something just before (buying an item
     // that uses your old copy, then rebuying it): the count Live Client shows never changes.
-    const gone = events.some((e) => e.type === "ITEM_DESTROYED" && e.participantId === b.participantId && e.itemId === b.itemId && Math.abs(e.timestamp - b.timestamp) <= ITEM_LAG);
+    // Or undone in the shop (ITEM_UNDO names the undone item as beforeId).
+    const gone = events.some(
+      (e) =>
+        e.participantId === b.participantId &&
+        ((e.type === "ITEM_DESTROYED" && e.itemId === b.itemId && Math.abs(e.timestamp - b.timestamp) <= ITEM_LAG) ||
+          (e.type === "ITEM_UNDO" && e.beforeId === b.itemId && e.timestamp >= b.timestamp && e.timestamp - b.timestamp <= ITEM_LAG)),
+    );
     if (gone) consumed++;
     else if (!listed.has(b.itemId!)) {
       unlisted.add(b.itemId!);
@@ -262,7 +298,7 @@ export function checkItems(changes: InvChange[], events: TimelineEvent[], champO
   const p90 = quantile(lags, 0.9);
   return {
     name: "inv: item buys vs ITEM_PURCHASED",
-    measured: `${pct(matched, judged)}% matched (${matched}/${judged}); first seen ${isNaN(p90) ? "-" : `${median(lags)} ms after the buy (median), ${p90} ms (90th pct)`}; not judged: ${early} before the first poll, ${consumed} consumed or rebought within ${ITEM_LAG / 1000} s, ${unlistedN} of items Live Client never lists${unlisted.size ? ` (${[...unlisted].join(", ")})` : ""}`,
+    measured: `${pct(matched, judged)}% matched (${matched}/${judged}); first seen ${isNaN(p90) ? "-" : `${median(lags)} ms after the buy (median), ${p90} ms (90th pct)`}; not judged: ${early} before the first poll, ${consumed} consumed, undone or rebought within ${ITEM_LAG / 1000} s, ${unlistedN} of items Live Client never lists${unlisted.size ? ` (${[...unlisted].join(", ")})` : ""}`,
     bar: `100% of visible buys seen within ${ITEM_LAG / 1000} s`,
     pass: judged > 0 && matched === judged,
     n: judged,

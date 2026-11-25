@@ -87,3 +87,35 @@ describe("champion names across sources", () => {
     expect(poll!.players[1].championName).toBe(champKey("MasterYi"));
   });
 });
+
+describe("item stacks, undone buys and the fog-off pass", () => {
+  it("lists each copy of a stacked item, so a second potion is a change", async () => {
+    const { parseLive, invChanges } = await import("../src/core/telemetry");
+    const at = (t: number, count: number) =>
+      parseLive({ gameData: { gameTime: t }, allPlayers: [{ championName: "Yone", team: "CHAOS", level: 9, items: [{ itemID: 2003, count }, { itemID: 3006, count: 1 }] }] })!;
+    expect(at(1, 2).players[0].items).toEqual([2003, 2003, 3006]);
+    const ch = invChanges([at(568, 1), at(569, 3)]);
+    expect(ch.filter((c) => c.kind === "item+" && c.item === 2003)).toHaveLength(2);
+  });
+
+  it("does not judge a buy that was undone in the shop", () => {
+    const events = [
+      { type: "ITEM_PURCHASED", timestamp: 271_325, participantId: 1, itemId: 2003 },
+      { type: "ITEM_UNDO", timestamp: 274_900, participantId: 1, beforeId: 2003, afterId: 0 },
+    ] as TimelineEvent[];
+    const changes: InvChange[] = [{ t: 100_000, window: 1000, champion: "jax", kind: "item+", item: 2003 }];
+    const r = checkItems(changes, events, champOf, 400_000, 64_000);
+    expect(r.n).toBe(0);
+    expect(r.measured).toMatch(/1 consumed, undone or rebought/);
+  });
+
+  it("fails a fog-off pass that only showed one team", async () => {
+    const { checkFogOff } = await import("../src/core/telemetry");
+    const lane = (b: number, r: number) => ({ b: Array(b).fill(0.5), r: Array(r).fill(0.5) });
+    const track = (b: number, r: number) => ({ samples: [{ t: 0, lanes: { TOP: lane(b, r), MIDDLE: lane(b, r), BOTTOM: lane(b, r) } }] }) as never;
+    expect(checkFogOff(track(6, 5)).pass).toBe(true);
+    const one = checkFogOff(track(6, 1));
+    expect(one.pass).toBe(false);
+    expect(one.measured).toMatch(/red is hidden/);
+  });
+});

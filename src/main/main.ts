@@ -9,7 +9,7 @@ import type { GameReport } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
 import { openReplay, scanReplay } from "./scan";
-import { champKey, checkAllies, checkCs, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
+import { champKey, checkAllies, checkCs, checkFogOff, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
 import { checkGold, itemTable } from "../core/gold";
 import { checkWards, placeWards } from "../core/wards";
 import { growBench, readBench } from "./bench";
@@ -341,7 +341,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     scanInfo: waves.scanInfo,
     samples: waves.samples.length,
     champSamples: waves.champs?.length ?? 0,
-    checks: [framesCheck, ...checks.map(({ detail, ...c }) => c)],
+    checks: [framesCheck, checkFogOff(waves), ...checks.map(({ detail, ...c }) => c)],
     positionErrors: checks[0].detail,
     missedBuys: checks[2].detail,
     csDetail: checks[4].detail,
