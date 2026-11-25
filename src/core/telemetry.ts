@@ -146,39 +146,57 @@ function nearest(samples: ChampSample[], t: number, fog: ChampSample["fog"], wit
 }
 
 /**
+ * A portrait on the minimap is about 725 units in radius. A champion standing within
+ * COVERED of another champion's icon can be drawn wholly underneath it, with nothing left
+ * to read. Measured on NA1_5686076870: all 8 unread kills had the victim under the killers'
+ * icons (or an ally's) in the frames before the kill.
+ */
+const COVERED = 900;
+
+/**
  * Checks the minimap champion reads against every kill's exact victim position.
  * A victim is still standing on the kill spot in their last read before the event.
+ * A victim drawn under another icon can't be read: those are counted apart, not as reads.
  */
 export function checkPositions(w: WaveTrack, events: TimelineEvent[], until: number): StreamCheck {
   const errs: { t: number; victim: number; err: number }[] = [];
+  const hidden: { t: number; victim: number }[] = [];
   let missing = 0;
   const kills = events.filter((e) => e.type === "CHAMPION_KILL" && e.position && e.victimId && e.timestamp <= until);
   for (const k of kills) {
     // The victim's last read in the 2 s before the kill (they're on the kill spot by then).
     let a: { x: number; y: number } | undefined;
     let at = -Infinity;
+    let frames = 0;
+    let covered = 0;
     for (const s of w.champs ?? []) {
-      if (s.fog !== "off" || s.t > k.timestamp || s.t < k.timestamp - 2000 || s.t <= at) continue;
+      if (s.fog !== "off" || s.t > k.timestamp || s.t < k.timestamp - 2000) continue;
+      frames++;
+      // Another icon on the kill spot: a read of someone else, named or not.
+      const near = (p: { x: number; y: number }) => Math.hypot(p.x - k.position!.x, p.y - k.position!.y) <= COVERED;
+      if (s.at.some((x) => x.id !== k.victimId && !x.inferred && near(x)) || s.unk?.some(near)) covered++;
       const r = s.at.find((x) => x.id === k.victimId);
-      if (r) {
+      if (r && s.t > at) {
         a = r;
         at = s.t;
       }
     }
-    if (!a) {
-      missing++;
-      continue;
-    }
-    errs.push({ t: k.timestamp, victim: k.victimId!, err: Math.round(Math.hypot(a.x - k.position!.x, a.y - k.position!.y)) });
+    if (a) errs.push({ t: k.timestamp, victim: k.victimId!, err: Math.round(Math.hypot(a.x - k.position!.x, a.y - k.position!.y)) });
+    // Not read, and another icon sat on the spot in every frame: nothing was there to read.
+    else if (frames > 0 && covered === frames) hidden.push({ t: k.timestamp, victim: k.victimId! });
+    else missing++;
   }
   const e = errs.map((x) => x.err);
   const med = median(e);
   const p90 = quantile(e, 0.9);
+  const readable = kills.length - hidden.length;
   return {
     name: "pos: victim at each kill (fog off)",
-    measured: errs.length ? `median ${med} units, 90th pct ${p90} units, ${missing} of ${kills.length} kills with no read` : `no reads (${kills.length} kills)`,
-    bar: "median < 400, 90% < 800",
-    pass: errs.length >= Math.max(3, kills.length * 0.7) && med < 400 && p90 < 800,
+    measured: errs.length
+      ? `median ${med} units, 90th pct ${p90} units over ${errs.length} reads; ${hidden.length} of ${kills.length} kills had the victim under another icon (not readable, counted apart); ${missing} of the other ${readable} with no read`
+      : `no reads (${kills.length} kills)`,
+    bar: "median < 400, 90% < 800, and a read for >= 70% of the kills not under another icon",
+    pass: errs.length >= Math.max(3, readable * 0.7) && med < 400 && p90 < 800,
     n: kills.length,
     detail: errs,
   };

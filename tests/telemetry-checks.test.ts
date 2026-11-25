@@ -119,3 +119,26 @@ describe("item stacks, undone buys and the fog-off pass", () => {
     expect(one.measured).toMatch(/red is hidden/);
   });
 });
+
+describe("kill positions", () => {
+  it("counts a victim under another icon apart from a victim simply not read", async () => {
+    const { checkPositions } = await import("../src/core/telemetry");
+    const kill = (t: number, victimId: number, x: number, y: number) => ({ type: "CHAMPION_KILL", timestamp: t, victimId, position: { x, y } }) as TimelineEvent;
+    const events = [kill(100_000, 1, 5000, 5000), kill(200_000, 2, 9000, 9000), kill(300_000, 3, 3000, 3000), kill(400_000, 4, 7000, 2000), kill(500_000, 5, 2000, 7000)];
+    const s = (t: number, at: { id: number; x: number; y: number }[]) => ({ t, fog: "off" as const, at });
+    const champs = [
+      s(99_500, [{ id: 1, x: 5050, y: 5000 }]),
+      s(199_500, [{ id: 2, x: 9000, y: 9100 }]),
+      s(299_500, [{ id: 3, x: 3000, y: 3050 }]),
+      // Victim 4 isn't read, and killer 7 stands on the kill spot in every frame before it.
+      s(399_000, [{ id: 7, x: 7200, y: 2100 }]),
+      s(399_500, [{ id: 7, x: 7100, y: 2050 }]),
+      // Victim 5 isn't read and nothing is on the spot: a plain miss.
+      s(499_500, [{ id: 7, x: 12000, y: 12000 }]),
+    ];
+    const r = checkPositions({ samples: [], champs } as never, events, 600_000);
+    expect(r.measured).toMatch(/over 3 reads; 1 of 5 kills had the victim under another icon/);
+    expect(r.measured).toMatch(/1 of the other 4 with no read/);
+    expect(r.pass).toBe(true); // 3 of 4 readable kills read
+  });
+});
