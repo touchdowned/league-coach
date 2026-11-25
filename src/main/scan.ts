@@ -4,7 +4,7 @@ import { cameraLookingAt } from "../core/camera";
 import { dropJumps, fillOcclusions, nameRings } from "../core/vision";
 import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
 import { gameIdOf, LeagueClient } from "./league";
-import { parseLive, type LivePoll } from "../core/telemetry";
+import { champKey, parseLive, type LivePoll } from "../core/telemetry";
 import { promises as fsp } from "fs";
 import pathMod from "path";
 
@@ -466,7 +466,7 @@ export async function scanReplay(
           lo = m + 1;
         } else hi = m - 1;
       }
-      const lp = at >= 0 ? live[at].players.find((x) => x.championName === name) : undefined;
+      const lp = at >= 0 ? live[at].players.find((x) => champKey(x.championName) === champKey(name ?? "")) : undefined;
       return lp ? !lp.isDead : true;
     };
     const named = nameRings(champs, teamOf, { aliveAt, ids: players.map((p) => p.id), myTeam: me.teamId });

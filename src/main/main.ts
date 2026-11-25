@@ -9,7 +9,7 @@ import type { GameReport } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
 import { openReplay, scanReplay } from "./scan";
-import { checkAllies, checkCs, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
+import { champKey, checkAllies, checkCs, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
 import { checkGold, itemTable } from "../core/gold";
 import { checkWards, placeWards } from "../core/wards";
 import { growBench, readBench } from "./bench";
@@ -311,7 +311,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
   const aliveAt = (id: number, t: number) => {
     let best = null as (typeof polls)[number] | null;
     for (const p of polls) if (p.t <= t && (!best || p.t > best.t)) best = p;
-    const lp = best?.players.find((x) => x.championName === champOf(id));
+    const lp = best?.players.find((x) => champKey(x.championName) === champKey(champOf(id)));
     return !lp?.isDead;
   };
   // Frame times are from + k / fps: they're only right if each pass gave the frames its span implies.

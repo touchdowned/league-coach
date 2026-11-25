@@ -69,3 +69,21 @@ describe("second look at unmatched rings", () => {
     expect(ids[2]).toBe(0); // wrong team
   });
 });
+
+describe("champion names across sources", () => {
+  it("joins Live Client display names to match ids", async () => {
+    const { champKey, parseLive } = await import("../src/core/telemetry");
+    expect(champKey("Master Yi")).toBe(champKey("MasterYi"));
+    expect(champKey("Aurelion Sol")).toBe(champKey("AurelionSol"));
+    expect(champKey("Kai'Sa")).toBe(champKey("Kaisa"));
+    const poll = parseLive({
+      gameData: { gameTime: 10 },
+      allPlayers: [
+        { championName: "Wukong", rawChampionName: "game_character_displayname_MonkeyKing", team: "ORDER", level: 1 },
+        { championName: "Master Yi", team: "ORDER", level: 1 },
+      ],
+    });
+    expect(poll!.players[0].championName).toBe(champKey("MonkeyKing"));
+    expect(poll!.players[1].championName).toBe(champKey("MasterYi"));
+  });
+});

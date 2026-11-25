@@ -39,6 +39,21 @@ export type InvChange =
   | { t: number; window: number; champion: string; kind: "cs"; value: number; delta: number }
   | { t: number; window: number; champion: string; kind: "death" | "respawn" };
 
+/**
+ * One spelling for a champion across sources. Match data says "MasterYi", "AurelionSol",
+ * "MonkeyKing"; Live Client's championName is the display name ("Master Yi", "Wukong").
+ * Lower-case letters and digits only, so both spellings of the same id agree.
+ */
+export function champKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Live Client's rawChampionName ("game_character_displayname_MonkeyKing") holds the id match data uses. */
+function liveChampion(p: Record<string, unknown>): string {
+  const raw = /displayname_([A-Za-z0-9]+)$/.exec(String(p.rawChampionName ?? ""));
+  return champKey(raw ? raw[1] : String(p.championName ?? ""));
+}
+
 /** Parses one allgamedata response. Null when it isn't one. */
 export function parseLive(raw: unknown): LivePoll | null {
   const d = raw as { gameData?: { gameTime?: number }; allPlayers?: Record<string, unknown>[] } | null;
@@ -47,7 +62,7 @@ export function parseLive(raw: unknown): LivePoll | null {
     const sc = (p.scores ?? {}) as Record<string, number>;
     const items = Array.isArray(p.items) ? (p.items as { itemID?: number }[]).map((i) => i.itemID ?? 0).filter((x) => x > 0) : [];
     return {
-      championName: String(p.championName ?? ""),
+      championName: liveChampion(p),
       team: String(p.team ?? ""),
       level: Number(p.level ?? 0),
       items,
@@ -80,9 +95,9 @@ export function invChanges(polls: LivePoll[]): InvChange[] {
     const t = Math.round((a.t + b.t) / 2);
     const window = b.t - a.t;
     for (const pb of b.players) {
-      const pa = a.players.find((x) => x.championName === pb.championName && x.team === pb.team);
+      const pa = a.players.find((x) => champKey(x.championName) === champKey(pb.championName) && x.team === pb.team);
       if (!pa) continue;
-      const c = pb.championName;
+      const c = champKey(pb.championName);
       const ma = multiset(pa.items);
       const mb = multiset(pb.items);
       for (const [id, n] of mb) for (let k = ma.get(id) ?? 0; k < n; k++) out.push({ t, window, champion: c, kind: "item+", item: id });
@@ -221,7 +236,7 @@ export function checkItems(changes: InvChange[], events: TimelineEvent[], champO
     const champ = champOf(b.participantId!);
     let best: InvChange | null = null;
     for (const c of changes) {
-      if (c.kind !== "item+" || c.champion !== champ || c.item !== b.itemId || used.has(c)) continue;
+      if (c.kind !== "item+" || champKey(c.champion) !== champKey(champ) || c.item !== b.itemId || used.has(c)) continue;
       // The poll that first shows it is at c.t + window/2; it can't be before the buy.
       const seenAt = c.t + c.window / 2;
       if (seenAt < b.timestamp - 250 || c.t - c.window / 2 > b.timestamp + ITEM_LAG) continue;
@@ -261,7 +276,7 @@ export function checkLevels(changes: InvChange[], events: TimelineEvent[], champ
   let matched = 0;
   const offsets: number[] = [];
   for (const u of ups) {
-    const c = changes.find((x) => x.kind === "level" && x.champion === champOf(u.participantId!) && Math.abs(x.t - u.timestamp) <= 3000);
+    const c = changes.find((x) => x.kind === "level" && champKey(x.champion) === champKey(champOf(u.participantId!)) && Math.abs(x.t - u.timestamp) <= 3000);
     if (c) {
       matched++;
       offsets.push(Math.abs(c.t - u.timestamp));
@@ -290,8 +305,12 @@ export function checkCs(polls: LivePoll[], timeline: TimelineDto, champOf: (id: 
     for (const id in f.participantFrames) {
       const pf = f.participantFrames[id];
       const name = champOf(Number(id));
-      const lp = best.players.find((x) => x.championName === name);
-      if (!lp) continue;
+      const lp = best.players.find((x) => champKey(x.championName) === champKey(name));
+      // A champion the poll doesn't list is a miss, not something to skip quietly.
+      if (!lp) {
+        n++;
+        continue;
+      }
       const total = pf.minionsKilled + pf.jungleMinionsKilled;
       // The poll is up to 1.5 s off the frame: allow the CS a laner can take in that time
       // (about 4 a second when a wave dies) on top of 2 for the frame's own rounding.
