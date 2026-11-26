@@ -31,6 +31,8 @@ export interface Dot {
   area: number;
   /** Minions in this blob: touching minions merge into one blob, counted by area. */
   n?: number;
+  /** Ward icons only: which icon it matched (see findWardIcons). */
+  kind?: WardKind;
 }
 
 const diffAt = (a: Frame["data"], b: Frame["data"], i: number) => Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
@@ -152,6 +154,8 @@ export interface DotOpts {
   structureScale?: number;
   /** When given, ward icons found are added here (they're never counted as minions). */
   wards?: Dot[];
+  /** The game's own ward icons as templates (see wardTemplate): tells ward kinds apart and finds control wards. */
+  wardTemplates?: WardTemplate[];
   /** Champion rings: anything inside one is part of the icon, not a minion. */
   exclude?: { cx: number; cy: number; r: number }[];
 }
@@ -287,6 +291,185 @@ export function findWardStars(frame: Frame, bg: Frame, masked?: Uint8Array): { t
   return keep.map(({ team, px, py, colour }) => ({ team, px, py, colour }));
 }
 
+export type WardKind = "stealth" | "stealth_low" | "control";
+
+/**
+ * A ward icon from the game's files (raw.communitydragon.org, ux/minimap/icons), reduced to
+ * how the minimap draws it: each cell is 1 icon colour, 2 dark outline, 0 empty, -1 mixed.
+ * The game draws these 32 px icons at about 0.62 of their size on a 247 px minimap: the
+ * stealth ward star comes out 13x11 px with its outline, the control ward's eye about 12x7
+ * (both measured on NA1_5686039660). Matching is on shape only, against separate team-colour
+ * and dark masks: plain RGB correlation can't tell the kinds apart.
+ */
+export interface WardTemplate {
+  kind: WardKind;
+  w: number;
+  h: number;
+  /** Cells, row by row, at a 247 px minimap. */
+  c: Int8Array;
+}
+
+export const WARD_ICON_SCALE = 0.62;
+
+/** Template of one icon (RGBA with alpha), at `scale` of its size (default: as drawn on a 247 px minimap). */
+export function wardTemplate(kind: WardKind, icon: Frame, scale = WARD_ICON_SCALE): WardTemplate {
+  const W = Math.round(icon.w * scale);
+  const H = Math.round(icon.h * scale);
+  const cls = new Int8Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      let a = 0;
+      let col = 0;
+      let dark = 0;
+      let n = 0;
+      for (let yy = Math.floor(y / scale); yy < Math.min(icon.h, Math.ceil((y + 1) / scale)); yy++)
+        for (let xx = Math.floor(x / scale); xx < Math.min(icon.w, Math.ceil((x + 1) / scale)); xx++) {
+          const i = (yy * icon.w + xx) * 4;
+          n++;
+          const al = icon.data[i + 3] / 255;
+          a += al;
+          if (al > 0.5) {
+            if (Math.max(icon.data[i], icon.data[i + 1], icon.data[i + 2]) < 80) dark++;
+            else col++;
+          }
+        }
+      n = Math.max(1, n);
+      a /= n;
+      cls[y * W + x] = a < 0.15 ? 0 : col / n > 0.55 ? 1 : dark / n > 0.55 ? 2 : -1;
+    }
+  // Trim to the icon plus a one-cell empty border.
+  let x0 = W;
+  let x1 = -1;
+  let y0 = H;
+  let y1 = -1;
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++)
+      if (cls[y * W + x] !== 0) {
+        x0 = Math.min(x0, x);
+        x1 = Math.max(x1, x);
+        y0 = Math.min(y0, y);
+        y1 = Math.max(y1, y);
+      }
+  const tw = x1 - x0 + 3;
+  const th = y1 - y0 + 3;
+  const c = new Int8Array(tw * th);
+  for (let y = 0; y < th; y++)
+    for (let x = 0; x < tw; x++) {
+      const sx = x + x0 - 1;
+      const sy = y + y0 - 1;
+      c[y * tw + x] = sx >= 0 && sy >= 0 && sx < W && sy < H ? cls[sy * W + sx] : 0;
+    }
+  return { kind, w: tw, h: th, c };
+}
+
+/** A template resampled to another minimap width (nearest cell). */
+function scaledTemplate(t: WardTemplate, k: number): WardTemplate {
+  if (Math.abs(k - 1) < 0.02) return t;
+  const w = Math.max(3, Math.round(t.w * k));
+  const h = Math.max(3, Math.round(t.h * k));
+  const c = new Int8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) c[y * w + x] = t.c[Math.min(t.h - 1, Math.floor(y / k)) * t.w + Math.min(t.w - 1, Math.floor(x / k))];
+  return { kind: t.kind, w, h, c };
+}
+
+/**
+ * How well a template sits with its centre at (cx, cy): the share of its colour cells that
+ * are this team's colour (rc), of its outline cells that are dark (rd), and team colour
+ * spilling into its empty cells as a share of its colour cells (rs).
+ */
+function templateFit(col: Uint8Array, dark: Uint8Array, w: number, h: number, t: WardTemplate, v: number, cx: number, cy: number) {
+  const ox = Math.round(cx - t.w / 2 + 0.5);
+  const oy = Math.round(cy - t.h / 2 + 0.5);
+  let nC = 0;
+  let nD = 0;
+  let cH = 0;
+  let dH = 0;
+  let sp = 0;
+  for (let y = 0; y < t.h; y++) {
+    const fy = oy + y;
+    for (let x = 0; x < t.w; x++) {
+      const c = t.c[y * t.w + x];
+      if (c === 1) nC++;
+      else if (c === 2) nD++;
+      const fx = ox + x;
+      if (fx < 0 || fy < 0 || fx >= w || fy >= h) continue;
+      const p = fy * w + fx;
+      if (c === 1 && col[p] === v) cH++;
+      else if (c === 2 && dark[p]) dH++;
+      else if (c === 0 && col[p] === v) sp++;
+    }
+  }
+  const rc = cH / Math.max(1, nC);
+  const rd = dH / Math.max(1, nD);
+  const rs = sp / Math.max(1, nC);
+  return { rc, rd, rs, score: rc + 0.5 * rd - rs };
+}
+
+/** Control ward eyes: a fit at least this good, and better than either star's fit there by CONTROL_MARGIN. */
+const CONTROL_MIN = 0.6;
+const CONTROL_MIN_COLOUR = 0.5;
+const CONTROL_MARGIN = 0.05;
+/** The area an eye covers (247 px units): team-coloured pixels in here are the ward's. */
+const CONTROL_FOOTPRINT = [-7, 7, -6, 6] as const;
+
+/**
+ * Ward icons in a minimap crop, with their kind when templates are given.
+ *  - Stealth wards (trinket and sight ward draw the same star) come from findWardStars;
+ *    with templates, a star the hollow "about to expire" icon fits better is "stealth_low".
+ *  - Control wards (an eye with a slash) are found with their template, kept where the eye
+ *    fits better than either star. On NA1_5686039660's dumps (one every 6 s) both blue
+ *    control wards were found in every frame they were up and not under a portrait (25 and
+ *    25 frames) and the red one in 16; everything else that passed did so in a single frame,
+ *    so placeWards wants a control icon to stay put before it counts.
+ * Without templates the kinds are left out (the star rule alone, as before).
+ */
+export function findWardIcons(frame: Frame, bg: Frame, masked?: Uint8Array, templates?: WardTemplate[]): { team: 100 | 200; px: number; py: number; colour: number; kind?: WardKind }[] {
+  const stars: { team: 100 | 200; px: number; py: number; colour: number; kind?: WardKind }[] = findWardStars(frame, bg, masked);
+  if (!templates?.length) return stars;
+  const { w, h, data } = frame;
+  const k = w / 247;
+  const T = templates.map((t) => scaledTemplate(t, k));
+  const col = new Uint8Array(w * h);
+  const dark = new Uint8Array(w * h);
+  for (let p = 0; p < w * h; p++) {
+    const i = p * 4;
+    if (Math.max(data[i], data[i + 1], data[i + 2]) < 80) dark[p] = 1;
+    if (masked?.[p] || diffAt(data, bg.data, i) < 40) continue;
+    const t = teamColor(data[i], data[i + 1], data[i + 2]);
+    if (t) col[p] = t === 100 ? 1 : 2;
+  }
+  const best = (kind: WardKind, v: number, cx: number, cy: number) => {
+    let b = -Infinity;
+    for (const t of T)
+      if (t.kind === kind)
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) b = Math.max(b, templateFit(col, dark, w, h, t, v, cx + dx, cy + dy).score);
+    return b;
+  };
+  for (const s of stars) {
+    const v = s.team === 100 ? 1 : 2;
+    s.kind = best("stealth_low", v, s.px, s.py) > best("stealth", v, s.px, s.py) ? "stealth_low" : "stealth";
+  }
+  const eyes = T.filter((t) => t.kind === "control");
+  const found: { team: 100 | 200; px: number; py: number; colour: number; score: number }[] = [];
+  for (const team of [100, 200] as const) {
+    const v = team === 100 ? 1 : 2;
+    for (const t of eyes)
+      for (let cy = 0; cy < h; cy++)
+        for (let cx = 0; cx < w; cx++) {
+          if (col[cy * w + cx] !== v) continue;
+          const f = templateFit(col, dark, w, h, t, v, cx, cy);
+          if (f.score < CONTROL_MIN || f.rc < CONTROL_MIN_COLOUR) continue;
+          if (Math.max(best("stealth", v, cx, cy), best("stealth_low", v, cx, cy)) > f.score - CONTROL_MARGIN) continue;
+          found.push({ team, px: cx, py: cy, colour: Math.round(f.rc * 100), score: f.score });
+        }
+  }
+  found.sort((a, b) => b.score - a.score);
+  const sep = 6 * k;
+  const out = [...stars];
+  for (const s of found) if (!out.some((t) => Math.abs(t.px - s.px) <= sep && Math.abs(t.py - s.py) <= sep)) out.push({ team: s.team, px: s.px, py: s.py, colour: s.colour, kind: "control" });
+  return out;
+}
+
 /** Minion dots in a cropped minimap frame, given the empty map behind it. */
 export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
   const { w, h, data } = frame;
@@ -315,16 +498,16 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
     if (t) label[p] = t === 100 ? 1 : 2;
   }
   // Ward icons come out before minions are counted: each piece of a star is minion-sized
-  // and would otherwise be read as a minion.
+  // and would otherwise be read as a minion, and a control ward's eye is a minion-coloured blob.
   const k = w / 247;
-  for (const s of findWardStars(frame, bg, masked)) {
+  for (const s of findWardIcons(frame, bg, masked, o.wardTemplates)) {
     const l = s.team === 100 ? 1 : 2;
-    const [x0, x1, y0, y1] = STAR_FOOTPRINT;
+    const [x0, x1, y0, y1] = s.kind === "control" ? CONTROL_FOOTPRINT : STAR_FOOTPRINT;
     for (let y = Math.max(0, Math.round(s.py + y0 * k)); y <= Math.min(h - 1, Math.round(s.py + y1 * k)); y++)
       for (let x = Math.max(0, Math.round(s.px + x0 * k)); x <= Math.min(w - 1, Math.round(s.px + x1 * k)); x++) if (label[y * w + x] === l) label[y * w + x] = 0;
     if (o.wards) {
       const g = pixelToGame(s.px + 0.5, s.py + 0.5, w);
-      o.wards.push({ team: s.team, x: Math.round(g.x), y: Math.round(g.y), area: s.colour });
+      o.wards.push({ team: s.team, x: Math.round(g.x), y: Math.round(g.y), area: s.colour, ...(s.kind ? { kind: s.kind } : {}) });
     }
   }
   const seen = new Uint8Array(w * h);
