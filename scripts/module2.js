@@ -76,5 +76,37 @@ report.trips = trips.map((v) => ({
   flags: v.flags,
 }));
 report.objectives = tempo.objectiveSync(input, trips).map((o) => ({ type: o.type, spawn: fmt(o.spawn), taken: o.taken === null ? null : fmt(o.taken), by: o.by, lastBase: o.lastBase === null ? null : fmt(o.lastBase), gold: o.gold, distanceAtTake: o.distanceAtTake, away: o.away, unspent: o.unspent }));
+
+// Vulnerability: loadouts check, exposure to the enemy jungler, fights.
+const vuln = require("../dist/core/vulnerability.js");
+const gold = require("../dist/core/gold.js");
+const itemFile = arg("--items") || fs.readdirSync(dir).find((f) => /^item-.*\.json$/.test(f));
+if (itemFile) {
+  const items = gold.itemTable(read(itemFile));
+  const vin = { ...input, items };
+  report.checks.push(vuln.checkLoadouts(match, timeline, items, waves.live, until));
+  const ex = vuln.exposures(vin);
+  report.checks.push(vuln.checkExposures(vin, ex));
+  const name = (pid) => match.info.participants.find((p) => p.participantId === pid)?.championName;
+  report.exposures = ex.map((x) => ({ ...x, t0: fmt(x.t0), t1: fmt(x.t1), depthAt: fmt(x.depthAt), closestAt: x.closestAt === null ? null : fmt(x.closestAt), arrived: x.arrived === null ? null : fmt(x.arrived), died: x.died === null ? null : fmt(x.died), unseenFor: Math.round(x.unseenFor / 1000), lastSeen: x.lastSeen && { t: fmt(x.lastSeen.t), x: Math.round(x.lastSeen.x), y: Math.round(x.lastSeen.y) } }));
+  report.fights = vuln.fights(vin).map((f) => ({ ...f, t0: fmt(f.t0), t1: fmt(f.t1), died: f.died === null ? null : fmt(f.died), me: { level: f.me.level, itemGold: f.me.itemGold, legendaries: f.me.legendaries }, allies: f.allies.map(name), killed: f.killed.map(name) }));
+  report.viewTeam = waves.viewTeam;
+}
+
+// --diag: the reads around each shop stop the base-visit check missed.
+if (process.argv.includes("--diag")) {
+  const missed = report.checks.find((c) => c.name.startsWith("tempo: every shop stop"))?.detail || [];
+  const fountain = (team) => (team === 200 ? { x: 14340, y: 14390 } : { x: 400, y: 420 });
+  report.diag = missed.map((m) => {
+    const team = match.info.participants.find((p) => p.participantId === m.id).teamId;
+    const f = fountain(team);
+    const rows = (list) => (list || []).filter((s) => s.fog === "off" && s.t >= m.t - 20000 && s.t <= m.t + 10000).map((s) => {
+      const a = s.at.find((x) => x.id === m.id);
+      return a ? `${Math.round((s.t - m.t) / 100) / 10}:${Math.round(Math.hypot(a.x - f.x, a.y - f.y))}${a.inferred ? "i" : ""}` : `${Math.round((s.t - m.t) / 100) / 10}:-`;
+    }).join(" ");
+    // Each entry is "seconds from the purchase : distance from own fountain" (i = filled in, - = no read).
+    return { champion: m.champion, t: fmt(m.t), tracked: rows(waves.champs), raw: waves.champsRaw ? rows(waves.champsRaw) : "no champsRaw in this scan", unnamedInFountain: (waves.champs || []).filter((s) => s.fog === "off" && Math.abs(s.t - m.t) <= 5000).map((s) => (s.unk || []).filter((u) => u.team === team && Math.hypot(u.x - f.x, u.y - f.y) <= 1500).length).join("") };
+  });
+}
 if (arg("--json")) fs.writeFileSync(arg("--json"), JSON.stringify(report, null, 2));
 console.log(JSON.stringify(report, null, 2));

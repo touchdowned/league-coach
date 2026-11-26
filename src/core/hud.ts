@@ -109,6 +109,10 @@ export interface HudSample {
   t: number;
   hp: (number | null)[];
   res: (number | null)[];
+  /** Flash off the summoner spell icons: true ready, false on cooldown, null not read or the player has no Flash. */
+  flash?: (boolean | null)[];
+  /** Ultimate off the ult indicator: true ready, false on cooldown or not learned, null not read. */
+  ult?: (boolean | null)[];
 }
 
 export function readHudStrips(t: number, blue: Frame, red: Frame, screen: { w: number; h: number }): HudSample {

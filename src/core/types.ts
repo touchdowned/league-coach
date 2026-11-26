@@ -18,6 +18,9 @@ export interface Participant {
   visionScore: number;
   totalDamageDealtToChampions: number;
   win: boolean;
+  /** Summoner spell ids (4 = Flash). */
+  summoner1Id?: number;
+  summoner2Id?: number;
   challenges?: { soloKills?: number; [k: string]: unknown };
 }
 

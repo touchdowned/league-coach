@@ -141,4 +141,25 @@ describe("wave state check", () => {
     expect(r.detail).toHaveLength(1);
     expect(r.detail[0]).toMatchObject({ t: 110_000, lane: "MIDDLE", teamId: 200, type: "plate" });
   });
+
+  it("follows a free-walking wave that goes unread to the tower, and stops when the defenders walk through", () => {
+    const samples: WaveSample[] = [];
+    let t = 0;
+    // Blue's wave walks at the red tower and is last read 1500 units short of it.
+    for (let lead = redTower - 3000; lead <= redTower - 1500; lead += 162, t += 500) samples.push(at(t, wave(lead, 6, 1), []));
+    const lost = t;
+    // Unread for 15 s (under the tower icon and a portrait), then red's next wave is read walking out past the tower.
+    for (let k = 0; k < 30; k++, t += 500) samples.push(at(t, [], []));
+    for (let k = 0; k < 20; k++, t += 500) samples.push(at(t, [], wave(redTower - 1500 - k * 162, 6, -1)));
+    const series = laneSeries(track(samples), "MIDDLE", 100, geo);
+    const crash = waveEvents(series, "MIDDLE").filter((e) => e.kind === "crash" && e.side === "mine");
+    expect(crash).toHaveLength(1);
+    expect(crash[0].size).toBe(6);
+    // It gets there about (1500 - 900) / 325 s after the last read.
+    expect(Math.abs(crash[0].t0 - (lost + 1800))).toBeLessThan(1600);
+    expect(series.find((r) => r.t === crash[0].t0)!.inferred).toBe(true);
+    // Once red's wave is read well past where blue's would be, blue's is gone.
+    expect(series[series.length - 1].zone).not.toBe("their tower");
+    expect(series[series.length - 1].inferred).toBeUndefined();
+  });
 });
