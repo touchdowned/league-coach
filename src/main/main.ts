@@ -65,6 +65,8 @@ function createWindow() {
     show: false,
     autoHideMenuBar: true,
     icon: path.join(__dirname, "../../build/icon.png"),
+    // No system title bar: the app draws its own top edge and Windows draws only its three buttons over it.
+    ...(process.platform === "win32" ? { titleBarStyle: "hidden" as const, titleBarOverlay: { color: "#0a0d13", symbolColor: "#aab2c0", height: 34 } } : {}),
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
   });
   win.once("ready-to-show", () => !startHidden && win?.show());

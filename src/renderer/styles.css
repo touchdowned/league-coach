@@ -135,7 +135,12 @@ strong, b { font-weight: 600; }
 .rail { display: flex; flex-direction: column; gap: 20px; padding: 18px 12px 14px; background: var(--bg-2); border-right: 1px solid var(--hair); }
 .brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px; }
 .brand strong { font-size: 15px; letter-spacing: -0.01em; }
-.brand-mark { width: 24px; height: 24px; border-radius: 7px; background: conic-gradient(from 210deg, var(--accent), #ffde9a, var(--accent)); box-shadow: 0 0 18px -4px rgba(240, 181, 74, 0.7); }
+.brand-mark { flex: none; border-radius: 7px; box-shadow: 0 0 0 1px var(--hair), 0 0 18px -6px rgba(240, 181, 74, 0.6); }
+.brand { -webkit-app-region: drag; user-select: none; }
+.nav-group { margin: 14px 10px 4px; font-size: 11px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); opacity: 0.7; }
+/* The window has no system title bar: this strip is what you drag, clear of the window buttons on the right. */
+.dragbar { position: fixed; top: 0; left: 232px; right: 140px; height: 30px; -webkit-app-region: drag; z-index: 40; }
+.dragbar ~ .main .page { padding-top: 40px; }
 .rail nav { display: grid; gap: 2px; flex: 1; align-content: start; }
 .nav { position: relative; display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px; border-radius: 9px; color: var(--muted); font-weight: 520; transition: background-color 150ms ease, color 150ms ease; }
 .nav svg { flex: none; }

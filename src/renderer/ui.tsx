@@ -70,3 +70,22 @@ export function Empty({ title, body, action }: { title: string; body: string; ac
     </div>
   );
 }
+
+/** The app's mark (the same drawing as build/icon.svg). */
+export function BrandMark({ size = 26 }: { size?: number }) {
+  return (
+    <svg className="brand-mark" width={size} height={size} viewBox="0 0 256 256" aria-hidden>
+      <defs>
+        <linearGradient id="bm-g" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#ffdf9e" />
+          <stop offset="1" stopColor="#e9a232" />
+        </linearGradient>
+      </defs>
+      <rect width="256" height="256" rx="56" fill="#141926" />
+      <circle cx="128" cy="128" r="78" fill="none" stroke="url(#bm-g)" strokeWidth="14" />
+      <circle cx="128" cy="128" r="40" fill="none" stroke="url(#bm-g)" strokeWidth="10" opacity="0.55" />
+      <path d="M128 28v40M128 188v40M28 128h40M188 128h40" stroke="url(#bm-g)" strokeWidth="12" strokeLinecap="round" />
+      <circle cx="128" cy="128" r="12" fill="url(#bm-g)" />
+    </svg>
+  );
+}

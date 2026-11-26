@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Fragment } from "react";
 import { Brain, CircleAlert, Clapperboard, Compass, Gamepad2, HeartPulse, LoaderCircle, LucideIcon, PlayCircle, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import type { GameReport } from "../core/types";
 import { momentCount } from "../core/engine";
 import { coach, PostGameStatus, Settings, TaskProgress } from "./api";
 import { PlayerCard, ProgressProvider, useProgress } from "./progress";
-import { Button, Skeleton } from "./ui";
+import { Button, Skeleton, BrandMark } from "./ui";
 import { firstOpenStep, SessionBar, SessionStep } from "./session";
 import { ChampionsView } from "./views/Champions";
 import { CoachView } from "./views/Coach";
@@ -18,15 +18,15 @@ import { SettingsView } from "./views/Settings";
 
 export type Tab = "coach" | "mind" | "review" | "puzzles" | "mechanics" | "champions" | "role" | "settings";
 
-const NAV: { id: Tab; label: string; icon: LucideIcon }[] = [
-  { id: "coach", label: "Coach", icon: Target },
-  { id: "mind", label: "Mind", icon: HeartPulse },
-  { id: "review", label: "Review", icon: Clapperboard },
+// The loop first (focus, then the games behind it), practice next, reference last.
+const NAV: { id: Tab; label: string; icon: LucideIcon; group?: string }[] = [
+  { id: "coach", label: "Focus", icon: Target },
+  { id: "review", label: "Games", icon: Clapperboard },
+  { id: "mind", label: "Mind", icon: HeartPulse, group: "Practice" },
   { id: "puzzles", label: "Puzzles", icon: Brain },
   { id: "mechanics", label: "Mechanics", icon: Gamepad2 },
-  { id: "champions", label: "Champions", icon: Swords },
+  { id: "champions", label: "Champions", icon: Swords, group: "Stats" },
   { id: "role", label: "Best role", icon: Compass },
-  { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
 export function App() {
@@ -136,19 +136,26 @@ function Shell() {
       {sync && <div className="top-progress" style={{ transform: `scaleX(${Math.max(0.04, syncPct)})` }} />}
       <aside className="rail">
         <div className="brand">
-          <span className="brand-mark" />
+          <BrandMark />
           <strong>League Coach</strong>
         </div>
         <nav>
           {NAV.map((n) => (
-            <button key={n.id} className={`nav ${tab === n.id ? "active" : ""}`} onClick={() => setTab(n.id)}>
-              <n.icon size={18} strokeWidth={1.8} aria-hidden />
-              {n.label}
-              {n.id === "review" && games && <UnreviewedBadge games={games} reviewed={progress.reviewedGames} />}
-            </button>
+            <Fragment key={n.id}>
+              {n.group && <span className="nav-group">{n.group}</span>}
+              <button className={`nav ${tab === n.id ? "active" : ""}`} onClick={() => setTab(n.id)}>
+                <n.icon size={18} strokeWidth={1.8} aria-hidden />
+                {n.label}
+                {n.id === "review" && games && <UnreviewedBadge games={games} reviewed={progress.reviewedGames} />}
+              </button>
+            </Fragment>
           ))}
         </nav>
         <div className="rail-foot">
+          <button className={`nav ${tab === "settings" ? "active" : ""}`} onClick={() => setTab("settings")}>
+            <SettingsIcon size={18} strokeWidth={1.8} aria-hidden />
+            Settings
+          </button>
           {postGame && postGame.stage !== "idle" && (
             <PostGamePill
               status={postGame}
@@ -166,6 +173,7 @@ function Shell() {
         </div>
       </aside>
 
+      <div className="dragbar" aria-hidden />
       <main className="main" key={tab}>
         {session && games && <SessionBar progress={progress} current={session} games={games} onGo={goStep} onEnd={() => setSession(null)} />}
         {loading ? (

@@ -80,7 +80,7 @@ export function CoachView({
         </div>
         <div className="page-actions">
           {onStartSession && (
-            <Button variant="primary" onClick={onStartSession}>
+            <Button variant="secondary" onClick={onStartSession}>
               <Play size={15} fill="currentColor" /> Start today's training
             </Button>
           )}
