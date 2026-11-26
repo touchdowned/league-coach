@@ -75,7 +75,7 @@ export function CoachView({
     <div className="page">
       <header className="page-head">
         <div>
-          <p className="eyebrow">Coach</p>
+          <p className="eyebrow">Focus</p>
           <h1>One thing at a time.</h1>
         </div>
         <div className="page-actions">

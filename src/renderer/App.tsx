@@ -167,7 +167,7 @@ function Shell() {
           <button className="sync" disabled={!!sync || !settings?.apiKey} onClick={runSync}>
             <span className="sync-fill" style={{ transform: `scaleX(${sync ? syncPct : 0})` }} />
             <RefreshCw size={15} className={`sync-icon ${sync ? "spinning" : ""}`} aria-hidden />
-            <span className="sync-label">{sync ? sync.label : "Sync games"}</span>
+            <span className="sync-label">{sync ? sync.label : "Sync"}</span>
             {sync && <span className="sync-pct">{Math.round(syncPct * 100)}%</span>}
           </button>
         </div>
