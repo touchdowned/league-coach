@@ -14,7 +14,8 @@ import { checkGold, itemTable, type ItemTable } from "../core/gold";
 import { checkWards, placeWards } from "../core/wards";
 import { checkFlash, checkHud } from "../core/hud";
 import { growBench, readBench } from "./bench";
-import type { ChampSample, WaveTrack } from "../core/waves";
+import { champPosAt, type ChampSample, type WaveTrack } from "../core/waves";
+import { cameraLookingAt } from "../core/camera";
 import { JsonStore, Settings } from "./store";
 import { listVods, matchVod } from "./vod";
 import { startAutoUpdates } from "./updater";
@@ -140,8 +141,90 @@ async function openOverlay(matchId: string, route = `overlay/${encodeURIComponen
   }, 2000);
 }
 
+/**
+ * The open replay's game (by length, see SAME_GAME_SEC) and champion `champ` in it: that game's
+ * scanned champion reads and the champion's participant id. Null when no synced game fits or it
+ * has no scan.
+ */
+async function followTrack(replayLength: number, champ: string): Promise<{ champs: ChampSample[]; pid: number } | null> {
+  let id: string | null = null;
+  let best = Infinity;
+  for (const r of reports) {
+    const d = Math.abs(r.metrics.durationMin * 60 - replayLength);
+    if (d <= SAME_GAME_SEC && d < best) {
+      best = d;
+      id = r.metrics.matchId;
+    }
+  }
+  if (!id) return null;
+  const waves = await store.readJson<WaveTrack | null>(wavesFile(id), null);
+  const match = (await store.cache().get(`match-${id}`)) as MatchDto | null | undefined;
+  const pid = match?.info.participants.find((p) => champKey(p.championName) === champKey(champ))?.participantId;
+  return waves?.champs && pid ? { champs: waves.champs, pid } : null;
+}
+
+/**
+ * Keeps the camera on a champion while the replay plays. An attached camera loses its selection
+ * a few seconds into play (League's directed camera takes over: on NA1_5686025956 from 3:09 the
+ * selection cleared after ~4 s and the camera went to other lanes), so every FOLLOW_MS the free
+ * camera is put on the champion's scanned position at the replay's time (interpolated between
+ * reads, see champPosAt). With no read within 3 s (not scanned, dead, in base) the attached top
+ * camera is selected on them again once a second instead. Paused: nothing moves. Stops on
+ * stopFollow (the card or walkthrough closes, the overlay closes) or when the replay is lost.
+ */
+const FOLLOW_MS = 250;
+const FOLLOW_TOP_MS = 1000;
+let followLoop: ReturnType<typeof setInterval> | null = null;
+function stopFollow() {
+  if (followLoop) clearInterval(followLoop);
+  followLoop = null;
+}
+async function startFollow(champ: string): Promise<void> {
+  stopFollow();
+  const lc = await league();
+  const first = await lc.playback();
+  if (!first) return;
+  const track = await followTrack(first.length, champ);
+  let mode: "free" | "top" | null = null;
+  let lastTop = 0;
+  let misses = 0;
+  let busy = false;
+  const step = async (force: boolean) => {
+    const pb = await lc.playback();
+    // Lost: 3 s without an answer, or another game's replay took its place.
+    if (!pb || Math.abs(pb.length - first.length) > SAME_GAME_SEC) {
+      if (++misses * FOLLOW_MS >= 3000) stopFollow();
+      return;
+    }
+    misses = 0;
+    if (pb.paused && !force) return;
+    const at = track ? champPosAt(track.champs, track.pid, pb.time * 1000) : undefined;
+    if (at) {
+      if (mode !== "free") await lc.setRender({ cameraMode: "fps", cameraAttached: false });
+      mode = "free";
+      await lc.setRender({ ...cameraLookingAt(at, 2200, 56, 0), selectionName: champ });
+    } else if (mode !== "top" || Date.now() - lastTop >= FOLLOW_TOP_MS) {
+      mode = "top";
+      lastTop = Date.now();
+      await lc.setRender({ cameraMode: "top", cameraAttached: true, selectionName: champ });
+    }
+  };
+  const id = setInterval(async () => {
+    if (busy || followLoop !== id) return;
+    busy = true;
+    try {
+      await step(false);
+    } finally {
+      busy = false;
+    }
+  }, FOLLOW_MS);
+  followLoop = id;
+  await step(true);
+}
+
 async function closeOverlay(finished: boolean, lost = false) {
   const matchId = overlayMatch;
+  stopFollow();
   if (overlayWatch) clearInterval(overlayWatch);
   overlayWatch = null;
   // Put League's camera, fog and HUD back the way they were.
@@ -540,38 +623,6 @@ app.whenReady().then(async () => {
     if (st.kind === "open" && !sameGame(matchId, st.length)) return { kind: "unavailable", reason: "A different game's replay is open in League. Close it, then open this game's replay from here." } as const;
     return st;
   });
-  // Where a champion stands at the open replay's current time, from that game's scan (the
-  // nearest fog-off read within 3 s); undefined when the game or the champion isn't read.
-  const champAtNow = async (lc: LeagueClient, champ: string): Promise<{ x: number; y: number } | undefined> => {
-    const pb = await lc.playback();
-    if (!pb) return undefined;
-    let id: string | null = null;
-    let best = Infinity;
-    for (const r of reports) {
-      const d = Math.abs(r.metrics.durationMin * 60 - pb.length);
-      if (d <= SAME_GAME_SEC && d < best) {
-        best = d;
-        id = r.metrics.matchId;
-      }
-    }
-    if (!id) return undefined;
-    const waves = await store.readJson<WaveTrack | null>(wavesFile(id), null);
-    const match = (await store.cache().get(`match-${id}`)) as MatchDto | null | undefined;
-    const pid = match?.info.participants.find((p) => champKey(p.championName) === champKey(champ))?.participantId;
-    if (!waves?.champs || !pid) return undefined;
-    const t = pb.time * 1000;
-    let at: { x: number; y: number } | undefined;
-    let dt = 3000;
-    for (const c of waves.champs) {
-      if (c.fog !== "off" || Math.abs(c.t - t) > dt) continue;
-      const a = c.at.find((x) => x.id === pid);
-      if (a) {
-        dt = Math.abs(c.t - t);
-        at = { x: a.x, y: a.y };
-      }
-    }
-    return at;
-  };
   // Which synced game the open replay is, by its length; null when no replay is open or none fits.
   handle("replay:openMatch", async () => {
     const pb = await (await league()).playback();
@@ -588,8 +639,12 @@ app.whenReady().then(async () => {
   handle("replay:seek", async (sec: number, paused: boolean) => (await league()).seek(sec, paused));
   handle("replay:follow", async (champ: string) => {
     const lc = await league();
-    return lc.follow(champ, await champAtNow(lc, champ));
+    const pb = await lc.playback();
+    const track = pb ? await followTrack(pb.length, champ) : null;
+    return lc.follow(champ, pb && track ? champPosAt(track.champs, track.pid, pb.time * 1000) : undefined);
   });
+  handle("replay:followStart", (champ: string) => startFollow(champ));
+  handle("replay:followStop", () => stopFollow());
   handle("replay:enableApi", async () => (await league()).enableReplayApi());
   handle("bench:get", () => readBench(store));
 

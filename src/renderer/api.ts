@@ -87,6 +87,9 @@ export interface CoachApi {
   replayWatch(matchId: string): Promise<Result<void>>;
   replaySeek(sec: number, paused: boolean): Promise<Result<boolean>>;
   replayFollow(champion: string): Promise<Result<void>>;
+  /** Keeps the camera on the champion while the replay plays, until replayFollowStop (or the replay closes). */
+  replayFollowStart(champion: string): Promise<Result<void>>;
+  replayFollowStop(): Promise<Result<void>>;
   replayEnableApi(): Promise<Result<void>>;
   /** Plays the replay and reads minions off the minimap, then returns the re-read game. */
   replayRead(matchId: string): Promise<Result<GameReport>>;

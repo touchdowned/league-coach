@@ -275,3 +275,27 @@ export function minionsAt(track: WaveTrack | undefined, t: number): { x: number;
   }
   return out;
 }
+
+/**
+ * Where champion `id` was at replay time `t` (ms), from the fog-off reads: interpolated between the
+ * read before and the read after when they are no more than `bridge` apart, else the nearer one within
+ * `maxGap`, else undefined (the scan has no read of them near then: dead, in base, or not scanned).
+ */
+export function champPosAt(champs: ChampSample[], id: number, t: number, maxGap = 3000, bridge = 15000): { x: number; y: number } | undefined {
+  let lo: { t: number; x: number; y: number } | null = null;
+  let hi: { t: number; x: number; y: number } | null = null;
+  for (const c of champs) {
+    if (c.fog !== "off" || Math.abs(c.t - t) > bridge) continue;
+    const a = c.at.find((x) => x.id === id);
+    if (!a) continue;
+    if (c.t <= t && (!lo || c.t > lo.t)) lo = { t: c.t, x: a.x, y: a.y };
+    if (c.t >= t && (!hi || c.t < hi.t)) hi = { t: c.t, x: a.x, y: a.y };
+  }
+  // A read on each side no more than `bridge` apart: they walked from one to the other.
+  if (lo && hi && hi.t - lo.t <= bridge) {
+    const k = hi.t === lo.t ? 0 : (t - lo.t) / (hi.t - lo.t);
+    return { x: lo.x + (hi.x - lo.x) * k, y: lo.y + (hi.y - lo.y) * k };
+  }
+  const near = [lo, hi].filter((p): p is { t: number; x: number; y: number } => !!p && Math.abs(p.t - t) <= maxGap).sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t))[0];
+  return near ? { x: near.x, y: near.y } : undefined;
+}

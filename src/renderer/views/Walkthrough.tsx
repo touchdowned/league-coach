@@ -165,7 +165,9 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
 
   // ---- Replay commands ----
   const render = useCallback((body: Record<string, unknown>) => (live ? coach().stageRender(body) : Promise.resolve(null)), [live]);
-  const follow = useCallback(() => render({ cameraAttached: true, cameraMode: "top", selectionName: me }), [render, me]);
+  // The main process keeps the camera on me while the replay plays (see startFollow).
+  const follow = useCallback(() => (live ? coach().replayFollowStart(me) : Promise.resolve(null)), [live, me]);
+  useEffect(() => () => void (live && coach().replayFollowStop()), [live]);
   const frame = useCallback(
     (a: Pt, b: Pt | null) => {
       if (!live) return;

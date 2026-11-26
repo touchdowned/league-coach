@@ -33,7 +33,10 @@ export function FindingOverlay({ matchId, findingId }: { matchId: string; findin
     };
     tick();
     const t = setInterval(tick, 500);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      coach().replayFollowStop();
+    };
   }, []);
 
   const f = findings.find((x) => x.id === id);
@@ -87,9 +90,9 @@ export function FindingOverlay({ matchId, findingId }: { matchId: string; findin
             className="fo-btn primary"
             onClick={async () => {
               const play = pb?.paused ?? true;
-              // Jump frames the champion with a fixed camera (an attached camera doesn't move while
-              // paused). Once it plays, the camera goes back on the champion so they stay in view.
-              if (play) await coach().stageRender({ cameraMode: "top", cameraAttached: true, selectionName: f.jump.follow });
+              // Once it plays, the main process keeps the camera on the champion (League's own
+              // camera drops a selection a few seconds into play).
+              if (play) await coach().replayFollowStart(f.jump.follow);
               await coach().stagePlayback({ paused: !play });
             }}
           >
