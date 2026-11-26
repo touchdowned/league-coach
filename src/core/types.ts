@@ -21,6 +21,8 @@ export interface Participant {
   /** Summoner spell ids (4 = Flash). */
   summoner1Id?: number;
   summoner2Id?: number;
+  /** Runes: each style's picks by rune id. */
+  perks?: { styles?: { selections?: { perk: number }[] }[] };
   challenges?: { soloKills?: number; [k: string]: unknown };
 }
 

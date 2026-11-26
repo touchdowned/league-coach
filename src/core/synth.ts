@@ -241,7 +241,7 @@ function fightFinding(c: Ctx, f: Fight, k: number): Finding | null {
   const W = champName(worst.champion);
   const death = f.died !== null ? c.trips.find((v) => v.kind === "death" && Math.abs(v.start - f.died!) <= 2000) : undefined;
   const unspent = goldModel(c.timeline, c.items).at(c.id, f.t0);
-  const proof = [`Fight began at ${fmtTime(f.t0)}${f.at ? ` ${c.where(f.at)}` : ""}: ${f.opponents.length} of them dealt or took damage in it (${f.opponents.map((o) => champName(o.champion)).join(", ")}) against ${f.allies.length + 1} of you.`];
+  const proof = [`Fight began at ${fmtTime(f.t0)}${f.at ? ` ${c.where(f.at)}` : ""}: ${f.opponents.length} of them in it (${f.opponents.map((o) => champName(o.champion)).join(", ")}), by ${f.kind === "kill" ? "the kill's damage and assist lists" : "who stood within 1200 units when your health dropped"}; on your side you${f.allies.length ? ` and ${f.allies.length} more (${f.allies.map((a) => champName(c.match.info.participants.find((p) => p.participantId === a)?.championName ?? "")).join(", ")})` : " alone"}.`];
   for (const o of f.opponents) {
     const bits = [`level ${o.level} to your ${f.me.level}`];
     if (o.breakpoint !== null) {
@@ -270,14 +270,32 @@ function fightFinding(c: Ctx, f: Fight, k: number): Finding | null {
     parts.push(mine !== null ? `You reached level ${worst.breakpoint} at ${fmtTime(mine)}, ${s(mine - f.t0)} s after this fight began: before ${fmtTime(mine)}, give ${W} the ${f.at ? units(Math.max(600, forwardOf(f.at, c.me.teamId))) : "600 units"} you were standing past the middle and take the trade after it.` : `You never reached level ${worst.breakpoint} in the scanned part of the game; ${W} had it for this whole fight.`);
   } else if (worst.level - f.me.level >= 2) parts.push(`${W} was level ${worst.level} to your ${f.me.level}: ${worst.level - f.me.level} ability ranks you didn't have. ${(() => { const m = levelTime(c.events, c.id, worst.level); return m !== null ? `You reached level ${worst.level} at ${fmtTime(m)}, ${s(m - f.t0)} s later` : `You did not reach level ${worst.level} in the scanned part of the game`; })()}.`);
   if (worst.legendaryLead >= 1 || worst.itemGoldLead >= ITEM_GAP) {
-    const buys = c.events.filter((e) => e.type === "ITEM_PURCHASED" && e.participantId === c.id).map((e) => e.timestamp);
-    const last = [...buys].reverse().find((t) => t <= f.t0);
-    const next = buys.find((t) => t > f.t1);
-    const dead = next !== undefined && c.trips.some((v) => v.kind === "death" && next >= v.start && next <= v.arrive + 2000);
-    let line = `${W} had ${worst.itemGoldLead} gold more in items`;
-    if (unspent >= ITEM_GAP) line += `, and about ${Math.round(unspent / 25) * 25} of that gap was unspent gold on you: your last purchase was at ${last !== undefined ? fmtTime(last) : "0:00"}, ${s(f.t0 - (last ?? 0))} s before this fight`;
-    if (next !== undefined) line += `. Your next purchase was at ${fmtTime(next)}${dead ? ", from the death screen" : ""}: the same gold spent ${s(next - f.t0)} s sooner, before this fight instead of after it, closes ${Math.min(worst.itemGoldLead, Math.round(unspent / 25) * 25)} of the ${worst.itemGoldLead}`;
-    parts.push(line + ".");
+    const buys = c.events.filter((e) => e.type === "ITEM_PURCHASED" && e.participantId === c.id && e.itemId);
+    const last = [...buys].reverse().find((e) => e.timestamp <= f.t0)?.timestamp;
+    const next = buys.find((e) => e.timestamp > f.t1);
+    const carried = Math.round(unspent / 25) * 25;
+    let line = `${W} had ${worst.itemGoldLead} gold more in items.`;
+    if (unspent >= ITEM_GAP) {
+      // Spending it means a trip to the shop: how long the player's own recalls took, lane to lane.
+      const lens = c.trips.filter((v) => v.kind === "recall" && v.back !== null).map((v) => v.back! - v.start).sort((x, y) => x - y);
+      const len = lens.length ? lens[lens.length >> 1] : null;
+      // What that gold bought later (an item's full price is the most a purchase of it can cost).
+      const could = buys.filter((e) => e.timestamp > f.t0 && (c.items[e.itemId!]?.total ?? Infinity) <= unspent).sort((x, y) => (c.items[y.itemId!]?.total ?? 0) - (c.items[x.itemId!]?.total ?? 0))[0];
+      line += ` About ${carried} of that was unspent gold on you: your last purchase was at ${last !== undefined ? fmtTime(last) : "0:00"}, ${s(f.t0 - (last ?? 0))} s before this fight.`;
+      line += ` Spending it takes a recall${len !== null ? `, which took you ${s(len)} s lane to lane this game (the middle one of your ${lens.length})` : ` (${RECALL_MS / 1000} s of channel plus the walk back)`}: recall with that gold before taking a fight with ${W}`;
+      line += could ? `, and the ${c.items[could.itemId!]!.total}-gold item you bought at ${fmtTime(could.timestamp)} is on you for it.` : `.`;
+    } else {
+      line += ` You carried about ${carried} gold, so a recall could not have closed it: ${W} held this lead until your purchase${next ? ` at ${fmtTime(next.timestamp)}` : " after the scanned part of the game"}.`;
+      if (f.closedBy === "me" || f.closedBy === "both") line += ` You closed the distance at ${fmtTime(f.t0 - 4 * SEC)}; from ${fmtTime(f.t0 - 4 * SEC)}, stay the ${f.at ? units(Math.max(600, forwardOf(f.at, c.me.teamId))) : "600 units"} back that you were past the middle.`;
+    }
+    // A fountain stop after the fight where nothing was bought, before the next purchase.
+    const idle = c.trips.find((v) => v.arrive >= f.t1 && (!next || v.arrive + 2000 < next.timestamp) && (v.leave === null || !buys.some((e) => e.timestamp >= v.arrive - 1000 && e.timestamp <= v.leave! + 1000)));
+    if (idle && idle.arrive - f.t1 <= 60 * SEC) {
+      const g = Math.round(goldModel(c.timeline, c.items).at(c.id, idle.arrive) / 25) * 25;
+      const buyable = buys.filter((e) => e.timestamp > idle.arrive && (c.items[e.itemId!]?.total ?? Infinity) <= g).sort((x, y) => (c.items[y.itemId!]?.total ?? 0) - (c.items[x.itemId!]?.total ?? 0))[0];
+      line += ` You were in the fountain at ${fmtTime(idle.arrive)} with about ${g} gold and bought nothing${next ? ` until ${fmtTime(next.timestamp)}` : ""}${buyable ? `: the ${c.items[buyable.itemId!]!.total}-gold item you bought at ${fmtTime(buyable.timestamp)} was affordable at ${fmtTime(idle.arrive)}, ${s(buyable.timestamp - idle.arrive)} s earlier.` : `; nothing you bought later cost ${g} or less, so there was nothing to spend it on.`}`;
+    }
+    parts.push(line);
   }
   if (f.flags.includes("outnumbered")) {
     // When the numbers turned: the first moment in the 20 s before with more enemies than allies within 2500 units.
