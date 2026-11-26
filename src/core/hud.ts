@@ -43,7 +43,17 @@ export function hudStrip(side: 100 | 200, screen: { w: number; h: number }) {
  * dark grey, "filled" when they're clearly brighter or coloured; a bar where more than a
  * fifth of the columns are neither isn't a bar (null).
  */
-function readBar(f: Frame, x0: number, x1: number, y0: number, y1: number): number | null {
+/**
+ * What counts as a bar's fill. HP is green (~16,170,66 to ~0,240,80). A resource bar is mana
+ * blue (~33,101,222), energy yellow (~206,207,33) or another saturated resource colour, but
+ * never green. Checking the hue matters: with the team frames hidden, bright scenery behind
+ * the bar positions read as full bars on the red side (Zed and Jinx "100/100" on a frame
+ * with interfaceFrames off).
+ */
+const hpFill = (r: number, g: number, b: number) => g >= 100 && g > r + 50 && g > b + 30;
+const resFill = (r: number, g: number, b: number) => Math.max(r, g, b) >= 80 && Math.max(r, g, b) - Math.min(r, g, b) >= 40 && !hpFill(r, g, b);
+
+function readBar(f: Frame, x0: number, x1: number, y0: number, y1: number, isFill: (r: number, g: number, b: number) => boolean): number | null {
   if (x0 < 0 || y0 < 0 || x1 >= f.w || y1 >= f.h || x1 <= x0) return null;
   let filled = 0;
   let empty = 0;
@@ -58,8 +68,7 @@ function readBar(f: Frame, x0: number, x1: number, y0: number, y1: number): numb
       const r = f.data[i];
       const g = f.data[i + 1];
       const b = f.data[i + 2];
-      const mx = Math.max(r, g, b);
-      if (mx >= 80 && mx - Math.min(r, g, b) >= 40) fill++;
+      if (isFill(r, g, b)) fill++;
       else if (Math.abs(r - EMPTY) <= 16 && Math.abs(g - EMPTY) <= 16 && Math.abs(b - EMPTY) <= 16) grey++;
     }
     const rows = y1 - y0 + 1;
@@ -84,10 +93,10 @@ export function readHud(f: Frame, side: 100 | 200, slot: number, screen: { w: nu
   // Left frames hang off the left edge, right frames off the right edge.
   const px = (x: number) => (side === 100 ? Math.round(x * k) : Math.round(screen.w - (REF_W - (RED_X0 + (x - HP.x0))) * k)) - origin.x;
   const py = (y: number) => Math.round((y + STEP * slot) * k) - origin.y;
-  return {
-    hp: readBar(f, px(HP.x0), px(HP.x1), py(HP.y0), py(HP.y1)),
-    res: readBar(f, px(RES.x0), px(RES.x1), py(RES.y0), py(RES.y1)),
-  };
+  const hp = readBar(f, px(HP.x0), px(HP.x1), py(HP.y0), py(HP.y1), hpFill);
+  // The resource bar only counts under a readable HP bar: with the frames hidden, saturated
+  // scenery at the resource rows still read as full on the red side.
+  return { hp, res: hp === null ? null : readBar(f, px(RES.x0), px(RES.x1), py(RES.y0), py(RES.y1), resFill) };
 }
 
 /** One moment's bars for all ten players: index = participant id - 1 (1-5 blue, 6-10 red). */
