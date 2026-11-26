@@ -1415,3 +1415,6 @@ h1, h2, h3, strong, b { font-weight: 800; }
 .focus-grade { border-radius: 16px; box-shadow: 0 0 0 2px var(--hair) inset; }
 .more-numbers > summary { font-weight: 800; }
 @media (max-width: 1100px) { .focus-top { grid-template-columns: 1fr; } .focus-art { display: none; } .focus-bottom { grid-template-columns: 1fr; } .focus-bottom > div + div { border-left: 0; border-top: 2px solid var(--hair); } }
+/* The post-game pill in the 68px rail foot: icon over a two-line label, the full text on hover. */
+.rail-foot .postgame-pill { flex-direction: column; justify-content: center; gap: 4px; padding: 8px 4px; text-align: center; font-size: 10.5px; line-height: 1.25; }
+.rail-foot .postgame-pill span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; max-width: 100%; }

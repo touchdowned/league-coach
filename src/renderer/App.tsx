@@ -216,7 +216,7 @@ function PostGamePill({ status, onOpen, onDismiss }: { status: PostGameStatus; o
     <button
       className={`postgame-pill ${status.stage}`}
       onClick={ready ? onOpen : failed ? onDismiss : undefined}
-      title={ready ? "Open the review" : failed ? "Dismiss" : undefined}
+      title={ready ? `${status.label}. Open the review` : failed ? `${status.label}. Dismiss` : status.label}
     >
       <Icon size={15} className={!ready && !failed ? "spinning" : undefined} aria-hidden />
       <span>{status.label}</span>
