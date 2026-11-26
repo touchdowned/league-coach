@@ -379,6 +379,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
         </Stage>
 
         <div className="wt-scrub-wrap" {...(live ? hitMark : {})}>
+          <PhaseSteps phase={phase} />
           <Scrubber ch={ch} t={t} onSeek={(ms) => clock.set({ time: ms / 1000 })} />
         </div>
 
@@ -502,7 +503,7 @@ function Stage(props: {
   const tactical = !live || phase === "decide" || phase === "reveal" || phase === "debrief";
 
   return (
-    <div className={`wt-stage ${dim ? "dim" : ""} ${phase}`} ref={boxRef}>
+    <div className={`wt-stage ${dim ? "dim" : ""} ph-${phase}`} ref={boxRef}>
       {!live && <MapStage r={r} t={t} ch={ch} marks={marks} fogOff={props.fogOff} vision={props.vision} big />}
 
       {live && cam && world && box.w > 0 && (
@@ -691,7 +692,7 @@ function WorldMarks({ cam, w, h, marks }: { cam: Cam; w: number; h: number; mark
 
 function DecisionCard({ ch, onPick, onSkip }: { ch: Chapter; onPick: (i: number) => void; onSkip: () => void }) {
   return (
-    <div className="wt-card decide">
+    <div className="wt-card wt-decide">
       <span className="eyebrow">Your call · {fmtTime(ch.root)}</span>
       <h3>{ch.question}</h3>
       {ch.seen.length > 0 && (
@@ -723,7 +724,7 @@ function RevealCard({ ch, pick, onPlay }: { ch: Chapter; pick: number; onPlay: (
   const c = ch.choices[pick];
   const best = ch.choices.find((x) => x.good);
   return (
-    <div className={`wt-card reveal ${c.good ? "good" : "bad"}`}>
+    <div className={`wt-card wt-verdict-card ${c.good ? "good" : "bad"}`}>
       <div className="wt-verdict">
         <span className="wt-verdict-icon">{c.good ? <Check size={18} strokeWidth={3} /> : <X size={18} strokeWidth={3} />}</span>
         <div>
@@ -760,7 +761,7 @@ function DebriefCard({ ch, last, onReplay, onNext }: { ch: Chapter; last: boolea
   const [more, setMore] = useState(false);
   const f = ch.finding;
   return (
-    <div className="wt-card debrief">
+    <div className="wt-card wt-debrief">
       <span className="eyebrow">{f ? `Measured at ${f.time}` : "Root cause"}</span>
       <h3>{f ? f.title : ch.headline}</h3>
       {f ? (
@@ -796,6 +797,29 @@ function DebriefCard({ ch, last, onReplay, onNext }: { ch: Chapter; last: boolea
   );
 }
 
+const STEPS: { label: string; phases: Phase[] }[] = [
+  { label: "Watch the lead-up", phases: ["intro", "lead"] },
+  { label: "Make the call", phases: ["decide"] },
+  { label: "See the answer", phases: ["reveal"] },
+  { label: "Watch what happened", phases: ["playout"] },
+  { label: "Takeaway", phases: ["debrief"] },
+];
+
+/** Where you are in the moment being reviewed: every moment goes through the same five steps. */
+function PhaseSteps({ phase }: { phase: Phase }) {
+  const at = STEPS.findIndex((s) => s.phases.includes(phase));
+  return (
+    <ol className="wt-steps">
+      {STEPS.map((s, i) => (
+        <li key={s.label} className={i === at ? "on" : i < at ? "done" : ""}>
+          <i>{i + 1}</i>
+          {i === at && <span>{s.label}</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function Scrubber({ ch, t, onSeek }: { ch: Chapter; t: number; onSeek: (ms: number) => void }) {
   const span = Math.max(1, ch.end - ch.start);
   const pct = (x: number) => `${Math.max(0, Math.min(100, ((x - ch.start) / span) * 100))}%`;
@@ -817,6 +841,8 @@ function Scrubber({ ch, t, onSeek }: { ch: Chapter; t: number; onSeek: (ms: numb
         <span key={`${b.kind}:${b.t}`} className={`wt-tick ${b.kind}`} style={{ left: pct(b.t) }} title={`${fmtTime(b.t)} · ${b.caption}`} />
       ))}
       <span className="wt-head" style={{ left: pct(t) }} />
+      <span className="wt-scrub-mark decide" style={{ left: pct(ch.root) }}>Your call</span>
+      {ch.outcome - ch.root > span * 0.16 && <span className="wt-scrub-mark outcome" style={{ left: pct(ch.outcome) }}>What happened</span>}
       <span className="wt-scrub-label start">{fmtTime(ch.start)}</span>
       <span className="wt-scrub-label end">{fmtTime(ch.end)}</span>
     </div>
