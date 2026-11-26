@@ -60,13 +60,13 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 700,
-    backgroundColor: "#0a0d13",
+    backgroundColor: "#fbfaf7",
     title: "League Coach",
     show: false,
     autoHideMenuBar: true,
     icon: path.join(__dirname, "../../build/icon.png"),
     // No system title bar: the app draws its own top edge and Windows draws only its three buttons over it.
-    ...(process.platform === "win32" ? { titleBarStyle: "hidden" as const, titleBarOverlay: { color: "#0a0d13", symbolColor: "#aab2c0", height: 34 } } : {}),
+    ...(process.platform === "win32" ? { titleBarStyle: "hidden" as const, titleBarOverlay: { color: "#fbfaf7", symbolColor: "#4a473f", height: 34 } } : {}),
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
   });
   win.once("ready-to-show", () => !startHidden && win?.show());

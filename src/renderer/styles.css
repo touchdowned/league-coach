@@ -1,9 +1,46 @@
 @import "@fontsource-variable/inter";
+@import "@fontsource-variable/nunito";
 
 /* =========================================================================
    Tokens
    ========================================================================= */
 :root {
+  /* Light, friendly, chunky: the app. (Anything drawn over the game keeps the dark set below.) */
+  --bg: #fbfaf7;
+  --bg-2: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f3f1ec;
+  --surface-3: #e9e6df;
+  --hair: #e7e4dc;
+  --hair-2: #d9d5cb;
+  --text: #1d1b16;
+  --text-2: #4a473f;
+  --muted: #7c786d;
+  --accent: #ff6a2b;
+  --accent-ink: #ffffff;
+  --accent-soft: #ffeee4;
+  --accent-edge: #d24a10;
+  --cyan: #1996c9;
+  --good: #1f9d63;
+  --good-soft: #e2f6ea;
+  --bad: #d8433f;
+  --bad-soft: #fdeceb;
+  --warn: #c77a00;
+  --blue: #2f6fe0;
+  --xp: #7a5af0;
+  --edge: #d9d5cb;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --r-sm: 10px;
+  --r: 14px;
+  --r-lg: 20px;
+  --shadow: 0 0 0 2px var(--hair) inset, 0 3px 0 var(--hair);
+}
+/* Over the game and in the replay review: dark, so the game stays the brightest thing on screen. */
+.wt, .fo-root, .ov-root, html.overlay-doc, body.overlay-body, .rift-map, .wt-map, .wt-skip {
   --bg: #0b0d10;
   --bg-2: #0f1215;
   --surface: #14171c;
@@ -17,23 +54,15 @@
   --accent: #ff7a45;
   --accent-ink: #200b02;
   --accent-soft: rgba(255, 122, 69, 0.12);
-  --cyan: #5cc8ff;
+  --accent-edge: #c9501f;
   --good: #3ddc97;
   --good-soft: rgba(61, 220, 151, 0.12);
   --bad: #ff6b6b;
   --bad-soft: rgba(255, 107, 107, 0.12);
   --warn: #ffb84d;
-  --blue: #4f8cff;
-  --xp: #a78bfa;
-
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
-
-  --r-sm: 6px;
-  --r: 10px;
-  --r-lg: 14px;
+  --edge: rgba(255, 255, 255, 0.1);
   --shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+  color: var(--text);
 }
 
 * { box-sizing: border-box; }
@@ -42,7 +71,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 "Inter Variable", "Segoe UI", system-ui, sans-serif;
+  font: 15px/1.5 "Nunito Variable", "Inter Variable", "Segoe UI", system-ui, sans-serif;
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
   letter-spacing: -0.005em;
@@ -1337,5 +1366,52 @@ body.overlay-body { user-select: none; }
 .focus-card h2 { font-size: 36px; font-weight: 720; letter-spacing: -0.035em; }
 .focus-rule { font-size: 18px; }
 .tile, .panel { box-shadow: 0 0 0 1px var(--hair) inset; }
-.btn-primary { box-shadow: none; }
-.btn { border-radius: 8px; }
+
+/* =========================================================================
+   Third design: light, friendly, chunky. One clear step at a time.
+   ========================================================================= */
+h1, h2, h3, strong, b { font-weight: 800; }
+.page-head h1 { font-size: 36px; font-weight: 900; letter-spacing: -0.02em; }
+.eyebrow { font-weight: 800; }
+.rail { background: var(--bg-2); border-right: 2px solid var(--hair); }
+.nav { font-weight: 800; color: var(--muted); }
+.nav.active { background: var(--accent-soft); color: var(--accent-edge); }
+.nav.active::before { display: none; }
+/* Buttons you press down. */
+.btn { border-radius: 14px; font-weight: 800; letter-spacing: 0.01em; transition: transform 90ms ease, box-shadow 90ms ease, background-color 150ms ease; }
+.btn-sm { height: 34px; padding: 0 14px; }
+.btn-md { height: 42px; padding: 0 20px; }
+.btn-lg { height: 52px; padding: 0 28px; font-size: 17px; }
+.btn-primary { background: var(--accent); color: var(--accent-ink); box-shadow: 0 4px 0 var(--accent-edge); }
+.btn-secondary { background: var(--surface); color: var(--text); box-shadow: 0 0 0 2px var(--edge) inset, 0 4px 0 var(--edge); }
+.btn-ghost { color: var(--accent-edge); }
+.btn:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 var(--accent-edge); }
+.btn-secondary:active:not(:disabled) { box-shadow: 0 0 0 2px var(--edge) inset, 0 1px 0 var(--edge); }
+.btn-ghost:active:not(:disabled) { box-shadow: none; transform: none; }
+.finding-jump, .wt-choice { transition: transform 90ms ease; }
+.tile, .panel { box-shadow: 0 0 0 2px var(--hair) inset, 0 4px 0 var(--hair); border-radius: 20px; }
+.seg { box-shadow: 0 0 0 2px var(--hair) inset; }
+
+/* The focus, as the one lesson on the page. */
+.focus-card { display: block; border-left: 0; border-radius: 24px; padding: 0; overflow: hidden; background: var(--surface); box-shadow: 0 0 0 2px var(--hair) inset, 0 5px 0 var(--hair); }
+.focus-top { display: grid; grid-template-columns: 1fr 300px; gap: 28px; align-items: center; padding: 36px 40px 30px; }
+.focus-card h2 { font-size: 38px; font-weight: 900; letter-spacing: -0.02em; line-height: 1.1; margin: 10px 0 14px; }
+.focus-rule { font-size: 18px; line-height: 1.5; color: var(--text-2); max-width: 54ch; }
+.focus-cue { display: inline-block; margin-top: 4px; padding: 10px 14px; border-radius: 14px; background: var(--accent-soft); color: var(--accent-edge); font-weight: 800; font-size: 15px; }
+.focus-art { width: 300px; height: 220px; border-radius: 20px; background: var(--surface-2); }
+.focus-art svg { display: block; width: 100%; height: 100%; }
+.focus-bottom { display: grid; grid-template-columns: 1fr 1fr 1.1fr; gap: 0; border-top: 2px solid var(--hair); background: var(--bg); }
+.focus-bottom > div { padding: 22px 26px; }
+.focus-bottom > div + div { border-left: 2px solid var(--hair); }
+.focus-bottom p { margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-2); }
+.focus-actions { display: flex; align-items: center; gap: 14px; padding: 0 40px 34px; flex-wrap: wrap; }
+.focus-dots { gap: 10px; margin-top: 10px; align-items: center; }
+.focus-dot { width: 38px; height: 38px; box-shadow: 0 0 0 2px var(--hair-2) inset, 0 3px 0 var(--hair-2); background: var(--surface); }
+.focus-dot.held { background: var(--good); color: #fff; box-shadow: 0 3px 0 #15794b; }
+.focus-dot.broke { background: var(--bad); color: #fff; box-shadow: 0 3px 0 #a92f2c; }
+.focus-dot.next { width: auto; padding: 0 12px; border-radius: 19px; font-size: 12px; font-weight: 800; color: var(--muted); }
+.focus-moved { color: var(--good); font-weight: 800; }
+.focus-card.empty { padding: 36px 40px; }
+.focus-grade { border-radius: 16px; box-shadow: 0 0 0 2px var(--hair) inset; }
+.more-numbers > summary { font-weight: 800; }
+@media (max-width: 1100px) { .focus-top { grid-template-columns: 1fr; } .focus-art { display: none; } .focus-bottom { grid-template-columns: 1fr; } .focus-bottom > div + div { border-left: 0; border-top: 2px solid var(--hair); } }

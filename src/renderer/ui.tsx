@@ -75,13 +75,13 @@ export function Empty({ title, body, action }: { title: string; body: string; ac
 export function BrandMark({ size = 34 }: { size?: number }) {
   return (
     <svg className="brand-mark" width={size} height={size} viewBox="0 0 256 256" aria-hidden>
-      <rect width="256" height="256" rx="58" fill="#1a1e24" />
-      <circle cx="128" cy="104" r="58" fill="none" stroke="#ff7a45" strokeWidth="20" />
-      <circle cx="128" cy="104" r="20" fill="#f2f0eb" />
-      <circle cx="71" cy="206" r="13" fill="#f2f0eb" />
-      <circle cx="109" cy="206" r="13" fill="#f2f0eb" />
-      <circle cx="147" cy="206" r="13" fill="#f2f0eb" />
-      <circle cx="185" cy="206" r="10" fill="none" stroke="#f2f0eb" strokeOpacity="0.45" strokeWidth="6" />
+      <rect width="256" height="256" rx="60" fill="#ff6a2b" />
+      <circle cx="128" cy="104" r="58" fill="none" stroke="#ffffff" strokeWidth="22" />
+      <circle cx="128" cy="104" r="20" fill="#ffffff" />
+      <circle cx="71" cy="208" r="14" fill="#ffffff" />
+      <circle cx="109" cy="208" r="14" fill="#ffffff" />
+      <circle cx="147" cy="208" r="14" fill="#ffffff" />
+      <circle cx="185" cy="208" r="11" fill="none" stroke="#ffffff" strokeOpacity="0.6" strokeWidth="6" />
     </svg>
   );
 }
