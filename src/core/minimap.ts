@@ -31,6 +31,8 @@ export interface Dot {
   area: number;
   /** Minions in this blob: touching minions merge into one blob, counted by area. */
   n?: number;
+  /** Ward icons only: which icon it matched (see findWardIcons). */
+  kind?: WardKind;
 }
 
 const diffAt = (a: Frame["data"], b: Frame["data"], i: number) => Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
@@ -152,6 +154,8 @@ export interface DotOpts {
   structureScale?: number;
   /** When given, ward icons found are added here (they're never counted as minions). */
   wards?: Dot[];
+  /** The game's own ward icons as templates (see wardTemplate): tells ward kinds apart and finds control wards. */
+  wardTemplates?: WardTemplate[];
   /** Champion rings: anything inside one is part of the icon, not a minion. */
   exclude?: { cx: number; cy: number; r: number }[];
 }
@@ -287,6 +291,205 @@ export function findWardStars(frame: Frame, bg: Frame, masked?: Uint8Array): { t
   return keep.map(({ team, px, py, colour }) => ({ team, px, py, colour }));
 }
 
+export type WardKind = "stealth" | "stealth_low" | "control";
+
+/**
+ * A ward icon from the game's files (raw.communitydragon.org, ux/minimap/icons), reduced to
+ * how the minimap draws it: each cell is 1 icon colour, 2 dark outline, 0 empty, -1 mixed.
+ * The game draws these 32 px icons at about 0.62 of their size on a 247 px minimap: the
+ * stealth ward star comes out 13x11 px with its outline, the control ward's eye about 12x7
+ * (both measured on NA1_5686039660). Matching is on shape only, against separate team-colour
+ * and dark masks: plain RGB correlation can't tell the kinds apart.
+ */
+export interface WardTemplate {
+  kind: WardKind;
+  w: number;
+  h: number;
+  /** Cells, row by row, at a 247 px minimap. */
+  c: Int8Array;
+}
+
+export const WARD_ICON_SCALE = 0.62;
+
+/** Template of one icon (RGBA with alpha), at `scale` of its size (default: as drawn on a 247 px minimap). */
+export function wardTemplate(kind: WardKind, icon: Frame, scale = WARD_ICON_SCALE): WardTemplate {
+  const W = Math.round(icon.w * scale);
+  const H = Math.round(icon.h * scale);
+  const cls = new Int8Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      let a = 0;
+      let col = 0;
+      let dark = 0;
+      let n = 0;
+      for (let yy = Math.floor(y / scale); yy < Math.min(icon.h, Math.ceil((y + 1) / scale)); yy++)
+        for (let xx = Math.floor(x / scale); xx < Math.min(icon.w, Math.ceil((x + 1) / scale)); xx++) {
+          const i = (yy * icon.w + xx) * 4;
+          n++;
+          const al = icon.data[i + 3] / 255;
+          a += al;
+          if (al > 0.5) {
+            if (Math.max(icon.data[i], icon.data[i + 1], icon.data[i + 2]) < 80) dark++;
+            else col++;
+          }
+        }
+      n = Math.max(1, n);
+      a /= n;
+      cls[y * W + x] = a < 0.15 ? 0 : col / n > 0.55 ? 1 : dark / n > 0.55 ? 2 : -1;
+    }
+  // Trim to the icon plus a one-cell empty border.
+  let x0 = W;
+  let x1 = -1;
+  let y0 = H;
+  let y1 = -1;
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++)
+      if (cls[y * W + x] !== 0) {
+        x0 = Math.min(x0, x);
+        x1 = Math.max(x1, x);
+        y0 = Math.min(y0, y);
+        y1 = Math.max(y1, y);
+      }
+  const tw = x1 - x0 + 3;
+  const th = y1 - y0 + 3;
+  const c = new Int8Array(tw * th);
+  for (let y = 0; y < th; y++)
+    for (let x = 0; x < tw; x++) {
+      const sx = x + x0 - 1;
+      const sy = y + y0 - 1;
+      c[y * tw + x] = sx >= 0 && sy >= 0 && sx < W && sy < H ? cls[sy * W + sx] : 0;
+    }
+  return { kind, w: tw, h: th, c };
+}
+
+/** A template resampled to another minimap width (nearest cell). */
+function scaledTemplate(t: WardTemplate, k: number): WardTemplate {
+  if (Math.abs(k - 1) < 0.02) return t;
+  const w = Math.max(3, Math.round(t.w * k));
+  const h = Math.max(3, Math.round(t.h * k));
+  const c = new Int8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) c[y * w + x] = t.c[Math.min(t.h - 1, Math.floor(y / k)) * t.w + Math.min(t.w - 1, Math.floor(x / k))];
+  return { kind: t.kind, w, h, c };
+}
+
+/**
+ * How well a template sits with its centre at (cx, cy): the share of its colour cells that
+ * are this team's colour (rc), of its outline cells that are dark (rd), and team colour
+ * spilling into its empty cells as a share of its colour cells (rs).
+ */
+function templateFit(col: Uint8Array, dark: Uint8Array, w: number, h: number, t: WardTemplate, v: number, cx: number, cy: number) {
+  const ox = Math.round(cx - t.w / 2 + 0.5);
+  const oy = Math.round(cy - t.h / 2 + 0.5);
+  let nC = 0;
+  let nD = 0;
+  let cH = 0;
+  let dH = 0;
+  let sp = 0;
+  for (let y = 0; y < t.h; y++) {
+    const fy = oy + y;
+    for (let x = 0; x < t.w; x++) {
+      const c = t.c[y * t.w + x];
+      if (c === 1) nC++;
+      else if (c === 2) nD++;
+      const fx = ox + x;
+      if (fx < 0 || fy < 0 || fx >= w || fy >= h) continue;
+      const p = fy * w + fx;
+      if (c === 1 && col[p] === v) cH++;
+      else if (c === 2 && dark[p]) dH++;
+      else if (c === 0 && col[p] === v) sp++;
+    }
+  }
+  const rc = cH / Math.max(1, nC);
+  const rd = dH / Math.max(1, nD);
+  const rs = sp / Math.max(1, nC);
+  return { rc, rd, rs, score: rc + 0.5 * rd - rs };
+}
+
+/** Control ward eyes: a fit at least this good, and better than either star's fit there by CONTROL_MARGIN. */
+const CONTROL_MIN = 0.6;
+const CONTROL_MIN_COLOUR = 0.5;
+const CONTROL_MARGIN = 0.05;
+
+/**
+ * Ward icons in a minimap crop, with their kind when templates are given.
+ *  - Stealth wards (trinket and sight ward draw the same star) come from findWardStars;
+ *    with templates, a star the hollow "about to expire" icon fits better is "stealth_low".
+ *  - Control wards (an eye with a slash) are found with their template, kept where the eye
+ *    fits better than either star. On NA1_5686039660's dumps (one every 6 s) both blue
+ *    control wards were found in every frame they were up and not under a portrait (25 and
+ *    25 frames) and the red one in 16; everything else that passed did so in a single frame,
+ *    so placeWards wants a control icon to stay put before it counts.
+ * Without templates the kinds are left out (the star rule alone, as before).
+ */
+export function findWardIcons(frame: Frame, bg: Frame, masked?: Uint8Array, templates?: WardTemplate[]): { team: 100 | 200; px: number; py: number; colour: number; kind?: WardKind }[] {
+  const stars: { team: 100 | 200; px: number; py: number; colour: number; kind?: WardKind }[] = findWardStars(frame, bg, masked);
+  if (!templates?.length) return stars;
+  const { w, h, data } = frame;
+  const k = w / 247;
+  const T = templates.map((t) => scaledTemplate(t, k));
+  const col = new Uint8Array(w * h);
+  const dark = new Uint8Array(w * h);
+  for (let p = 0; p < w * h; p++) {
+    const i = p * 4;
+    if (Math.max(data[i], data[i + 1], data[i + 2]) < 80) dark[p] = 1;
+    if (masked?.[p] || diffAt(data, bg.data, i) < 40) continue;
+    const t = teamColor(data[i], data[i + 1], data[i + 2]);
+    if (t) col[p] = t === 100 ? 1 : 2;
+  }
+  const best = (kind: WardKind, v: number, cx: number, cy: number) => {
+    let b = -Infinity;
+    for (const t of T)
+      if (t.kind === kind)
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) b = Math.max(b, templateFit(col, dark, w, h, t, v, cx + dx, cy + dy).score);
+    return b;
+  };
+  for (const s of stars) {
+    const v = s.team === 100 ? 1 : 2;
+    // The star rule also passes a red control ward's eye on the river (NA1_5686039660, 10:51).
+    // Re-labelling a star as an eye when the eye fits better turned 9 real stars on the same
+    // dumps into "control" (the hollow low star fits the eye about as well), so a star stays a star.
+    s.kind = best("stealth_low", v, s.px, s.py) > best("stealth", v, s.px, s.py) ? "stealth_low" : "stealth";
+  }
+  const eyes = T.filter((t) => t.kind === "control");
+  const found: { team: 100 | 200; px: number; py: number; colour: number; score: number }[] = [];
+  for (const team of [100, 200] as const) {
+    const v = team === 100 ? 1 : 2;
+    for (const t of eyes)
+      for (let cy = 0; cy < h; cy++)
+        for (let cx = 0; cx < w; cx++) {
+          if (col[cy * w + cx] !== v) continue;
+          const f = templateFit(col, dark, w, h, t, v, cx, cy);
+          if (f.score < CONTROL_MIN || f.rc < CONTROL_MIN_COLOUR) continue;
+          if (Math.max(best("stealth", v, cx, cy), best("stealth_low", v, cx, cy)) > f.score - CONTROL_MARGIN) continue;
+          found.push({ team, px: cx, py: cy, colour: Math.round(f.rc * 100), score: f.score });
+        }
+  }
+  found.sort((a, b) => b.score - a.score);
+  const sep = 6 * k;
+  const out = [...stars];
+  for (const s of found) if (!out.some((t) => Math.abs(t.px - s.px) <= sep && Math.abs(t.py - s.py) <= sep)) out.push({ team: s.team, px: s.px, py: s.py, colour: s.colour, kind: "control" });
+  return out;
+}
+
+/**
+ * Whether a structure icon is still drawn at (cx, cy): at least STANDING_SHARE of the team-
+ * coloured pixels the empty map has in its disc are still team-coloured in the frame. Minions
+ * walking over a dead tower's spot cover far less than the icon did.
+ */
+const STANDING_SHARE = 0.35;
+function structureStanding(f: Frame, bg: Frame, cx: number, cy: number, r: number): boolean {
+  let was = 0;
+  let is = 0;
+  for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(f.h - 1, Math.ceil(cy + r)); y++)
+    for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(f.w - 1, Math.ceil(cx + r)); x++) {
+      if ((x - cx) ** 2 + (y - cy) ** 2 > r * r) continue;
+      const i = (y * f.w + x) * 4;
+      if (teamColor(bg.data[i], bg.data[i + 1], bg.data[i + 2])) was++;
+      if (teamColor(f.data[i], f.data[i + 1], f.data[i + 2])) is++;
+    }
+  return was < 8 || is >= was * STANDING_SHARE;
+}
+
 /** Minion dots in a cropped minimap frame, given the empty map behind it. */
 export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
   const { w, h, data } = frame;
@@ -304,7 +507,13 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
   for (const st of STRUCTURES) {
     const c = gameToPixel(st.x, st.y, w);
     const k = o.structureScale ?? STRUCTURE_SCALE;
-    markDisc(masked, w, h, w / 2 + (c.px - w / 2) * k, h / 2 + (c.py - h / 2) * k, STRUCTURE_R_PX * (w / 247));
+    const cx = w / 2 + (c.px - w / 2) * k;
+    const cy = h / 2 + (c.py - h / 2) * k;
+    const r = STRUCTURE_R_PX * (w / 247);
+    // A fallen structure's icon is gone (the empty map shows it standing): its team colour
+    // is missing from the frame, so minions there can be read again.
+    if (!structureStanding(frame, bg, cx, cy, r)) continue;
+    markDisc(masked, w, h, cx, cy, r);
   }
   for (const e of o.exclude ?? []) markDisc(masked, w, h, e.cx, e.cy, e.r + 2);
   for (let p = 0; p < w * h; p++) {
@@ -315,16 +524,19 @@ export function detectDots(frame: Frame, bg: Frame, o: DotOpts = {}): Dot[] {
     if (t) label[p] = t === 100 ? 1 : 2;
   }
   // Ward icons come out before minions are counted: each piece of a star is minion-sized
-  // and would otherwise be read as a minion.
+  // and would otherwise be read as a minion. A control ward's eye is left in: a minion clump
+  // fits the eye in single frames (2 of 18 labelled frames lost 1-3 bot minions to it), and a
+  // real eye is still for minutes, which the static-blob rule takes out.
   const k = w / 247;
-  for (const s of findWardStars(frame, bg, masked)) {
+  for (const s of findWardIcons(frame, bg, masked, o.wardTemplates)) {
     const l = s.team === 100 ? 1 : 2;
     const [x0, x1, y0, y1] = STAR_FOOTPRINT;
-    for (let y = Math.max(0, Math.round(s.py + y0 * k)); y <= Math.min(h - 1, Math.round(s.py + y1 * k)); y++)
-      for (let x = Math.max(0, Math.round(s.px + x0 * k)); x <= Math.min(w - 1, Math.round(s.px + x1 * k)); x++) if (label[y * w + x] === l) label[y * w + x] = 0;
+    if (s.kind !== "control")
+      for (let y = Math.max(0, Math.round(s.py + y0 * k)); y <= Math.min(h - 1, Math.round(s.py + y1 * k)); y++)
+        for (let x = Math.max(0, Math.round(s.px + x0 * k)); x <= Math.min(w - 1, Math.round(s.px + x1 * k)); x++) if (label[y * w + x] === l) label[y * w + x] = 0;
     if (o.wards) {
       const g = pixelToGame(s.px + 0.5, s.py + 0.5, w);
-      o.wards.push({ team: s.team, x: Math.round(g.x), y: Math.round(g.y), area: s.colour });
+      o.wards.push({ team: s.team, x: Math.round(g.x), y: Math.round(g.y), area: s.colour, ...(s.kind ? { kind: s.kind } : {}) });
     }
   }
   const seen = new Uint8Array(w * h);
@@ -618,6 +830,107 @@ function houghRings(b: Blob, w: number, r: number, minCover: number): { cx: numb
  * blobs that are several touching rings, or a ring partly under another icon, are split
  * with a circle search at the ring size the clean ones show.
  */
+/**
+ * A ring cut off by the minimap's corner at a fountain spot (blue: bottom-left, red:
+ * top-right): a champion standing in their fountain. Only about a quarter of it is inside
+ * the crop (Kayle at 5:17 on NA1_5686039660), too little for the circle search.
+ * This works on the frame's own colours, not the difference from the empty map: the empty
+ * map's fountain is itself a median of frames that often have a champion standing there
+ * (it did on NA1_5686039660), and the fountain floor is drawn in the team's colour. So a ring
+ * here is a thin circle of team colour at the ring size with a portrait inside it, where the
+ * empty floor is team colour all through.
+ */
+const CORNER_SLACK = 5;
+function cornerRing(frame: Frame, team: 100 | 200, r0: number): Ring | null {
+  const { w, h, data } = frame;
+  const isTeam = (x: number, y: number) => {
+    const i = (Math.round(y) * w + Math.round(x)) * 4;
+    return teamColor(data[i], data[i + 1], data[i + 2]) === team;
+  };
+  // A ring is drawn bright (its brightest channel ~240); the fountain floor and the river are
+  // the same hue but dull (~140).
+  const isRim = (x: number, y: number) => {
+    const i = (Math.round(y) * w + Math.round(x)) * 4;
+    return isTeam(x, y) && Math.max(data[i], data[i + 1], data[i + 2]) >= RIM_BRIGHT;
+  };
+  const inCrop = (x: number, y: number) => x >= 0 && y >= 0 && x <= w - 1 && y <= h - 1;
+  const r = r0 - 1;
+  const f = FOUNTAINS[team === 100 ? 0 : 1];
+  const spot = gameToPixel(f.x, f.y, w);
+  const slack = CORNER_SLACK * (w / 247);
+  let best: Ring | null = null;
+  let bestScore = 0;
+  for (let dy = -slack; dy <= slack; dy += 0.5)
+    for (let dx = -slack; dx <= slack; dx += 0.5) {
+      const cx = spot.px + dx;
+      const cy = spot.py + dy;
+      // The rim: of the 24 sectors whose middle is inside the crop, how many have team colour on the circle.
+      let inside = 0;
+      let covered = 0;
+      for (let k = 0; k < 24; k++) {
+        const a = ((k + 0.5) / 24) * 2 * Math.PI;
+        if (!inCrop(cx + r * Math.cos(a), cy + r * Math.sin(a))) continue;
+        inside++;
+        for (let dr = -1; dr <= 1; dr++) {
+          const x = cx + (r + dr) * Math.cos(a);
+          const y = cy + (r + dr) * Math.sin(a);
+          if (inCrop(x, y) && isRim(x, y)) {
+            covered++;
+            break;
+          }
+        }
+      }
+      if (inside < 4 || covered / inside < 0.75) continue;
+      // The inside: a portrait, not the floor.
+      let n = 0;
+      let tc = 0;
+      for (let y = Math.ceil(cy - r + 3); y <= cy + r - 3; y++)
+        for (let x = Math.ceil(cx - r + 3); x <= cx + r - 3; x++) {
+          if (!inCrop(x, y) || Math.hypot(x - cx, y - cy) > r - 3) continue;
+          n++;
+          if (isTeam(x, y)) tc++;
+        }
+      if (n < 10 || tc / n > CORNER_FILL) continue;
+      const score = covered / inside - tc / n;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { team, cx, cy, r: r0, cover: covered / 24 };
+      }
+    }
+  return best;
+}
+/** Share of a fountain ring's inside that may be team colour (portraits carry some; the empty floor is all of it). */
+const CORNER_FILL = 0.4;
+const RIM_BRIGHT = 190;
+
+/**
+ * A champion ring is drawn bright (brightest channel about 240 all round); an arc of the
+ * fountain floor or a river bank that differs from the empty map has the team's hue but is dull
+ * (about 160 at most). On NA1_5686025956 the blue fountain floor's edge was read as a ring for
+ * minutes and named Smolder, putting him in base during lane. At least RIM_SHARE of the circle's
+ * team-coloured points must be bright.
+ */
+const RIM_SHARE = 0.4;
+function brightRim(frame: Frame, cx: number, cy: number, r: number): boolean {
+  let team = 0;
+  let bright = 0;
+  for (let k = 0; k < 48; k++) {
+    const a = (k / 48) * 2 * Math.PI;
+    for (let dr = -1; dr <= 1; dr++) {
+      const x = Math.round(cx + (r + dr) * Math.cos(a));
+      const y = Math.round(cy + (r + dr) * Math.sin(a));
+      if (x < 0 || y < 0 || x >= frame.w || y >= frame.h) continue;
+      const i = (y * frame.w + x) * 4;
+      const d = frame.data;
+      if (!teamColor(d[i], d[i + 1], d[i + 2])) continue;
+      team++;
+      if (Math.max(d[i], d[i + 1], d[i + 2]) >= RIM_BRIGHT) bright++;
+      break;
+    }
+  }
+  return team > 0 && bright >= team * RIM_SHARE;
+}
+
 export function findRings(frame: Frame, bg?: Frame, opts: { minCover?: number } = {}): Ring[] {
   const { w, h } = frame;
   const all = blobs(teamLabels(frame, bg), w, h);
@@ -650,7 +963,12 @@ export function findRings(frame: Frame, bg?: Frame, opts: { minCover?: number } 
     // Too small to hold an arc of a ring, or too big to be a few icons.
     if (Math.max(bw, bh) < r0 * 1.1 || bw > r0 * 9 || bh > r0 * 9 || b.px.length < r0 * 2.5) continue;
     if (b.px.length / (bw * bh) > 0.6) continue; // filled: a structure, not icons
-    for (const c of houghRings(b, w, r0 - 1, opts.minCover ?? 0.3)) rings.push({ team: b.l === 1 ? 100 : 200, cx: c.cx, cy: c.cy, r: r0, cover: c.cover });
+    for (const c of houghRings(b, w, r0 - 1, opts.minCover ?? 0.3)) if (brightRim(frame, c.cx, c.cy, r0 - 1)) rings.push({ team: b.l === 1 ? 100 : 200, cx: c.cx, cy: c.cy, r: r0, cover: c.cover });
+  }
+  // Champions standing in their fountain, drawn three quarters off the minimap's corner.
+  for (const team of [100, 200] as const) {
+    const ring = cornerRing(frame, team, r0);
+    if (ring && !rings.some((x) => Math.hypot(x.cx - ring.cx, x.cy - ring.cy) < r0)) rings.push(ring);
   }
   // One icon, two rings: a second circle found on the same icon (same team, close), or
   // portrait art of the other team's colour inside a ring (pink or red art in a blue ring).

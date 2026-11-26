@@ -16,6 +16,7 @@ import type {
   TimelineEvent,
 } from "./types";
 import { champName } from "./names";
+import { synthesize } from "./synth";
 
 const MIN = 60_000;
 const LANE_PHASE_END = 14 * MIN;
@@ -269,7 +270,7 @@ export function findMistakes(match: MatchDto, timeline: TimelineDto, puuid: stri
   return out.sort((a, b) => b.severity - a.severity || a.timeMs - b.timeMs);
 }
 
-export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: string, waves?: import("./waves").WaveTrack): GameReport {
+export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: string, waves?: import("./waves").WaveTrack, items?: import("./gold").ItemTable): GameReport {
   const m = computeMetrics(match, timeline, puuid);
   const bench = benchmarkFor(m.role);
   const all = findMistakes(match, timeline, puuid);
@@ -301,6 +302,9 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
   const kills = allEvents(timeline).filter((e) => e.type === "CHAMPION_KILL" && e.position);
   const toMap = (e: TimelineEvent) => ({ timeMs: e.timestamp, x: e.position!.x, y: e.position!.y });
 
+  // Module 3 findings need champion positions from a replay read and the patch's item prices.
+  const findings = waves?.champs?.length && items ? synthesize({ track: waves, match, timeline, id: me.participantId, items }).findings : undefined;
+
   return {
     metrics: m,
     teamId: me.teamId,
@@ -310,7 +314,8 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
     killsAt: kills.filter((e) => e.killerId === me.participantId).map(toMap),
     mistakes,
     strengths,
-    focus: pickFocus(m, all),
+    focus: findings?.length ? `${findings[0].time}: ${findings[0].fix}` : pickFocus(m, all),
+    findings,
     grade: grade(m, all),
     track,
     leaks: readGame(match, timeline, track, me, opp, waves), lane: laneStats(match, timeline, me.participantId) ?? undefined, wavesRead: !!waves?.samples.length, recallWindows: waves?.samples.length ? recallWindows(match, timeline, track, me, waves) : undefined, waves: waves?.samples.length ? waves : undefined,
@@ -321,11 +326,12 @@ function pickFocus(m: GameMetrics, mistakes: Mistake[]): string {
   const bench = benchmarkFor(m.role);
   const count = (k: Mistake["kind"]) => mistakes.filter((x) => x.kind === k).length;
   if (count("ganked") >= 2) return "Track the enemy jungler: before each push, say out loud where they were last seen.";
-  if (m.deathsPre14 >= 3) return "Aim for 1 or fewer deaths before 14 minutes. Play for farm when you're unsure.";
+  if (m.deathsPre14 >= 3) return `You died ${m.deathsPre14} times before 14:00 (typical for your role: ${bench.deathsPre14}). The first was at ${fmtTime(mistakes.reduce((a, x) => Math.min(a, x.timeMs), Infinity))}; read the replay to get each one's cause with its timestamp.`;
   if (count("died_with_gold") >= 2) return "Recall on time: when you have 1100g+ and the wave is pushed, go back and buy.";
   if (count("overextended") >= 2) return "Stop walking into enemy jungle without vision or your team.";
-  if (m.cs10 < bench.cs10 - 10) return `Farm better in lane: aim for ${bench.cs10}+ CS at 10 minutes.`;
-  if (count("died_before_objective") >= 1) return "Play safe in the minute before dragon and baron spawn.";
+  if (m.cs10 < bench.cs10 - 10) return `${m.cs10} CS at 10:00 against a typical ${bench.cs10}: ${bench.cs10 - m.cs10} minions short, about ${(bench.cs10 - m.cs10) * 19} gold (a minion averages 19).`;
+  const obj = mistakes.find((x) => x.kind === "died_before_objective");
+  if (obj) return `You died at ${fmtTime(obj.timeMs)}, inside the minute before an objective your team then had to play 4 v 5. From 60 s before a dragon or Baron spawn, take no fight you were not already winning.`;
   if (m.visionPerMin < bench.visionPerMin - 0.2) return "Use your trinket on cooldown and buy a control ward every recall.";
   return "No single leak stood out. Rewatch your first death and name what you could have known before it.";
 }

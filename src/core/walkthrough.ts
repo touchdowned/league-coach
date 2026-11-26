@@ -12,6 +12,7 @@
  */
 import { fmtTime } from "./analysis";
 import type { Leak } from "./engine";
+import type { Finding } from "./synth";
 import { describeSpot, dist, positionAt, type Track } from "./track";
 import type { GameReport } from "./types";
 import { hasVision, lastSeen, truthAt, visibleAt } from "./vision";
@@ -73,6 +74,8 @@ export interface Chapter {
   better: { text: string; from: Pt | null; to: Pt | null; label: string };
   /** Full engine write-up, for the "why" panel. */
   leak: Leak;
+  /** The measured finding about the same moment, when the replay scan produced one. */
+  finding?: Finding;
 }
 
 const LEAD = 6000; // start this long before the root cause
@@ -204,7 +207,45 @@ export function buildChapters(r: GameReport, max = 6): Chapter[] {
     out.push(c);
     if (out.length >= max) break;
   }
+  attachFindings(out, r.findings ?? []);
   return out;
+}
+
+/** A finding and a chapter are about the same moment when they share the death, or sit this close in time. */
+const SAME_MOMENT: Record<Finding["kind"], number> = { death: 3 * SEC, fight: 20 * SEC, exposure: 20 * SEC, recall: 20 * SEC, objective: 30 * SEC };
+
+/**
+ * Give each chapter the finding that measured the same moment, each finding used once.
+ * A death chapter takes the finding that explains that death (by `deathAt`); a recall or
+ * objective chapter takes a finding of its own kind near its outcome.
+ */
+export function attachFindings(chapters: Chapter[], findings: Finding[]): void {
+  const used = new Set<string>();
+  for (const c of chapters) {
+    let best: Finding | undefined;
+    let bestGap = Infinity;
+    for (const f of findings) {
+      if (used.has(f.id)) continue;
+      let gap: number;
+      if (c.kind === "death") {
+        if (f.deathAt === undefined) continue;
+        gap = Math.abs(f.deathAt - c.outcome);
+        if (gap > SAME_MOMENT.death) continue;
+      } else {
+        if (f.kind !== c.kind) continue;
+        gap = Math.min(Math.abs(f.t - c.outcome), Math.abs(f.t - c.root));
+        if (gap > SAME_MOMENT[f.kind]) continue;
+      }
+      if (gap < bestGap) {
+        best = f;
+        bestGap = gap;
+      }
+    }
+    if (best) {
+      c.finding = best;
+      used.add(best.id);
+    }
+  }
 }
 
 function chapterFor(g: G, l: Leak): Chapter | null {
@@ -423,7 +464,20 @@ function recallChapter(g: G, l: Leak): Chapter {
   let better: Chapter["better"];
   let headline = l.title;
 
-  if (passed) {
+  const ctx = l.recall;
+  const gold = (n: number) => `${Math.round(n).toLocaleString("en-US")}g`;
+  if (cause === "sat-on-gold" && ctx?.richAt !== undefined && ctx.richGold !== undefined) {
+    // The mistake is not this recall: it is the minutes before it with an item's worth of gold unspent.
+    const held = Math.round((left - ctx.richAt) / SEC);
+    headline = `You carried ${gold(ctx.richGold)} from ${fmtTime(ctx.richAt)} to ${fmtTime(left)}: ${held}s an item down.`;
+    question = `You've had ${gold(ctx.richGold)} since ${fmtTime(ctx.richAt)}. When was the recall?`;
+    choices = [
+      { label: `Back at ${fmtTime(ctx.richAt)}, when the gold came in`, good: true, why: `${gold(ctx.richGold)} is a finished component. Everything between ${fmtTime(ctx.richAt)} and ${fmtTime(left)} was played without it.` },
+      { label: `Now, at ${fmtTime(left)}`, good: false, why: `This recall is fine in itself. The cost is the ${held}s before it with ${gold(ctx.richGold)} in your pocket.` },
+    ];
+    better = { text: l.nextTime, from, to: FOUNTAIN[g.team], label: "recall" };
+    beats.push({ t: root, kind: "decision", caption: `You recall with gold you've held since ${fmtTime(ctx.richAt)}.`, follow: g.me, marks: [] });
+  } else if (passed) {
     root = passed.t;
     const at = pos(g, g.meId, root) ?? from;
     headline = `The recall window was at ${fmtTime(passed.t)}. You backed ${Math.round((left - passed.t) / SEC)}s later, into a worse wave.`;
@@ -435,7 +489,7 @@ function recallChapter(g: G, l: Leak): Chapter {
     ];
     better = { text: `Back at ${fmtTime(passed.t)} on the crash. You'd have bought the same items ${Math.round((left - passed.t) / SEC)}s sooner and lost nothing.`, from: at, to: FOUNTAIN[g.team], label: "recall here" };
     beats.push({ t: root, kind: "decision", caption: `Your wave crashes into their tower. ${passed.gold.toLocaleString("en-US")}g.`, follow: g.me, marks: [] });
-  } else if (cause === "recalled-into-their-wave" || (w && w.theirs >= w.mine + 2)) {
+  } else if (!ctx?.blocked && !ctx?.late && (cause === "recalled-into-their-wave" || (w && w.theirs >= w.mine + 2))) {
     const waveAtFront = g.lane && w ? pointOnLane(g.lane, g.team === 100 ? w.front : 1 - w.front) : from;
     headline = `You recalled with ${w ? `${w.theirs} of their minions` : "their wave"} walking into your tower.`;
     question = w ? `${w.theirs} of their minions vs ${w.mine} of yours, ${w.where}. Recall?` : "Their wave is pushing at you. Recall?";
@@ -456,11 +510,30 @@ function recallChapter(g: G, l: Leak): Chapter {
     ];
     better = { text: "Stay and walk to the pit with your team, then recall after.", from, to: pit, label: "objective" };
     beats.push({ t: root, kind: "decision", caption: "You start to recall with an objective coming.", follow: g.me, marks: [{ kind: "path", from, to: pit, tone: "better" }] });
+  } else if (ctx?.blocked) {
+    // Outnumbered or behind the one in front of you: there was no wave to push. Leaving was right.
+    headline = `Leaving at ${fmtTime(left)} was right. What it cost came from earlier.`;
+    question = "Recall now, or push the wave first?";
+    choices = [
+      { label: "Recall now", good: true, why: ctx.line },
+      { label: "Push the wave first", good: false, why: `${ctx.line} Walking up to the wave from there is a fight you lose.` },
+    ];
+    better = { text: l.nextTime, from, to: FOUNTAIN[g.team], label: "recall" };
+    beats.push({ t: root, kind: "decision", caption: "You start to recall with them in reach.", follow: g.me, marks: [] });
+  } else if (ctx?.late || left >= LANE_END + 60 * SEC) {
+    // After laning the lane wave doesn't set recall timing: what was lost on the map while you were gone does.
+    question = "Is this a good time to recall?";
+    choices = [
+      { label: "Yes, recall", good: false, why: l.costParts.map((p) => p.label).join(", ") + "." },
+      { label: "No, not with that about to happen", good: true, why: l.nextTime },
+    ];
+    better = { text: l.nextTime, from, to: FOUNTAIN[g.team], label: "recall" };
+    beats.push({ t: root, kind: "decision", caption: "You start to recall.", follow: g.me, marks: [] });
   } else {
     question = "Is this a good time to recall?";
     choices = [
       { label: "Yes, recall", good: false, why: l.nextTime },
-      { label: "No, time it to a crash", good: true, why: "Push first, back as the wave hits their tower." },
+      { label: "No, get the wave to their tower first", good: true, why: ctx?.line ? `${ctx.line} The push was on.` : "Their tower kills your wave slowly, so their next wave meets it in the middle instead of walking into your tower." },
     ];
     better = { text: l.nextTime, from, to: FOUNTAIN[g.team], label: "recall" };
     beats.push({ t: root, kind: "decision", caption: "You start to recall.", follow: g.me, marks: [] });

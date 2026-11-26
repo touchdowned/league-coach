@@ -2,12 +2,13 @@ import { app, desktopCapturer, nativeImage, net, screen } from "electron";
 import { bgraToRgba, crop, detectChampions, detectDots, backgroundFrame, Dot, findMinimap, findRings, Frame, rematch, iconGrid, PortraitRef, Rect } from "../core/minimap";
 import { cameraLookingAt } from "../core/camera";
 import { dropJumps, fillOcclusions, nameRings } from "../core/vision";
-import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
+import { ChampSample, dropStaticDots, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
 import { gameIdOf, LeagueClient } from "./league";
 import { champKey, parseLive, type LivePoll } from "../core/telemetry";
 import { FogView, readFogDropdown, viewOf } from "../core/fogview";
 import { clickFogView } from "./fogswitch";
 import { hudStrip, readHudStrips, type HudSample } from "../core/hud";
+import { wardTemplates } from "./wardicons";
 import { promises as fsp } from "fs";
 import pathMod from "path";
 
@@ -75,11 +76,13 @@ async function waitFor<T>(fn: () => Promise<T | null>, ms: number, isCancelled: 
 }
 
 /** Gets this game's replay open in League (downloading it first if needed). */
-export async function openReplay(lc: LeagueClient, matchId: string, onLabel: (label: string) => void, isCancelled: () => boolean = () => false) {
+export async function openReplay(lc: LeagueClient, matchId: string, onLabel: (label: string) => void, isCancelled: () => boolean = () => false, expectedSec?: number) {
   let pb = await lc.playback();
   if (pb) {
     const open = await lc.currentGameId();
-    if (open && open !== gameIdOf(matchId)) throw new Error("A different replay is open. Close it and try again.");
+    // The client often doesn't name the game while a replay plays, so the replay's length is
+    // checked too: it runs a few seconds past the game's own duration.
+    if ((open && open !== gameIdOf(matchId)) || (expectedSec !== undefined && Math.abs(pb.length - expectedSec) > 20)) throw new Error("A different game's replay is open in League. Close it, then start this one again.");
     return pb;
   }
   const st = await lc.state(matchId);
@@ -144,6 +147,11 @@ type OnFrame = (minimap: Frame, t: number, hud?: { blue: Frame; red: Frame; scre
 /** Where the minimap is in a frame of the given size. */
 type RectFor = (size: { w: number; h: number }) => Rect;
 
+/** Segments a pass may take before it gives up: a recorder that keeps stopping on its own isn't going to finish. */
+const MAX_SEGMENTS = 12;
+/** Unreadable recorder states in a row (1.5 s timeout each) before the recorder counts as gone. */
+const STATE_MISSES = 3;
+
 /**
  * One pass with Riot's recorder: it renders [from, to] frame by frame and writes PNGs at
  * exact game times (frame k = from + k / fps), much faster than screen capture and
@@ -155,8 +163,18 @@ type RectFor = (size: { w: number; h: number }) => Rect;
  * 1901 frames for a 1 fps pass of 835 s). If reading falls far behind (each frame is ~2 MB
  * on disk), the recording is stopped, the frames on disk are read, and a new recording
  * starts from the next frame's time.
+ *
+ * Why each segment ended is logged and kept in scanInfo: "cancelled", "backlog" (we stopped it to
+ * catch up), "recorder stopped at <s>" (League ended it on its own), "state unreadable" (the Replay
+ * API stopped answering), "no progress" (no frame for 25 s), "start failed", or "done". A recorder
+ * that stops on its own before the end is restarted from where it got to.
  */
-async function recorderPass(lc: LeagueClient, from: number, to: number, fps: number, rectFor: RectFor, onFrame: OnFrame, isCancelled: () => boolean, onTime: (t: number) => void): Promise<{ frames: number; wallMs: number; maxBacklog: number; expectedFrames: number; segments: number } | null> {
+async function recorderPass(lc: LeagueClient, from: number, to: number, fps: number, rectFor: RectFor, onFrame: OnFrame, isCancelled: () => boolean, onTime: (t: number) => void): Promise<{ frames: number; wallMs: number; maxBacklog: number; expectedFrames: number; segments: number; stops: string[] } | null> {
+  const stops: string[] = [];
+  const stop = (why: string) => {
+    stops.push(why);
+    console.log(`[scan] recorder segment ${stops.length} ended: ${why}`);
+  };
   const root = pathMod.join(app.getPath("temp"), "league-coach-frames", String(Date.now()));
   const t0 = Date.now();
   let frames = 0;
@@ -169,16 +187,22 @@ async function recorderPass(lc: LeagueClient, from: number, to: number, fps: num
       const base = pathMod.join(root, String(segments));
       await lc.setPlayback({ time: segFrom, paused: true });
       await sleep(1200);
-      if (!(await lc.startFrameRecording(base, segFrom, to, fps))) return segments ? { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments } : null;
+      if (!(await lc.startFrameRecording(base, segFrom, to, fps))) {
+        stop(`start failed at ${segFrom.toFixed(1)}`);
+        return segments ? { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments, stops } : null;
+      }
       segments++;
       await lc.setPlayback({ time: segFrom, paused: false, speed: 8 });
       let next = 0;
       let lastProgress = Date.now();
       let dir: string | null = null;
       let stopped = false;
+      let misses = 0;
+      let selfStop = false;
       while (true) {
         if (isCancelled()) {
           await lc.stopRecording();
+          stop("cancelled");
           break;
         }
         if (!dir) {
@@ -187,13 +211,24 @@ async function recorderPass(lc: LeagueClient, from: number, to: number, fps: num
           dir = d ? pathMod.join(base, d.name) : null;
         }
         const st = await lc.recordingState();
+        // One unanswered request isn't the recorder ending: keep going until several in a row fail.
+        misses = st ? 0 : misses + 1;
+        if (!st && misses < STATE_MISSES) {
+          await sleep(300);
+          continue;
+        }
         const done = stopped || !st || !st.recording;
+        if (done && !stopped && !selfStop) {
+          selfStop = true;
+          stop(!st ? `state unreadable ${misses}x after ${(segFrom + next / fps).toFixed(1)}` : `recorder stopped at ${(segFrom + next / fps).toFixed(1)}`);
+        }
         if (dir) {
           const files = (await fsp.readdir(dir).catch(() => [] as string[])).filter((f) => /^\d+\.png$/i.test(f)).sort();
           const have = new Set(files.map((f) => parseInt(f, 10)));
           if (files.length > maxBacklog) maxBacklog = files.length;
           if (!done && files.length > 80) {
             await lc.stopRecording();
+            stop(`backlog ${files.length} at ${(segFrom + next / fps).toFixed(1)}`);
             stopped = true;
             await sleep(500);
             continue;
@@ -225,6 +260,7 @@ async function recorderPass(lc: LeagueClient, from: number, to: number, fps: num
         if (pb?.paused) await lc.setPaused(false);
         if (Date.now() - lastProgress > 25_000) {
           await lc.stopRecording();
+          stop(`no progress for 25 s at ${(segFrom + next / fps).toFixed(1)}`);
           if (frames === 0) return null;
           stopped = true;
           break;
@@ -233,14 +269,17 @@ async function recorderPass(lc: LeagueClient, from: number, to: number, fps: num
       }
       await lc.setPaused(true);
       const segEnd = segFrom + Math.max(0, next - 1) / fps;
-      if (!stopped || isCancelled() || next === 0) break;
+      // League ended the recording before the end of the range: start again from where it got to.
+      const early = selfStop && segEnd < to - 1 / fps;
+      if (selfStop && !early) stops[stops.length - 1] = `done at ${segEnd.toFixed(1)}`;
+      if ((!stopped && !early) || isCancelled() || next === 0 || segments >= MAX_SEGMENTS) break;
       segFrom = segEnd + 1 / fps;
     }
   } finally {
     await lc.setPaused(true);
     await fsp.rm(root, { recursive: true, force: true }).catch(() => undefined);
   }
-  return { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments };
+  return { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments, stops };
 }
 
 /**
@@ -323,6 +362,8 @@ export async function scanReplay(
 
   const original = await lc.getRender();
   const refs = await portraitRefs(players).catch(() => [] as PortraitRef[]);
+  // The game's ward icons (kinds, control wards); without them the star rule alone.
+  const wardTpl = await wardTemplates().catch(() => []);
   try {
     // 2. Find the minimap: capture with it on and off while paused. Your champion is
     // selected, and the camera looks at a point off the map for the whole pass, so the
@@ -348,9 +389,9 @@ export async function scanReplay(
       throw new Error("Couldn't find the minimap on screen. Keep the replay on your main monitor, in Borderless or Windowed mode, and don't cover it while it reads.");
     const minimap = rect;
 
-    // 3. The empty map: frames before minions spawn, median removes the champions.
+    // 3. The empty map: frames before the first wave spawns at 0:30, median removes the champions.
     const bgFrames: Frame[] = [];
-    for (const t of [12, 22, 32, 42, 52, 60, 64]) {
+    for (const t of [4, 8, 12, 16, 20, 24, 28]) {
       if (isCancelled()) break;
       await lc.seek(t, true);
       await sleep(700);
@@ -367,6 +408,7 @@ export async function scanReplay(
     const bg = backgroundFrame(bgFrames, lateFrames);
 
     const samples: WaveSample[] = [];
+    const offFrames: { t: number; dots: Dot[]; wards: NonNullable<WaveSample["wards"]> }[] = [];
     const champs: ChampSample[] = [];
     const captureMs: number[] = [];
     const passes: NonNullable<NonNullable<WaveTrack["scanInfo"]>["passes"]> = [];
@@ -377,13 +419,14 @@ export async function scanReplay(
     const hud: HudSample[] = [];
     const reader = (fog: ChampSample["fog"]): OnFrame => async (frame, t, strips) => {
       // HP and resource bars of all ten players, read with everything visible.
-      if (fog === "off" && strips) hud.push(readHudStrips(t, strips.blue, strips.red, strips.screen));
+      if (fog === "off" && strips) hud.push(readHudStrips(t, strips.blue, strips.red, strips.screen, flashSlots()));
       // Minimap scale differs from the background's? (recorder at another resolution)
       const okBg = frame.w === bg.w && frame.h === bg.h;
       const rings = findRings(frame, okBg ? bg : undefined, MIN_COVER ? { minCover: MIN_COVER } : {});
       const wardDots: Dot[] = [];
-      const dots = fog === "off" && okBg ? detectDots(frame, bg, { exclude: rings, wards: wardDots }) : [];
-      if (fog === "off") samples.push({ ...sampleFromDots(t, dots), ...(wardDots.length ? { wards: wardDots.map(({ team, x, y }) => ({ team, x, y })) } : {}) });
+      const dots = fog === "off" && okBg ? detectDots(frame, bg, { exclude: rings, wards: wardDots, wardTemplates: wardTpl }) : [];
+      // Minion samples are built once the pass is over: a blob that never moves is taken out first (dropStaticDots).
+      if (fog === "off") offFrames.push({ t, dots, wards: wardDots.map(({ team, x, y, kind }) => ({ team, x, y, ...(kind ? { kind } : {}) })) });
       if (refs.length) {
         const found = detectChampions(frame, refs, 38, rings);
         // Weak matches keep their score, so naming can overrule them against a champion's track.
@@ -409,6 +452,21 @@ export async function scanReplay(
     // team sees them: on NA1_5686076870 Udyr's CS disagreed in 446 of 1272 polls taken under
     // the Blue view, against 0 under All.
     const live: LivePoll[] = [];
+    // Which summoner slot holds Flash, per participant (id - 1), from the first Live Client poll that lists spells.
+    let slots: (0 | 1 | null)[] | undefined;
+    const flashSlots = () => {
+      if (slots) return slots;
+      const p = live.find((x) => x.players.some((q) => q.spells));
+      if (!p) return undefined;
+      const out: (0 | 1 | null)[] = new Array(10).fill(null);
+      for (const pl of players) {
+        const lp = p.players.find((q) => champKey(q.championName) === champKey(pl.champion));
+        const i = lp?.spells?.findIndex((n) => /flash/i.test(n)) ?? -1;
+        if (pl.id >= 1 && pl.id <= 10) out[pl.id - 1] = i === 0 || i === 1 ? i : null;
+      }
+      slots = out;
+      return slots;
+    };
     let polling = false;
     let pollLoop: Promise<void> = Promise.resolve();
     const startPolling = () => {
@@ -422,9 +480,9 @@ export async function scanReplay(
       })();
     };
 
-    // 4. Two passes over 1:05 to the end: fog off (minions, true positions) at 2 frames
+    // 4. Two passes over 0:30 (the first minion wave spawns then; season 2026) to the end: fog off (minions, true positions) at 2 frames
     // per game second, then your team's fog (what you could see) at 1.
-    const from = 65;
+    const from = 30;
     let method = opts.method ?? "recorder";
     // Which units the minimap draws is the replay's own Fog of War dropdown: All for the
     // fog-off pass, your team for the team pass. Clicked, then read back off the screen.
@@ -452,7 +510,7 @@ export async function scanReplay(
       if (method === "recorder") {
         const r = await recorderPass(lc, from, end, fps, rectFor, reader(fog), isCancelled, label);
         if (r) {
-          passes.push({ fog, method, frames: r.frames, fps, wallMs: r.wallMs, maxBacklog: r.maxBacklog, expectedFrames: r.expectedFrames, segments: r.segments });
+          passes.push({ fog, method, frames: r.frames, fps, wallMs: r.wallMs, maxBacklog: r.maxBacklog, expectedFrames: r.expectedFrames, segments: r.segments, stops: r.stops });
           return;
         }
         method = "screenshot";
@@ -491,26 +549,13 @@ export async function scanReplay(
       s.unk = s.unk.filter((r) => !(r as { done?: true }).done);
       if (!s.unk.length) delete s.unk;
     }
-    const dropped = dropJumps(champs);
-    // Who's alive when, from Live Client's isDead (polls are sorted by game time).
-    const aliveAt = (id: number, t: number) => {
-      const name = players.find((p) => p.id === id)?.champion;
-      let lo = 0;
-      let hi = live.length - 1;
-      let at = -1;
-      while (lo <= hi) {
-        const m = (lo + hi) >> 1;
-        if (live[m].t <= t) {
-          at = m;
-          lo = m + 1;
-        } else hi = m - 1;
-      }
-      const lp = at >= 0 ? live[at].players.find((x) => champKey(x.championName) === champKey(name ?? "")) : undefined;
-      return lp ? !lp.isDead : true;
-    };
-    const named = nameRings(champs, teamOf, { aliveAt, ids: players.map((p) => p.id), myTeam: me.teamId });
-    // With your team's fog only allies are always on the map, so only they get filled there.
-    const filled = fillOcclusions(champs, players.map((p) => p.id), aliveAt, (id, fog) => fog === "off" || teamOf(id) === me.teamId);
+    // Verify runs keep the reads as they came off the minimap, so the tracking below can be
+    // re-run offline on the same frames (--reuse --reprocess).
+    const champsRaw = debugDir ? (JSON.parse(JSON.stringify(champs)) as ChampSample[]) : undefined;
+    const { dropped, named, filled } = trackChampions(champs, players, me, live);
+    offFrames.sort((a, b) => a.t - b.t);
+    const staticDots = dropStaticDots(offFrames);
+    for (const f of offFrames) samples.push({ ...sampleFromDots(f.t, f.dots), ...(f.wards.length ? { wards: f.wards } : {}) });
     samples.sort((a, b) => a.t - b.t);
     onProgress({ phase: "done", label: "Done", done: 1, total: 1 });
     if (debugDir) await dumpFrame(debugDir, "background", bg, { rect: minimap });
@@ -531,11 +576,11 @@ export async function scanReplay(
       until: end * 1000,
       lastFrame,
       passes,
-      tracking: { dropped, named, filled, rematched },
+      tracking: { dropped, named, filled, rematched, staticDots },
       views,
     };
     hud.sort((a, b) => a.t - b.t);
-    return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, hud, scanInfo };
+    return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, hud, scanInfo, ...(champsRaw ? { champsRaw } : {}) };
   } finally {
     await lc.setPaused(true);
     if (original) {
@@ -544,6 +589,35 @@ export async function scanReplay(
       if (original.cameraPosition) await lc.setRender({ cameraPosition: original.cameraPosition, cameraRotation: original.cameraRotation });
     }
   }
+}
+
+/**
+ * Champion tracking after reading: drops impossible jumps, names unnamed rings from each
+ * champion's track, and fills in champions hidden under another icon. Changes `champs` in place.
+ */
+export function trackChampions(champs: ChampSample[], players: ScanPlayer[], me: ScanPlayer, live: LivePoll[]) {
+  const teamOf = (id: number) => players.find((p) => p.id === id)?.teamId ?? 0;
+  const dropped = dropJumps(champs);
+  // Who's alive when, from Live Client's isDead (polls are sorted by game time).
+  const aliveAt = (id: number, t: number) => {
+    const name = players.find((p) => p.id === id)?.champion;
+    let lo = 0;
+    let hi = live.length - 1;
+    let at = -1;
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1;
+      if (live[m].t <= t) {
+        at = m;
+        lo = m + 1;
+      } else hi = m - 1;
+    }
+    const lp = at >= 0 ? live[at].players.find((x) => champKey(x.championName) === champKey(name ?? "")) : undefined;
+    return lp ? !lp.isDead : true;
+  };
+  const named = nameRings(champs, teamOf, { aliveAt, ids: players.map((p) => p.id), myTeam: me.teamId });
+  // With your team's fog only allies are always on the map, so only they get filled there.
+  const filled = fillOcclusions(champs, players.map((p) => p.id), aliveAt, (id, fog) => fog === "off" || teamOf(id) === me.teamId);
+  return { dropped, named, filled };
 }
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;

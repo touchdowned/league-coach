@@ -4,7 +4,7 @@
  * Positions along a lane are stored as progress from the blue base (0) to the red
  * base (1). Reads flip that so 0 is always *your* base.
  */
-import type { Dot } from "./minimap";
+import { STRUCTURES, type Dot } from "./minimap";
 import type { Position } from "./types";
 
 export type Lane = "TOP" | "MIDDLE" | "BOTTOM";
@@ -22,7 +22,8 @@ const OUTER_TOWER: Record<Lane, Record<number, Pt>> = {
   MIDDLE: { 100: { x: 5846, y: 6396 }, 200: { x: 8955, y: 8510 } },
   BOTTOM: { 100: { x: 10504, y: 1029 }, 200: { x: 13866, y: 4505 } },
 };
-const MAX_OFF = 1400;
+/** How far off a lane's path a dot can be and still be that lane's minion. A fight spreads a wave about 600 units; 1400 took in jungle plants' vision discs beside mid lane. */
+const MAX_OFF = 1100;
 
 const len = (a: Pt, b: Pt) => Math.hypot(b.x - a.x, b.y - a.y);
 const LENGTH: Record<Lane, number> = Object.fromEntries(LANES.map((l) => [l, PATH[l].slice(1).reduce((s, p, i) => s + len(PATH[l][i], p), 0)])) as Record<Lane, number>;
@@ -42,6 +43,11 @@ function along(lane: Lane, p: Pt): { s: number; off: number } {
   }
   return best;
 }
+
+/** A lane's length in game units, inhibitor to inhibitor (what progress 0..1 spans). */
+export const laneLength = (lane: Lane) => LENGTH[lane];
+/** Progress of a map point along a lane (0 blue base .. 1 red base), whatever its distance from the lane. */
+export const progressOn = (lane: Lane, p: Pt) => along(lane, p).s;
 
 /** Which lane a map point is on, and how far along it (0 blue base .. 1 red base). */
 export function projectLane(p: Pt): { lane: Lane; s: number } | null {
@@ -82,7 +88,7 @@ export interface WaveSample {
   /** Progress of each minion along the lane, per team (b = blue, r = red), 2 decimals. */
   lanes: Record<Lane, { b: number[]; r: number[] }>;
   /** Ward icons on the fog-off minimap (game units). */
-  wards?: { team: 100 | 200; x: number; y: number }[];
+  wards?: { team: 100 | 200; x: number; y: number; kind?: "stealth" | "stealth_low" | "control" }[];
 }
 
 /** Champions read off the minimap at one moment, in one view. */
@@ -102,6 +108,8 @@ export interface WaveTrack {
   samples: WaveSample[];
   /** Champion positions from the replay (version 2). */
   champs?: ChampSample[];
+  /** Verify runs only: the champion reads before tracking (jumps, naming, fills), to re-run it offline. */
+  champsRaw?: ChampSample[];
   /** Whose fog the "team" view showed. Vision reads are only used when it's yours. */
   viewTeam?: number;
   /** Live Client Data polls taken during the pass (only the ones around a change). */
@@ -122,12 +130,57 @@ export interface WaveTrack {
     /** Game ms of the last frame read: checks only cover up to here. */
     lastFrame?: number;
     /** Each pass: frames read, frames per game second, wall time. */
-    passes?: { fog: "off" | "team"; method: "recorder" | "screenshot"; frames: number; fps: number; wallMs: number; maxBacklog?: number; /** Frames the pass should give at its fps: a mismatch means frame times are off. */ expectedFrames?: number; segments?: number }[];
+    passes?: { fog: "off" | "team"; method: "recorder" | "screenshot"; frames: number; fps: number; wallMs: number; maxBacklog?: number; /** Frames the pass should give at its fps: a mismatch means frame times are off. */ expectedFrames?: number; segments?: number; /** Why each recorder segment ended (see recorderPass). */ stops?: string[] }[];
     /** Champion reads dropped as impossible jumps, and unmatched rings named by tracking. */
     tracking?: { dropped: number; named: number; filled?: number; rematched?: number };
     /** The replay's Fog of War team view set before each pass, as read back from the screen. */
     views?: { fog: "off" | "team"; want: "All" | "Blue" | "Red"; read: "All" | "Blue" | "Red" | null }[];
   };
+}
+
+/**
+ * Minion dots that aren't minions because they don't move: a blob that stays within
+ * STATIC_UNITS of one spot, about the same size, for STATIC_MS or more, with no dot of the
+ * other team within FIGHT_UNITS (a wave held in a fight can stand still; nothing else
+ * minion-coloured that holds still is a minion). On NA1_5686039660 this was a teal vision disc
+ * around a jungle plant read as 3 blue minions for 30+ s (projected onto mid lane, it made a
+ * 36 s "crash"), and a control ward's eye. Removes them from each frame's list in place;
+ * returns how many were removed. Frames must be sorted by time.
+ */
+const STATIC_UNITS = 150;
+const STATIC_MS = 10_000;
+const FIGHT_UNITS = 1000;
+/** Turret range plus a caster's: minions attacking a structure stand within this of it. */
+const SIEGE_UNITS = 1400;
+export function dropStaticDots(frames: { t: number; dots: Dot[] }[]): number {
+  const same = (a: Dot, b: Dot) => a.team === b.team && Math.hypot(a.x - b.x, a.y - b.y) <= STATIC_UNITS && b.area >= a.area * 0.7 && b.area <= a.area / 0.7;
+  const drop = frames.map(() => new Set<Dot>());
+  for (let i = 0; i < frames.length; i++)
+    for (const d of frames[i].dots) {
+      if (frames[i].dots.some((o) => o.team !== d.team && Math.hypot(o.x - d.x, o.y - d.y) <= FIGHT_UNITS)) continue;
+      // Minions hitting a structure stand still for as long as it takes.
+      if (STRUCTURES.some((st) => Math.hypot(st.x - d.x, st.y - d.y) <= SIEGE_UNITS)) continue;
+      // How far it stays put either way (a missed read in between is allowed).
+      const reach = (step: 1 | -1) => {
+        let t = frames[i].t;
+        let miss = 0;
+        for (let j = i + step; j >= 0 && j < frames.length && Math.abs(frames[j].t - frames[i].t) <= STATIC_MS; j += step) {
+          if (frames[j].dots.some((o) => same(d, o))) {
+            t = frames[j].t;
+            miss = 0;
+          } else if (++miss > 1) break;
+        }
+        return t;
+      };
+      if (reach(1) - reach(-1) >= STATIC_MS) drop[i].add(d);
+    }
+  let n = 0;
+  frames.forEach((f, i) => {
+    if (!drop[i].size) return;
+    n += drop[i].size;
+    f.dots = f.dots.filter((d) => !drop[i].has(d));
+  });
+  return n;
 }
 
 export function sampleFromDots(t: number, dots: Dot[]): WaveSample {
@@ -221,4 +274,28 @@ export function minionsAt(track: WaveTrack | undefined, t: number): { x: number;
     for (const s of best.lanes[lane].r) out.push({ ...pointOnLane(lane, s), team: 200 });
   }
   return out;
+}
+
+/**
+ * Where champion `id` was at replay time `t` (ms), from the fog-off reads: interpolated between the
+ * read before and the read after when they are no more than `bridge` apart, else the nearer one within
+ * `maxGap`, else undefined (the scan has no read of them near then: dead, in base, or not scanned).
+ */
+export function champPosAt(champs: ChampSample[], id: number, t: number, maxGap = 3000, bridge = 15000): { x: number; y: number } | undefined {
+  let lo: { t: number; x: number; y: number } | null = null;
+  let hi: { t: number; x: number; y: number } | null = null;
+  for (const c of champs) {
+    if (c.fog !== "off" || Math.abs(c.t - t) > bridge) continue;
+    const a = c.at.find((x) => x.id === id);
+    if (!a) continue;
+    if (c.t <= t && (!lo || c.t > lo.t)) lo = { t: c.t, x: a.x, y: a.y };
+    if (c.t >= t && (!hi || c.t < hi.t)) hi = { t: c.t, x: a.x, y: a.y };
+  }
+  // A read on each side no more than `bridge` apart: they walked from one to the other.
+  if (lo && hi && hi.t - lo.t <= bridge) {
+    const k = hi.t === lo.t ? 0 : (t - lo.t) / (hi.t - lo.t);
+    return { x: lo.x + (hi.x - lo.x) * k, y: lo.y + (hi.y - lo.y) * k };
+  }
+  const near = [lo, hi].filter((p): p is { t: number; x: number; y: number } => !!p && Math.abs(p.t - t) <= maxGap).sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t))[0];
+  return near ? { x: near.x, y: near.y } : undefined;
 }

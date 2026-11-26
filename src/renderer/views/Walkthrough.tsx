@@ -15,6 +15,7 @@ import type { GameReport } from "../../core/types";
 import { hasVision, lastSeen, visibleAt } from "../../core/vision";
 import { buildChapters, type Beat, type Chapter, type Mark, type Pt } from "../../core/walkthrough";
 import { minionsAt } from "../../core/waves";
+import { hitMark, useOverlayHits } from "../overlayHits";
 import { coach, type Playback, type RenderState } from "../api";
 import { ChampIcon } from "../charts";
 import { useProgress } from "../progress";
@@ -131,17 +132,6 @@ function useCamera(active: boolean): Cam | null {
   return cam;
 }
 
-/**
- * The overlay window ignores the mouse so League stays usable underneath; while the
- * pointer is over one of our panels it takes clicks.
- */
-let hits = 0;
-function hit(on: boolean) {
-  hits = Math.max(0, hits + (on ? 1 : -1));
-  coach().overlayInteractive?.(hits > 0);
-}
-const hitProps = { onMouseEnter: () => hit(true), onMouseLeave: () => hit(false) };
-
 // ---------------------------------------------------------------------------
 
 export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; source: Source; onExit: () => void; onFinished: () => void }) {
@@ -156,6 +146,8 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
 
   const [idx, setIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("intro");
+  /** You paused it yourself (Space or the button): the watchdog below leaves it alone. */
+  const userPaused = useRef(false);
   const [pick, setPick] = useState<number | null>(null);
   const [fogOff, setFogOff] = useState(false);
   const [done, setDone] = useState<Set<string>>(new Set());
@@ -165,7 +157,9 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
 
   // ---- Replay commands ----
   const render = useCallback((body: Record<string, unknown>) => (live ? coach().stageRender(body) : Promise.resolve(null)), [live]);
-  const follow = useCallback(() => render({ cameraAttached: true, cameraMode: "top", selectionName: me }), [render, me]);
+  // The main process keeps the camera on me while the replay plays (see startFollow).
+  const follow = useCallback(() => (live ? coach().replayFollowStart(me) : Promise.resolve(null)), [live, me]);
+  useEffect(() => () => void (live && coach().replayFollowStop()), [live]);
   const frame = useCallback(
     (a: Pt, b: Pt | null) => {
       if (!live) return;
@@ -193,12 +187,19 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     };
   }, [live, render]);
 
-  // A panel that unmounts under the pointer never sends mouseleave: start each phase clean.
+  useOverlayHits(live);
+  // On a question, its answer and the debrief the replay is paused and waiting for you: the
+  // overlay takes the whole mouse and the answer keys, so a pick can't fall through to League.
   useEffect(() => {
     if (!live) return;
-    hits = 0;
-    coach().overlayInteractive?.(false);
-  }, [phase, idx, live]);
+    const keys = phase === "decide" ? ["1", "2", "3", "4"] : phase === "reveal" || phase === "debrief" ? ["Return"] : null;
+    coach().overlayModal?.(!!keys, keys ?? []);
+    return () => void coach().overlayModal?.(false, []);
+  }, [live, phase, idx]);
+  useEffect(() => {
+    if (!live) return;
+    return coach().onOverlayKey?.((key) => window.dispatchEvent(new KeyboardEvent("keydown", { key: key === "Return" ? "Enter" : key })));
+  }, [live]);
 
   // ---- Chapter flow ----
   const startChapter = useCallback(
@@ -209,6 +210,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
       setPick(null);
       setFogOff(false);
       setPhase("intro");
+      userPaused.current = false;
       clock.set({ time: c.start / 1000, paused: true, speed: 1 });
       follow();
     },
@@ -228,6 +230,22 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     }, 2200);
     return () => clearTimeout(id);
   }, [phase, idx, clock]);
+
+  // The lead-up and the play-out are meant to be running. A seek late in a long game can take
+  // League several seconds and swallow the "play" sent with it, leaving the replay paused with
+  // nothing on screen; if it sits paused for two checks and you didn't pause it, play is sent again.
+  useEffect(() => {
+    if (!live || (phase !== "lead" && phase !== "playout")) return;
+    let stuck = 0;
+    const id = setInterval(() => {
+      stuck = clock.paused() && !userPaused.current ? stuck + 1 : 0;
+      if (stuck >= 2) {
+        stuck = 0;
+        clock.set({ paused: false });
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [live, phase, idx, clock]);
 
   // Freeze on the decision; play out to the end.
   useEffect(() => {
@@ -268,7 +286,11 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     setPhase("playout");
     setFogOff(false);
     follow();
-    clock.set({ time: ch.root / 1000, paused: false, speed: 1 });
+    userPaused.current = false;
+    // Already frozen on the decision: just let it run. A seek to where it already is makes League
+    // reload the moment, and the replay can come back from that still paused.
+    const there = Math.abs(clock.now() - ch.root) < 750;
+    clock.set(there ? { paused: false, speed: 1 } : { time: ch.root / 1000, paused: false, speed: 1 });
   }, [ch, clock, follow]);
 
   const next = useCallback(async () => {
@@ -281,9 +303,18 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     } else startChapter(idx + 1);
   }, [ch, idx, chapters.length, award, startChapter, clock, onFinished]);
 
+  // Skipping a question moves on without counting it as reviewed (no XP for it).
+  const skip = useCallback(() => {
+    if (idx + 1 >= chapters.length) {
+      clock.set({ paused: true });
+      onFinished();
+    } else startChapter(idx + 1);
+  }, [idx, chapters.length, startChapter, clock, onFinished]);
+
   const togglePause = useCallback(() => {
     if (phase === "decide" || phase === "reveal" || phase === "intro") return;
     if (phase === "debrief") return startChapter(idx);
+    userPaused.current = !clock.paused();
     clock.set({ paused: !clock.paused() });
   }, [phase, clock, startChapter, idx]);
 
@@ -342,16 +373,17 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
           idx={idx}
           count={chapters.length}
         >
-          {phase === "decide" && <DecisionCard ch={ch} onPick={choose} />}
+          {phase === "decide" && <DecisionCard ch={ch} onPick={choose} onSkip={skip} />}
           {phase === "reveal" && pick !== null && <RevealCard ch={ch} pick={pick} onPlay={playOut} />}
           {phase === "debrief" && <DebriefCard ch={ch} last={idx + 1 >= chapters.length} onReplay={() => startChapter(idx)} onNext={next} />}
         </Stage>
 
-        <div className="wt-scrub-wrap" {...(live ? hitProps : {})}>
+        <div className="wt-scrub-wrap" {...(live ? hitMark : {})}>
+          <PhaseSteps phase={phase} />
           <Scrubber ch={ch} t={t} onSeek={(ms) => clock.set({ time: ms / 1000 })} />
         </div>
 
-        <div className="wt-transport" {...(live ? hitProps : {})}>
+        <div className="wt-transport" {...(live ? hitMark : {})}>
           <button className="wt-ctl" onClick={() => nudge(-5000)} title="Back 5s (←)"><Rewind size={16} /></button>
           <button className="wt-ctl primary" onClick={togglePause} disabled={phase === "decide" || phase === "reveal"} title="Play / pause (Space)">
             {paused || phase === "debrief" ? <Play size={18} fill="currentColor" /> : <Pause size={18} fill="currentColor" />}
@@ -369,7 +401,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
         </div>
       </div>
 
-      <aside className="wt-rail" {...(live ? hitProps : {})}>
+      <aside className="wt-rail" {...(live ? hitMark : {})}>
         <div className="wt-rail-head">
           <ChampIcon name={me} size={40} />
           <div>
@@ -471,7 +503,7 @@ function Stage(props: {
   const tactical = !live || phase === "decide" || phase === "reveal" || phase === "debrief";
 
   return (
-    <div className={`wt-stage ${dim ? "dim" : ""} ${phase}`} ref={boxRef}>
+    <div className={`wt-stage ${dim ? "dim" : ""} ph-${phase}`} ref={boxRef}>
       {!live && <MapStage r={r} t={t} ch={ch} marks={marks} fogOff={props.fogOff} vision={props.vision} big />}
 
       {live && cam && world && box.w > 0 && (
@@ -517,7 +549,7 @@ function Stage(props: {
 
       {props.children && (
         <div className="wt-card-layer">
-          <div className="wt-card-hit" {...(live ? hitProps : {})}>{props.children}</div>
+          <div className="wt-card-hit" {...(live ? hitMark : {})}>{props.children}</div>
         </div>
       )}
     </div>
@@ -658,9 +690,9 @@ function WorldMarks({ cam, w, h, marks }: { cam: Cam; w: number; h: number; mark
 // ---------------------------------------------------------------------------
 // Cards
 
-function DecisionCard({ ch, onPick }: { ch: Chapter; onPick: (i: number) => void }) {
+function DecisionCard({ ch, onPick, onSkip }: { ch: Chapter; onPick: (i: number) => void; onSkip: () => void }) {
   return (
-    <div className="wt-card decide">
+    <div className="wt-card wt-decide">
       <span className="eyebrow">Your call · {fmtTime(ch.root)}</span>
       <h3>{ch.question}</h3>
       {ch.seen.length > 0 && (
@@ -679,6 +711,11 @@ function DecisionCard({ ch, onPick }: { ch: Chapter; onPick: (i: number) => void
           </button>
         ))}
       </div>
+      <div className="wt-card-actions">
+        <button className="wt-skip" onClick={onSkip}>
+          Skip this one
+        </button>
+      </div>
     </div>
   );
 }
@@ -687,7 +724,7 @@ function RevealCard({ ch, pick, onPlay }: { ch: Chapter; pick: number; onPlay: (
   const c = ch.choices[pick];
   const best = ch.choices.find((x) => x.good);
   return (
-    <div className={`wt-card reveal ${c.good ? "good" : "bad"}`}>
+    <div className={`wt-card wt-verdict-card ${c.good ? "good" : "bad"}`}>
       <div className="wt-verdict">
         <span className="wt-verdict-icon">{c.good ? <Check size={18} strokeWidth={3} /> : <X size={18} strokeWidth={3} />}</span>
         <div>
@@ -722,32 +759,34 @@ function RevealCard({ ch, pick, onPlay }: { ch: Chapter; pick: number; onPlay: (
 
 function DebriefCard({ ch, last, onReplay, onNext }: { ch: Chapter; last: boolean; onReplay: () => void; onNext: () => void }) {
   const [more, setMore] = useState(false);
+  const f = ch.finding;
   return (
-    <div className="wt-card debrief">
-      <span className="eyebrow">Root cause</span>
-      <h3>{ch.headline}</h3>
-      <div className="cost-row">
-        <span className="cost-total">≈ {ch.cost.toLocaleString("en-US")}g</span>
-        {ch.costParts.map((p) => (
-          <span key={p.label} className="cost-part">
-            {p.label} <b>{p.gold.toLocaleString("en-US")}g</b>
-          </span>
-        ))}
-      </div>
+    <div className="wt-card wt-debrief">
+      <span className="eyebrow">{f ? `Measured at ${f.time}` : "Root cause"}</span>
+      <h3>{f ? f.title : ch.headline}</h3>
+      {f ? (
+        <p className="wt-measured">{f.cost}</p>
+      ) : (
+        <div className="cost-row">
+          <span className="cost-total">≈ {ch.cost.toLocaleString("en-US")}g</span>
+          {ch.costParts.map((p) => (
+            <span key={p.label} className="cost-part">
+              {p.label} <b>{p.gold.toLocaleString("en-US")}g</b>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="fix">
-        <p className="eyebrow">Next time</p>
-        <p>{ch.leak.nextTime}</p>
+        <p className="eyebrow">Do this instead</p>
+        <p>{f ? f.fix : ch.leak.nextTime}</p>
       </div>
       {more && (
         <ul className="evidence">
-          <li>{ch.leak.doing}</li>
-          {ch.leak.evidence.map((e) => (
-            <li key={e}>{e}</li>
-          ))}
+          {f ? f.proof.map((e) => <li key={e}>{e}</li>) : [ch.leak.doing, ...ch.leak.evidence].map((e) => <li key={e}>{e}</li>)}
         </ul>
       )}
       <div className="wt-card-actions">
-        <Button variant="ghost" size="sm" onClick={() => setMore((m) => !m)}>{more ? "Less" : "The evidence"}</Button>
+        <Button variant="ghost" size="sm" onClick={() => setMore((m) => !m)}>{more ? "Less" : f ? "The proof" : "The evidence"}</Button>
         <span className="wt-spacer" />
         <Button variant="ghost" onClick={onReplay}><ChevronLeft size={15} /> Rewatch</Button>
         <Button variant="primary" onClick={onNext}>
@@ -755,6 +794,29 @@ function DebriefCard({ ch, last, onReplay, onNext }: { ch: Chapter; last: boolea
         </Button>
       </div>
     </div>
+  );
+}
+
+const STEPS: { label: string; phases: Phase[] }[] = [
+  { label: "Watch the lead-up", phases: ["intro", "lead"] },
+  { label: "Make the call", phases: ["decide"] },
+  { label: "See the answer", phases: ["reveal"] },
+  { label: "Watch what happened", phases: ["playout"] },
+  { label: "Takeaway", phases: ["debrief"] },
+];
+
+/** Where you are in the moment being reviewed: every moment goes through the same five steps. */
+function PhaseSteps({ phase }: { phase: Phase }) {
+  const at = STEPS.findIndex((s) => s.phases.includes(phase));
+  return (
+    <ol className="wt-steps">
+      {STEPS.map((s, i) => (
+        <li key={s.label} className={i === at ? "on" : i < at ? "done" : ""}>
+          <i>{i + 1}</i>
+          {i === at && <span>{s.label}</span>}
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -779,6 +841,8 @@ function Scrubber({ ch, t, onSeek }: { ch: Chapter; t: number; onSeek: (ms: numb
         <span key={`${b.kind}:${b.t}`} className={`wt-tick ${b.kind}`} style={{ left: pct(b.t) }} title={`${fmtTime(b.t)} · ${b.caption}`} />
       ))}
       <span className="wt-head" style={{ left: pct(t) }} />
+      <span className="wt-scrub-mark decide" style={{ left: pct(ch.root) }}>Your call</span>
+      {ch.outcome - ch.root > span * 0.16 && <span className="wt-scrub-mark outcome" style={{ left: pct(ch.outcome) }}>What happened</span>}
       <span className="wt-scrub-label start">{fmtTime(ch.start)}</span>
       <span className="wt-scrub-label end">{fmtTime(ch.end)}</span>
     </div>

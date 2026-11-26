@@ -10,6 +10,7 @@ import { DAILY, dayKey } from "../../core/progress";
 import type { GameReport, Position } from "../../core/types";
 import { ChampIcon, LineChart, Meter, Radar, ResultDots } from "../charts";
 import { coach } from "../api";
+import { FocusCard } from "./FocusCard";
 import { useProgress } from "../progress";
 import { Button, Empty, Ring } from "../ui";
 import { champName } from "../../core/names";
@@ -74,12 +75,12 @@ export function CoachView({
     <div className="page">
       <header className="page-head">
         <div>
-          <p className="eyebrow">Coach</p>
-          <h1>{plan.current ? "Here's what to fix next." : "No major leaks right now."}</h1>
+          <p className="eyebrow">Focus</p>
+          <h1>One thing at a time.</h1>
         </div>
         <div className="page-actions">
           {onStartSession && (
-            <Button variant="primary" onClick={onStartSession}>
+            <Button variant="secondary" onClick={onStartSession}>
               <Play size={15} fill="currentColor" /> Start today's training
             </Button>
           )}
@@ -99,13 +100,7 @@ export function CoachView({
         </div>
       )}
 
-      <NextStep plan={plan} games={filtered} onReview={onReview} onPuzzles={onPuzzles} onMechanics={onMechanics} />
-
-      <Habits games={filtered} onReview={onReview} />
-
-      <Levers games={filtered} onReview={onReview} />
-
-      <VsMasters games={filtered} />
+      <FocusCard games={games} unread={games.filter((g) => !Array.isArray(g.findings)).length} onReview={(id) => onReview(id)} onRead={() => games[0] && onReview(games[0].metrics.matchId)} />
 
       <section className="grid-3">
         <div className="tile action" onClick={() => nextReview && onReview(nextReview.metrics.matchId, true)} data-disabled={!nextReview || undefined}>
@@ -174,6 +169,17 @@ export function CoachView({
         </div>
       </section>
 
+
+      <details className="more-numbers">
+        <summary>All the numbers behind it</summary>
+      <NextStep plan={plan} games={filtered} onReview={onReview} onPuzzles={onPuzzles} onMechanics={onMechanics} />
+
+      <Habits games={filtered} onReview={onReview} />
+
+      <Levers games={filtered} onReview={onReview} />
+
+      <VsMasters games={filtered} />
+
       <section className="grid-2">
         <div className="panel">
           <div className="panel-head">
@@ -213,6 +219,7 @@ export function CoachView({
         </div>
         <LineChart points={tr.map((p) => ({ x: p.i + 1, y: p.value }))} zeroLine={t.zero} format={t.fmt} xLabel={(x) => `game ${x}`} height={150} />
       </section>
+      </details>
     </div>
   );
 }

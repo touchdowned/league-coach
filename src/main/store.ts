@@ -14,6 +14,8 @@ export interface Settings {
   autoReview: boolean;
   /** Also open the replay in League once it has downloaded. */
   autoLaunchReplay: boolean;
+  /** After a ranked game: read its replay by itself once the client is idle, then close the replay. */
+  autoRead: boolean;
   /** Start hidden at Windows sign-in so games are caught without opening the app. */
   launchAtLogin: boolean;
   /** Draw the goal overlay over League while you play. */
@@ -28,7 +30,7 @@ export interface Settings {
   autoDebrief: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { apiKey: "", riotId: "", region: "NA", matchCount: 40, leagueDir: "C:\\Riot Games\\League of Legends", vodDir: "", autoAdvanceSec: 14, autoReview: true, autoLaunchReplay: false, launchAtLogin: false, overlay: true, overlayNudges: true, overlayPos: null, draftCompanion: true, autoDebrief: true };
+export const DEFAULT_SETTINGS: Settings = { apiKey: "", riotId: "", region: "NA", matchCount: 40, leagueDir: "C:\\Riot Games\\League of Legends", vodDir: "", autoAdvanceSec: 14, autoReview: true, autoLaunchReplay: false, autoRead: true, launchAtLogin: false, overlay: true, overlayNudges: true, overlayPos: null, draftCompanion: true, autoDebrief: true };
 
 export class JsonStore {
   constructor(private dir: string) {}
@@ -93,5 +95,11 @@ export class JsonStore {
         await fs.writeFile(path.join(dir, `${key}.json`), JSON.stringify(value));
       },
     };
+  }
+
+  /** Keys in the disk cache ("match-NA1_1", "timeline-NA1_1", ...). */
+  async cacheKeys(): Promise<string[]> {
+    const files = await fs.readdir(path.join(this.dir, "cache")).catch(() => [] as string[]);
+    return files.filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5));
   }
 }

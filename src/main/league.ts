@@ -1,6 +1,8 @@
+import { execFile } from "child_process";
 import { promises as fs } from "fs";
 import https from "https";
 import path from "path";
+import { cameraLookingAt } from "../core/camera";
 
 /**
  * Talks to the League client on this PC (post-game only):
@@ -224,6 +226,29 @@ export class LeagueClient {
   }
 
   /** /liveclientdata/allgamedata: answers during replays too, at the replay's current time. */
+  /**
+   * Closes the open replay window. Only ever a replay: the Replay API has to answer (it has no
+   * playback in a live game) and the client must not report a game being played. League has no
+   * route for leaving a replay, so the game process is asked to close, then ended if it is
+   * still up 4 s later. Returns true when a replay was open and is gone.
+   */
+  async closeReplay(): Promise<boolean> {
+    if (process.platform !== "win32") return false;
+    if (!(await this.playback())) return false;
+    const phase = await this.gameflowPhase();
+    if (phase === "InProgress" || phase === "GameStart" || phase === "Reconnect") return false;
+    const kill = (force: boolean) =>
+      new Promise<void>((resolve) => execFile("taskkill", [...(force ? ["/F"] : []), "/IM", "League of Legends.exe"], { windowsHide: true }, () => resolve()));
+    await kill(false);
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (!(await this.playback())) return true;
+    }
+    await kill(true);
+    await new Promise((r) => setTimeout(r, 1000));
+    return !(await this.playback());
+  }
+
   async liveData(): Promise<unknown | null> {
     const r = await request<unknown>("https://127.0.0.1:2999/liveclientdata/allgamedata", { timeoutMs: 1500 }).catch(() => null);
     return r?.status === 200 ? r.data : null;
@@ -235,10 +260,20 @@ export class LeagueClient {
     return s?.gameData?.gameId ? String(s.gameData.gameId) : null;
   }
 
-  /** Lock the camera onto a player by champion name. Best effort: ignored if unsupported. */
-  async follow(championName: string): Promise<void> {
+/**
+   * Select a player by champion name and put the camera on them. Selecting and attaching alone
+   * leaves a paused replay's camera where it was (checked on NA1_5686025956: after a seek to
+   * 3:09 the attached top camera stayed on top lane, Smolder in bot); and the top camera ignores a
+   * cameraPosition. So when the champion's map position `at` is known (from the scan), the
+   * camera switches to the free camera framed on that point, the way the scan frames the map.
+   * Best effort: ignored if unsupported.
+   */
+  async follow(championName: string, at?: { x: number; y: number }): Promise<void> {
     try {
-      await request("https://127.0.0.1:2999/replay/render", { method: "POST", body: { cameraAttached: true, selectionName: championName, interfaceScoreboard: true } });
+      if (at) {
+        await request("https://127.0.0.1:2999/replay/render", { method: "POST", body: { cameraMode: "fps", cameraAttached: false } });
+        await request("https://127.0.0.1:2999/replay/render", { method: "POST", body: { ...cameraLookingAt(at, 2200, 56, 0), selectionName: championName, interfaceScoreboard: true } });
+      } else await request("https://127.0.0.1:2999/replay/render", { method: "POST", body: { cameraAttached: true, selectionName: championName, interfaceScoreboard: true } });
     } catch {
       /* not critical */
     }

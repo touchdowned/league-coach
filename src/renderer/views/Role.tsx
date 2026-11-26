@@ -17,7 +17,7 @@ export function RoleView({ games }: { games: GameReport[] }) {
           <p className="muted">Compared against typical Silver/Gold players in each role.</p>
         </div>
       </div>
-      <div className="focus-card">
+      <div className="focus-card verdict">
         <small>Verdict</small>
         <p>{v.summary}</p>
       </div>

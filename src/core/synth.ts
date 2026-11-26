@@ -1,0 +1,486 @@
+/**
+ * Module 3: the coaching synthesizer. Turns what Module 2 measured into feedback items.
+ *
+ * Every item carries five things, all computed:
+ *  - the moment (MM:SS) and a replay jump to a few seconds before it;
+ *  - proof: the telemetry that shows it happened (positions, counts, levels, timers);
+ *  - cost: minions, XP and gold counted off the wave ledger and the kill events;
+ *  - fix: the action with its own numbers (a time, a place, a count), found by running the
+ *    same arithmetic on the alternatives (recall a few seconds earlier or later, the moment
+ *    the level or item gap closed, the spot the jungler walked through);
+ *  - where the numbers come from, so a reader can check them.
+ *
+ * There is no free text and no model: sentences are assembled from the numbers. `lint`
+ * rejects an item without a timestamp, a number in its proof, cost and fix, or with any of
+ * the stock phrases a generic coach falls back on.
+ */
+import { fmtTime } from "./analysis";
+import { goldModel, type ItemTable } from "./gold";
+import { champName } from "./names";
+import { RECALL_MS, waveSpawns } from "./rules";
+import { pressureAt, type Pressure } from "./pressure";
+import { BAD_BACK_WAVES, laneLedger, lostBetween, objectiveSync, pathOf, trips, type ObjectiveSync, type Trip, type WaveLoss } from "./tempo";
+import { describeSpot } from "./track";
+import type { MatchDto, TimelineDto, TimelineEvent } from "./types";
+import { exposures, fights, forwardOf, GANK_RANGE, ITEM_GAP, type Exposure, type Fight, type Matchup } from "./vulnerability";
+import { champPosAt, laneLength, laneOf, projectLane, type WaveTrack } from "./waves";
+import { allWaveEvents, laneGeometry, MINION_SPEED, type WaveEvent } from "./wavestate";
+
+export interface Finding {
+  id: string;
+  kind: "recall" | "exposure" | "fight" | "objective" | "death";
+  /** The moment it is about, game ms, and as MM:SS. */
+  t: number;
+  time: string;
+  title: string;
+  /** Telemetry that shows it, one fact per line. */
+  proof: string[];
+  /** What it cost, in words, and as numbers for ranking. */
+  cost: string;
+  gold: number;
+  xp: number;
+  minions: number;
+  /** The corrective action, with its own numbers. */
+  fix: string;
+  /** One click: seek the replay here, camera on this champion. */
+  jump: { t: number; follow: string };
+  /** The death this item explains, if any (two items about one death are merged to the costlier). */
+  deathAt?: number;
+  /** Ranking weight: gold plus XP at 0.6 gold a point (a caster minion gives 31 XP and 14 gold; a melee 62 and 20). */
+  score: number;
+}
+
+export interface SynthInput {
+  track: WaveTrack;
+  match: MatchDto;
+  timeline: TimelineDto;
+  /** Participant id of the player. */
+  id: number;
+  items: ItemTable;
+}
+
+const SEC = 1000;
+const s = (ms: number) => Math.round(ms / SEC);
+const n1 = (x: number) => (Math.abs(x - Math.round(x)) < 0.05 ? String(Math.round(x)) : x.toFixed(1));
+const units = (x: number) => `${Math.round(x / 50) * 50} units`;
+const plural = (n: number, w: string) => `${n1(n)} ${w}${Math.abs(n - 1) < 0.05 ? "" : "s"}`;
+const XP_GOLD = 0.6;
+/** From a nexus to the inhibitor where the lane paths start (units). */
+const NEXUS_TO_INHIBITOR = 2300;
+const LANE_NAME = { TOP: "top", MIDDLE: "mid", BOTTOM: "bot" } as const;
+const OBJ_NAME: Record<string, string> = { DRAGON: "Dragon", HORDE: "Voidgrubs", RIFTHERALD: "Rift Herald", BARON_NASHOR: "Baron" };
+
+/** Phrases a generic coach falls back on. None may appear in a finding. */
+const BANNED = [/ward more/i, /play(ing)? saf/i, /focus on farm/i, /watch (the|your) (mini)?map/i, /map awareness/i, /be (more )?careful/i, /better decisions?/i, /position better/i, /improve your/i, /try to/i, /farm better/i, /look at (the|your) (mini)?map/i];
+
+/** Problems with a finding: empty when it meets the rules. */
+export function lint(f: Finding): string[] {
+  const out: string[] = [];
+  const all = [f.title, ...f.proof, f.cost, f.fix].join(" ");
+  if (!/^\d{1,2}:\d{2}$/.test(f.time)) out.push("no MM:SS timestamp");
+  if (!f.proof.length || !f.proof.every((p) => /\d/.test(p))) out.push("a proof line without a number");
+  if (!/\d/.test(f.cost)) out.push("cost without a number");
+  if (!/\d/.test(f.fix)) out.push("fix without a number");
+  if (!(f.jump.t >= 0) || !f.jump.follow) out.push("no replay jump");
+  for (const b of BANNED) if (b.test(all)) out.push(`generic phrase: ${b.source}`);
+  return out;
+}
+
+function lossLine(l: WaveLoss, lane: string): string {
+  const waves = l.byWave.filter((w) => w.minions >= 1).map((w) => `${n1(w.minions)} of wave ${w.wave} (spawned ${fmtTime(w.spawnedAt)})`);
+  return `${plural(l.minions, "enemy minion")} died in ${lane} while you were out of XP range${waves.length ? `: ${waves.join(", ")}` : ""}.`;
+}
+/** Hand counts on frame dumps of two scans came out 0 to 3 minions under the ledger's, per trip. */
+/** Epic monsters the enemy took while the player was dead or walking back from it. */
+const alsoLost = (v: Trip | undefined) => (v?.objectives.length ? ` ${v.objectives.map((o) => `${OBJ_NAME[o.type]} fell to them at ${fmtTime(o.taken!)}`).join(" and ")} while you were out.` : "");
+const lossCost = (l: WaveLoss) => `${n1(l.waves)} waves (counted to within about 2 minions): ${l.xp} XP and up to ${l.gold} gold in last hits`;
+
+interface Ctx extends SynthInput {
+  me: MatchDto["info"]["participants"][number];
+  events: TimelineEvent[];
+  trips: Trip[];
+  waveEvents: WaveEvent[];
+  name: (pid: number) => string;
+  where: (p: { x: number; y: number }) => string;
+  /** Who was in reach of the player at t, from the fog-off reads. */
+  pressure: (t: number) => Pressure | null;
+}
+
+const LANING_END = 14 * 60 * 1000;
+
+// ---- Recalls ----
+
+function recallFinding(c: Ctx, v: Trip, k: number): Finding | null {
+  if (v.kind !== "recall" || !v.loss || !v.lane) return null;
+  if (!v.flags.includes("lost_waves") && !v.flags.includes("missed_cannon") && !v.flags.includes("left_wave_pushing_in")) return null;
+  // After laning, the lane's minions are only the player's to answer for when they left from that lane.
+  if (v.start >= LANING_END && (!v.from || projectLane(v.from)?.lane !== v.lane)) return null;
+  const lane = LANE_NAME[v.lane];
+  const enemy = c.me.teamId === 100 ? 200 : 100;
+  const ledger = laneLedger(c.track, v.lane, enemy);
+  const gone = v.until - v.away;
+  // The same trip, started up to 45 s earlier or 30 s later, on the wave timeline as it played out.
+  let best = { at: v.away, loss: v.loss };
+  for (let at = v.away - 45 * SEC; at <= v.away + 30 * SEC; at += SEC) {
+    const l = lostBetween(ledger, at, at + gone);
+    if (l.minions < best.loss.minions - 0.01 || (Math.abs(l.minions - best.loss.minions) <= 0.01 && Math.abs(at - v.away) < Math.abs(best.at - v.away))) best = { at, loss: l };
+  }
+  const saved = v.loss.minions - best.loss.minions;
+  // Outnumbered, or behind the one in reach: there was no wave to push, so the trip's losses are not a
+  // finding unless a clearly earlier start (before they arrived) would have kept them.
+  const pressed = c.pressure(Math.min(v.away, v.start));
+  if (pressed?.blocked && !(saved >= 3 && best.at <= v.away - 10 * SEC && !c.pressure(best.at)?.blocked)) return null;
+  const proof = [
+    `Recall began at ${fmtTime(v.start)} ${v.from ? c.where(v.from) : ""}${v.channelSeen ? ` (stood still for the ${s(RECALL_MS)} s channel)` : ""}; in the fountain ${fmtTime(v.arrive)}${v.leave !== null ? ` to ${fmtTime(v.leave)}` : ""}.`,
+    v.back !== null ? `Last in XP range of the ${lane} wave at ${fmtTime(v.away)}, back in range at ${fmtTime(v.back)}: ${s(gone)} s away.` : `Last in XP range of the ${lane} wave at ${fmtTime(v.away)} and not back within 150 s; cost counted to ${fmtTime(v.until)}, the earliest a walk from the fountain gets there.`,
+  ];
+  // The count of minions at the front when leaving is not quoted: against frame dumps on three scans it was wrong
+  // whenever laners stood on the wave or the wave walked strung out (Trip.state stays for the engine's own use).
+  proof.push(lossLine(v.loss, lane));
+  if (pressed) proof.push(`${fmtTime(Math.min(v.away, v.start))}: ${pressed.line[0].toLowerCase()}${pressed.line.slice(1)}`);
+  for (const w of v.loss.cannonWaves) proof.push(`Wave ${w} was a cannon wave: alive when you left, dead when you got back.`);
+  let fix: string;
+  if (saved >= 3) {
+    const d = s(best.at - v.away);
+    const crash = c.waveEvents.find((e) => e.kind === "crash" && e.reliable && !e.inferred && e.side === "mine" && e.lane === v.lane && Math.abs(e.t0 - best.at) <= 8 * SEC);
+    const when = d < 0 ? `${-d} s earlier, leaving the wave at ${fmtTime(best.at)}` : `${d} s later, leaving the wave at ${fmtTime(best.at)}`;
+    fix = `Start this recall ${when}${crash ? `, as your ${crash.size}-minion wave reached their tower at ${fmtTime(crash.t0)}` : ""}. The same ${s(gone)} s trip then loses ${plural(best.loss.minions, "minion")} instead of ${n1(v.loss.minions)}: ${v.loss.xp - best.loss.xp} XP and ${v.loss.gold - best.loss.gold} gold kept.`;
+  } else {
+    // No better moment within the window: the trip itself was too long.
+    const walk = v.leave !== null && v.back !== null ? s(v.back - v.leave) : null;
+    fix = `No start time within 45 s loses fewer than ${n1(best.loss.minions)} minions, so the time has to come out of the trip: ${walk !== null ? `the walk back took ${walk} s from leaving the fountain at ${fmtTime(v.leave!)}` : `you did not return to ${lane}`}. A wave reaches the middle of ${lane} ${Math.round((laneLength(v.lane) / 2 + NEXUS_TO_INHIBITOR) / MINION_SPEED)} s after it spawns (${Math.round(laneLength(v.lane) / 2 + NEXUS_TO_INHIBITOR)} units at ${MINION_SPEED} a second), so be back before the wave that spawned at ${fmtTime(nextSpawnAfter(v.arrive))} gets there.`;
+  }
+  return {
+    id: `recall-${k}`,
+    kind: "recall",
+    t: v.start,
+    time: fmtTime(v.start),
+    title: v.flags.includes("missed_cannon") ? `Recall at ${fmtTime(v.start)} gave up cannon wave ${v.loss.cannonWaves[0]}` : `Recall at ${fmtTime(v.start)} cost ${n1(v.loss.waves)} waves`,
+    proof,
+    cost: `${lossCost(v.loss)}${v.loss.waves > BAD_BACK_WAVES ? ` (over the ${BAD_BACK_WAVES}-wave line)` : ""}.`,
+    gold: v.loss.gold,
+    xp: v.loss.xp,
+    minions: v.loss.minions,
+    fix,
+    jump: { t: Math.max(0, Math.min(v.away, v.start) - 6 * SEC), follow: c.me.championName },
+    score: v.loss.gold + v.loss.xp * XP_GOLD,
+  };
+}
+
+function nextSpawnAfter(t: number): number {
+  const w = waveSpawns(t + 60 * SEC).find((x) => x.t >= t);
+  return w ? w.t : t;
+}
+
+// ---- Exposure to the enemy jungler ----
+
+function exposureFinding(c: Ctx, x: Exposure, k: number): Finding | null {
+  // Only stretches that cost something or came within a second or two of it.
+  const hpLost = x.hpStart !== null && x.hpLow !== null ? x.hpStart - x.hpLow : 0;
+  if (x.died === null && x.arrived === null && !(x.closest !== null && x.closest <= GANK_RANGE / 2)) return null;
+  const jg = c.match.info.participants.find((p) => p.teamId !== c.me.teamId && p.teamPosition === "JUNGLE")!;
+  const J = champName(jg.championName);
+  const death = x.died !== null ? c.trips.find((v) => v.kind === "death" && Math.abs(v.start - x.died!) <= 2000) : undefined;
+  const proof = [
+    `From ${fmtTime(x.t0)} to ${fmtTime(x.t1)} you stood up to ${units(x.depth)} past the middle of the map (deepest at ${fmtTime(x.depthAt)}, ${c.where(x.player)}).`,
+    x.lastSeen
+      ? `${J} was last on your team's minimap at ${fmtTime(x.lastSeen.t)} ${c.where(x.lastSeen)}, ${s(x.unseenFor)} s before: far enough back to have walked to you (${units(Math.hypot(x.lastSeen.x - x.player.x, x.lastSeen.y - x.player.y))} at 500 units a second).`
+      : `${J} had not been on your team's minimap at all in the ${s(x.unseenFor)} s scanned before ${fmtTime(x.t0)}.`,
+  ];
+  if (x.closest !== null && x.jungler) proof.push(`With fog off: ${J} was ${units(x.closest)} from you at ${fmtTime(x.closestAt!)}, ${c.where(x.jungler)}${x.arrived !== null ? `, and on you at ${fmtTime(x.arrived)}` : ""}.`);
+  proof.push(`Allied wards standing within 3000 units of you: ${x.wardsNear}.${x.flash === null ? "" : ` Flash was ${x.flash ? "up" : "down"} at ${fmtTime(x.t0)}.`}`);
+  if (x.firstGankWindow) proof.push(`This is the first-clear window: a six-camp clear from the 0:55 spawn ends between 2:40 and 3:20.`);
+  let cost: string;
+  let gold = 0;
+  let xp = 0;
+  let minions = 0;
+  if (x.died !== null) {
+    gold = x.goldGiven + (death?.loss?.gold ?? 0);
+    xp = death?.loss?.xp ?? 0;
+    minions = death?.loss?.minions ?? 0;
+    cost = `You died at ${fmtTime(x.died)}: ${x.goldGiven} gold to them${death?.loss ? `, and ${lossCost(death.loss)} while dead and walking back (${s(death.until - death.start)} s)` : ""}.${alsoLost(death)}`;
+  } else {
+    const hp = x.hpStart === null || x.hpLow === null ? "your health was not read in this scan" : `${Math.round(hpLost)}% of your health gone by ${fmtTime(x.t1 + 10 * SEC)}`;
+    cost = `No death within 20 s; ${hp}${x.flashUsed ? "; Flash used (300 s cooldown)" : ""}. ${J} ${x.arrived !== null ? `was on you at ${fmtTime(x.arrived)}` : `came within ${units(x.closest ?? 0)}`}.`;
+  }
+  // The spot the jungler came through 5 s before reaching the player: a ward there shows the gank coming.
+  const jPath = pathOf(c.track, jg.participantId);
+  const reach = x.arrived ?? x.closestAt ?? x.t1;
+  let through: { x: number; y: number; t: number } | null = null;
+  for (const p of jPath) if (p.t <= reach - 5 * SEC && p.t >= reach - 12 * SEC) through = p;
+  const line = Math.max(0, x.depth);
+  let fix = `From ${fmtTime(x.t0)}, when ${J} could first have reached you unseen, stand ${units(line)} further back (at or behind the middle line) until ${J} shows`;
+  fix += through ? `. ${J} came through ${c.where(through)} at ${fmtTime(through.t)}: a ward there placed before ${fmtTime(Math.max(0, through.t - 10 * SEC))} shows the gank ${s(reach - through.t)} s before it lands.` : ".";
+  if (x.flash === false) fix += ` With Flash down that line is not optional: you had no way out of a ${units(x.closest ?? GANK_RANGE)} approach.`;
+  return {
+    id: `exposure-${k}`,
+    kind: "exposure",
+    t: x.t0,
+    time: fmtTime(x.t0),
+    title: x.died !== null ? `${fmtTime(x.t0)}: past the middle with ${J} unseen for ${s(x.unseenFor)} s, dead at ${fmtTime(x.died)}` : `${fmtTime(x.t0)}: past the middle with ${J} unseen for ${s(x.unseenFor)} s`,
+    proof,
+    cost,
+    gold,
+    xp,
+    minions,
+    fix,
+    deathAt: x.died ?? undefined,
+    jump: { t: Math.max(0, x.t0 - 5 * SEC), follow: c.me.championName },
+    score: gold + xp * XP_GOLD + (x.died === null ? hpLost + (x.flashUsed ? 100 : 0) : 0),
+  };
+}
+
+// ---- Fights at a deficit ----
+
+function levelTime(events: TimelineEvent[], pid: number, level: number): number | null {
+  let l = 1;
+  for (const e of events) {
+    if (e.type !== "LEVEL_UP" || e.participantId !== pid) continue;
+    if (++l >= level) return e.timestamp;
+  }
+  return null;
+}
+
+function fightFinding(c: Ctx, f: Fight, k: number): Finding | null {
+  if (!f.flags.length) return null;
+  const hpLost = f.hpStart !== null && f.hpEnd !== null ? f.hpStart - f.hpEnd : 0;
+  // A fight at a deficit that went fine isn't a finding.
+  if (f.died === null && hpLost < 40) return null;
+  // The one who got the kill, else the one furthest ahead.
+  const killer = f.died !== null ? c.events.find((e) => e.type === "CHAMPION_KILL" && e.victimId === c.id && e.timestamp === f.died)?.killerId : undefined;
+  const worst = f.opponents.find((o) => o.id === killer && (o.breakpoint !== null || o.itemGoldLead >= ITEM_GAP || o.legendaryLead >= 1)) ?? [...f.opponents].sort((a, b) => score(b) - score(a))[0];
+  if (!worst) return null;
+  const W = champName(worst.champion);
+  const death = f.died !== null ? c.trips.find((v) => v.kind === "death" && Math.abs(v.start - f.died!) <= 2000) : undefined;
+  const unspent = goldModel(c.timeline, c.items).at(c.id, f.t0);
+  const proof = [`Fight began at ${fmtTime(f.t0)}${f.at ? ` ${c.where(f.at)}` : ""}: ${f.opponents.length} of them in it (${f.opponents.map((o) => champName(o.champion)).join(", ")}), by ${f.kind === "kill" ? `the killer, victim, assist and damage lists of the ${f.kills} kill${f.kills === 1 ? "" : "s"} in it` : "who stood within 1200 units when your health dropped"}; on your side you${f.allies.length ? ` and ${f.allies.length} more in those lists or within 1200 units of you (${f.allies.map((a) => champName(c.match.info.participants.find((p) => p.participantId === a)?.championName ?? "")).join(", ")})` : " alone"}.`];
+  for (const o of f.opponents) {
+    const bits = [`level ${o.level} to your ${f.me.level}`];
+    if (o.breakpoint !== null) {
+      const at = levelTime(c.events, o.id, o.breakpoint);
+      bits.push(`across the level ${o.breakpoint} breakpoint${at !== null ? ` since ${fmtTime(at)}` : ""}`);
+    }
+    bits.push(`${o.itemGoldLead >= 0 ? "+" : ""}${o.itemGoldLead} gold in items${o.legendaryLead > 0 ? ` and ${o.legendaryLead} more finished item${o.legendaryLead > 1 ? "s" : ""}` : ""}`);
+    proof.push(`${champName(o.champion)}: ${bits.join(", ")}.`);
+  }
+  if (f.closedBy) proof.push(f.closedBy === "me" ? `In the 4 s before it you walked at them; they held their ground.` : f.closedBy === "them" ? `In the 4 s before it they walked at you; you held your ground.` : `In the 4 s before it both sides closed the distance.`);
+  if (unspent >= ITEM_GAP) proof.push(`You were carrying about ${Math.round(unspent / 25) * 25} unspent gold (estimated from the timeline's income and purchases).`);
+  let gold = 0;
+  let xp = 0;
+  let minions = 0;
+  let cost: string;
+  if (f.died !== null) {
+    gold = f.goldGiven + (death?.loss?.gold ?? 0) - f.goldTaken;
+    xp = death?.loss?.xp ?? 0;
+    minions = death?.loss?.minions ?? 0;
+    cost = `You died at ${fmtTime(f.died)}: ${f.goldGiven} gold to them${f.goldTaken ? ` against ${f.goldTaken} you took` : ""}${death?.loss ? `, and ${lossCost(death.loss)} while dead and walking back` : ""}.${alsoLost(death)}`;
+  } else cost = `${Math.round(hpLost)}% of your health gone by ${fmtTime(f.t1)} for ${f.killed.length} kills.`;
+  // When the gap closed: the player's own level-up, or the next shop stop.
+  const parts: string[] = [];
+  if (worst.breakpoint !== null) {
+    const mine = levelTime(c.events, c.id, worst.breakpoint);
+    parts.push(mine !== null ? `You reached level ${worst.breakpoint} at ${fmtTime(mine)}, ${s(mine - f.t0)} s after this fight began: before ${fmtTime(mine)}, give ${W} the ${f.at ? units(Math.max(600, forwardOf(f.at, c.me.teamId))) : "600 units"} you were standing past the middle and take the trade after it.` : `You never reached level ${worst.breakpoint} in the scanned part of the game; ${W} had it for this whole fight.`);
+  } else if (worst.level - f.me.level >= 2) parts.push(`${W} was level ${worst.level} to your ${f.me.level}: ${worst.level - f.me.level} ability ranks you didn't have. ${(() => { const m = levelTime(c.events, c.id, worst.level); return m !== null ? `You reached level ${worst.level} at ${fmtTime(m)}, ${s(m - f.t0)} s later` : `You did not reach level ${worst.level} in the scanned part of the game`; })()}.`);
+  if (worst.legendaryLead >= 1 || worst.itemGoldLead >= ITEM_GAP) {
+    const buys = c.events.filter((e) => e.type === "ITEM_PURCHASED" && e.participantId === c.id && e.itemId);
+    const last = [...buys].reverse().find((e) => e.timestamp <= f.t0)?.timestamp;
+    const next = buys.find((e) => e.timestamp > f.t1);
+    const carried = Math.round(unspent / 25) * 25;
+    let line = `${W} had ${worst.itemGoldLead} gold more in items.`;
+    if (unspent >= ITEM_GAP) {
+      // Spending it means a trip to the shop: how long the player's own recalls took, lane to lane.
+      const lens = c.trips.filter((v) => v.kind === "recall" && v.back !== null).map((v) => v.back! - v.start).sort((x, y) => x - y);
+      const len = lens.length ? lens[lens.length >> 1] : null;
+      // What that gold bought later (an item's full price is the most a purchase of it can cost).
+      const could = buys.filter((e) => e.timestamp > f.t0 && (c.items[e.itemId!]?.total ?? Infinity) <= unspent).sort((x, y) => (c.items[y.itemId!]?.total ?? 0) - (c.items[x.itemId!]?.total ?? 0))[0];
+      line += ` About ${carried} of that was unspent gold on you: your last purchase was at ${last !== undefined ? fmtTime(last) : "0:00"}, ${s(f.t0 - (last ?? 0))} s before this fight.`;
+      line += ` Spending it takes a recall${len !== null ? `, which took you ${s(len)} s lane to lane this game (the middle one of your ${lens.length})` : ` (${RECALL_MS / 1000} s of channel plus the walk back)`}: recall with that gold before taking a fight with ${W}`;
+      line += could ? `, and the ${c.items[could.itemId!]!.total}-gold item you bought at ${fmtTime(could.timestamp)} is on you for it.` : `.`;
+    } else {
+      line += ` You carried about ${carried} gold, so a recall could not have closed it: ${W} held this lead until your purchase${next ? ` at ${fmtTime(next.timestamp)}` : " after the scanned part of the game"}.`;
+      if (f.closedBy === "me" || f.closedBy === "both") line += ` You closed the distance at ${fmtTime(f.t0 - 4 * SEC)}; from ${fmtTime(f.t0 - 4 * SEC)}, stay the ${f.at ? units(Math.max(600, forwardOf(f.at, c.me.teamId))) : "600 units"} back that you were past the middle.`;
+    }
+    // A fountain stop after the fight where nothing was bought, before the next purchase.
+    const idle = c.trips.find((v) => v.arrive >= f.t1 && (!next || v.arrive + 2000 < next.timestamp) && (v.leave === null || !buys.some((e) => e.timestamp >= v.arrive - 1000 && e.timestamp <= v.leave! + 1000)));
+    if (idle && idle.arrive - f.t1 <= 60 * SEC) {
+      const g = Math.round(goldModel(c.timeline, c.items).at(c.id, idle.arrive) / 25) * 25;
+      const buyable = buys.filter((e) => e.timestamp > idle.arrive && (c.items[e.itemId!]?.total ?? Infinity) <= g).sort((x, y) => (c.items[y.itemId!]?.total ?? 0) - (c.items[x.itemId!]?.total ?? 0))[0];
+      line += ` You were in the fountain at ${fmtTime(idle.arrive)} with about ${g} gold and bought nothing${next ? ` until ${fmtTime(next.timestamp)}` : ""}${buyable ? `: the ${c.items[buyable.itemId!]!.total}-gold item you bought at ${fmtTime(buyable.timestamp)} was affordable at ${fmtTime(idle.arrive)}, ${s(buyable.timestamp - idle.arrive)} s earlier.` : `; nothing you bought later cost ${g} or less, so there was nothing to spend it on.`}`;
+    }
+    parts.push(line);
+  }
+  if (f.flags.includes("outnumbered")) {
+    // When the numbers turned: the first moment in the 20 s before with more enemies than allies within 2500 units.
+    const mePath = pathOf(c.track, c.id);
+    const others = c.match.info.participants.filter((p) => p.participantId !== c.id).map((p) => ({ enemy: p.teamId !== c.me.teamId, path: pathOf(c.track, p.participantId) }));
+    let turned: number | null = null;
+    let nearestAlly: number | null = null;
+    for (const p of mePath) {
+      if (p.t < f.t0 - 20 * SEC) continue;
+      if (p.t > f.t0) break;
+      let en = 0;
+      let al = 1;
+      let ally = Infinity;
+      for (const o of others) {
+        let q = null as (typeof o.path)[number] | null;
+        for (const x of o.path) {
+          if (x.t > p.t + 1000) break;
+          if (x.t >= p.t - 1000) q = x;
+        }
+        if (!q) continue;
+        const d = Math.hypot(q.x - p.x, q.y - p.y);
+        if (o.enemy && d <= 2500) en++;
+        if (!o.enemy && d <= 2500) al++;
+        if (!o.enemy) ally = Math.min(ally, d);
+      }
+      if (turned === null && en > al) {
+        turned = p.t;
+        nearestAlly = Number.isFinite(ally) ? ally : null;
+      }
+    }
+    parts.push(
+      turned !== null
+        ? `${f.opponents.length} of them took part against ${f.allies.length + 1} of you. The count within 2500 units of you turned against you at ${fmtTime(turned)}, ${s(f.t0 - turned)} s before the first hit${nearestAlly !== null ? `, with your nearest ally ${units(nearestAlly)} away` : ""}: ${fmtTime(turned)} is when to start walking back, not ${fmtTime(f.died ?? f.t1)}.`
+        : `${f.opponents.length} of them took part against ${f.allies.length + 1} of you, and the ${f.opponents.length - f.allies.length - 1} extra were not within 2500 units of you on the fog-off map until ${fmtTime(f.t0)}: they came from out of sight.`,
+    );
+  }
+  if (!parts.length) return null;
+  return {
+    id: `fight-${k}`,
+    kind: "fight",
+    t: f.t0,
+    time: fmtTime(f.t0),
+    title: `${fmtTime(f.t0)}: fought ${W} ${worst.breakpoint !== null ? `a level-${worst.breakpoint} breakpoint down` : worst.itemGoldLead >= ITEM_GAP ? `${worst.itemGoldLead} gold of items down` : `${f.opponents.length} against ${f.allies.length + 1}`}`,
+    proof,
+    cost,
+    gold: Math.max(0, gold),
+    xp,
+    minions,
+    fix: parts.join(" "),
+    deathAt: f.died ?? undefined,
+    jump: { t: Math.max(0, f.t0 - 6 * SEC), follow: c.me.championName },
+    score: Math.max(0, gold) + xp * XP_GOLD + (f.died === null ? hpLost : 0),
+  };
+}
+
+const score = (o: Matchup) => (o.breakpoint !== null ? 1000 : 0) + Math.max(0, o.itemGoldLead) + o.legendaryLead * 500;
+
+// ---- Objectives ----
+
+function objectiveFinding(c: Ctx, o: ObjectiveSync, k: number): Finding | null {
+  if (o.taken === null || o.by === c.me.teamId || (!o.away && !o.unspent)) return null;
+  const name = OBJ_NAME[o.type];
+  const trip = c.trips.find((v) => v.kind !== "death" && o.taken! >= v.start && o.taken! <= v.until);
+  const recalls = c.trips.filter((v) => v.kind === "recall" && v.back !== null).map((v) => v.back! - v.start).sort((a, b) => a - b);
+  const typical = recalls.length ? recalls[recalls.length >> 1] : 40 * SEC;
+  const proof = [`${name} came up at ${fmtTime(o.spawn)} and the enemy took it at ${fmtTime(o.taken)}.`];
+  if (trip) proof.push(`Your ${trip.kind === "recall" ? "recall" : "walk to base"} began at ${fmtTime(trip.start)} and you were back on the map at ${fmtTime(trip.until)}.`);
+  if (o.distanceAtTake !== null) proof.push(`When it died you were ${units(o.distanceAtTake)} from the pit.`);
+  if (o.gold !== null) proof.push(`Unspent gold at the last minute mark before it spawned: ${o.gold}.`);
+  const leaveBy = o.spawn - 15 * SEC - typical;
+  return {
+    id: `objective-${k}`,
+    kind: "objective",
+    t: trip ? trip.start : o.spawn,
+    time: fmtTime(trip ? trip.start : o.spawn),
+    title: `${name} at ${fmtTime(o.taken)}: you were ${trip ? "on a base trip" : `carrying ${o.gold} gold`} when it was taken`,
+    proof,
+    cost: `1 ${name} to the enemy${o.distanceAtTake !== null ? `, with you ${units(o.distanceAtTake)} away` : ""}.`,
+    gold: 0,
+    xp: 0,
+    minions: 0,
+    fix: `Its spawn time was known from ${fmtTime(Math.max(0, o.spawn - 300 * SEC))}. Your recall trips in this game took ${s(typical)} s from channel to back in lane (median of ${recalls.length || 0}), so the recall for it has to start by ${fmtTime(Math.max(0, leaveBy))} to have you on the map with your gold spent 15 s before ${fmtTime(o.spawn)}.`,
+    jump: { t: Math.max(0, (trip ? trip.start : o.spawn) - 6 * SEC), follow: c.me.championName },
+    // No gold number is invented for an epic monster: these rank after the counted ones.
+    score: 1,
+  };
+}
+
+// ---- Deaths that cost waves (and weren't already explained) ----
+
+function deathFinding(c: Ctx, v: Trip, k: number): Finding | null {
+  if (v.kind !== "death" || !v.loss || !v.lane || v.loss.waves <= BAD_BACK_WAVES) return null;
+  const kill = c.events.find((e) => e.type === "CHAMPION_KILL" && e.victimId === c.id && Math.abs(e.timestamp - v.start) <= 1000);
+  const bounty = kill ? (kill.bounty ?? 0) + (kill.shutdownBounty ?? 0) : 0;
+  const lane = LANE_NAME[v.lane];
+  const first = v.loss.byWave.find((w) => w.minions >= 1);
+  return {
+    id: `death-${k}`,
+    kind: "death",
+    t: v.start,
+    time: fmtTime(v.start),
+    title: `Death at ${fmtTime(v.start)} cost ${n1(v.loss.waves)} waves on top of the kill`,
+    proof: [
+      `Killed at ${fmtTime(v.start)}${v.from ? ` ${c.where(v.from)}` : ""}${kill?.killerId ? ` by ${c.name(kill.killerId)}` : ""}; respawned ${fmtTime(v.arrive)}, back in XP range of the ${lane} wave at ${fmtTime(v.until)}: ${s(v.until - v.start)} s out.`,
+      lossLine(v.loss, lane),
+    ],
+    cost: `${bounty} gold to them, plus ${lossCost(v.loss)}.${alsoLost(v)}`,
+    gold: bounty + v.loss.gold,
+    xp: v.loss.xp,
+    minions: v.loss.minions,
+    fix: first
+      ? `Wave ${first.wave} spawned at ${fmtTime(first.spawnedAt)} and was on its way when you took this fight. A death here always costs the ${s(v.arrive - v.start)} s timer plus a ${s(v.until - v.arrive)} s walk; ${n1(v.loss.minions)} minions die in that time. Take the fight only after the wave in front of you is dead: it was still up.`
+      : `A death here costs the ${s(v.arrive - v.start)} s timer plus a ${s(v.until - v.arrive)} s walk.`,
+    jump: { t: Math.max(0, v.start - 12 * SEC), follow: c.me.championName },
+    score: bounty + v.loss.gold + v.loss.xp * XP_GOLD,
+  };
+}
+
+/** Every finding for one game, costliest first. Items that fail `lint` are dropped (and counted in `rejected`). */
+export function synthesize(input: SynthInput): { findings: Finding[]; rejected: { id: string; why: string[] }[] } {
+  const me = input.match.info.participants.find((p) => p.participantId === input.id);
+  if (!me) return { findings: [], rejected: [] };
+  const events = input.timeline.info.frames.flatMap((f) => f.events ?? []).sort((a, b) => a.timestamp - b.timestamp);
+  const ts = trips(input);
+  const c: Ctx = {
+    ...input,
+    me,
+    events,
+    trips: ts,
+    waveEvents: laneOf(me.teamPosition) ? allWaveEvents(input.track, me.teamId, laneGeometry(events), events) : [],
+    name: (pid) => champName(input.match.info.participants.find((p) => p.participantId === pid)?.championName),
+    where: (p) => describeSpot(p, me.teamId),
+    pressure: (t) =>
+      pressureAt(
+        {
+          players: input.match.info.participants.map((p) => ({ id: p.participantId, champion: p.championName, teamId: p.teamId })),
+          meId: input.id,
+          timeline: input.timeline,
+          pos: (id, at) => champPosAt(input.track.champs ?? [], id, at) ?? null,
+        },
+        t,
+      ),
+  };
+  const all: (Finding | null)[] = [];
+  ts.forEach((v, k) => all.push(recallFinding(c, v, k)));
+  const ex = exposures(input);
+  ex.forEach((x, k) => all.push(exposureFinding(c, x, k)));
+  const fs = fights(input);
+  fs.forEach((f, k) => all.push(fightFinding(c, f, k)));
+  objectiveSync(input, ts).forEach((o, k) => all.push(objectiveFinding(c, o, k)));
+  // A death already explained by an exposure or a fight isn't listed a third time.
+  const explained = new Set<number>();
+  for (const x of ex) if (x.died !== null) explained.add(x.died);
+  for (const f of fs) if (f.died !== null && f.flags.length) explained.add(f.died);
+  ts.forEach((v, k) => {
+    if (v.kind === "death" && ![...explained].some((t) => Math.abs(t - v.start) <= 2000)) all.push(deathFinding(c, v, k));
+  });
+  const findings: Finding[] = [];
+  const rejected: { id: string; why: string[] }[] = [];
+  for (const f of all) {
+    if (!f) continue;
+    const why = lint(f);
+    if (why.length) rejected.push({ id: f.id, why });
+    else findings.push(f);
+  }
+  findings.sort((a, b) => b.score - a.score);
+  // One death, one item: when an exposure and a fight end in the same death, the costlier
+  // stays and takes the other's proof lines it doesn't already have.
+  const kept: Finding[] = [];
+  for (const f of findings) {
+    const twin = f.deathAt === undefined ? undefined : kept.find((x) => x.deathAt !== undefined && Math.abs(x.deathAt - f.deathAt!) <= 2000);
+    if (twin) twin.proof.push(...f.proof.filter((p) => !twin.proof.includes(p)));
+    else kept.push(f);
+  }
+  return { findings: kept, rejected };
+}

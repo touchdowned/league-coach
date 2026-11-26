@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Fragment } from "react";
 import { Brain, CircleAlert, Clapperboard, Compass, Gamepad2, HeartPulse, LoaderCircle, LucideIcon, PlayCircle, RefreshCw, Settings as SettingsIcon, Swords, Target } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import type { GameReport } from "../core/types";
 import { momentCount } from "../core/engine";
 import { coach, PostGameStatus, Settings, TaskProgress } from "./api";
 import { PlayerCard, ProgressProvider, useProgress } from "./progress";
-import { Button, Skeleton } from "./ui";
+import { Button, Skeleton, BrandMark } from "./ui";
 import { firstOpenStep, SessionBar, SessionStep } from "./session";
 import { ChampionsView } from "./views/Champions";
 import { CoachView } from "./views/Coach";
@@ -18,22 +18,22 @@ import { SettingsView } from "./views/Settings";
 
 export type Tab = "coach" | "mind" | "review" | "puzzles" | "mechanics" | "champions" | "role" | "settings";
 
-const NAV: { id: Tab; label: string; icon: LucideIcon }[] = [
-  { id: "coach", label: "Coach", icon: Target },
-  { id: "mind", label: "Mind", icon: HeartPulse },
-  { id: "review", label: "Review", icon: Clapperboard },
+// The loop first (focus, then the games behind it), practice next, reference last.
+const NAV: { id: Tab; label: string; icon: LucideIcon; group?: string }[] = [
+  { id: "coach", label: "Focus", icon: Target },
+  { id: "review", label: "Games", icon: Clapperboard },
+  { id: "mind", label: "Mind", icon: HeartPulse, group: "Practice" },
   { id: "puzzles", label: "Puzzles", icon: Brain },
   { id: "mechanics", label: "Mechanics", icon: Gamepad2 },
-  { id: "champions", label: "Champions", icon: Swords },
+  { id: "champions", label: "Champions", icon: Swords, group: "Stats" },
   { id: "role", label: "Best role", icon: Compass },
-  { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
 export function App() {
   return (
     <ProgressProvider>
       <Shell />
-      <Toaster position="bottom-right" theme="dark" toastOptions={{ className: "toast" }} />
+      <Toaster position="bottom-right" theme="light" toastOptions={{ className: "toast" }} />
     </ProgressProvider>
   );
 }
@@ -77,6 +77,14 @@ function Shell() {
       openReview(matchId, true);
       toast.success("Your review is ready", { description: "Starting with the moments that cost you the most." });
     });
+    // A replay read in the background: the game's findings and the focus update in place.
+    const offUpdated = coach().onGamesUpdated?.((r) => setGames((gs) => gs && gs.map((g) => (g.metrics.matchId === r.metrics.matchId ? r : g))));
+    const offAuto = coach().onAutoRead?.((a) => {
+      if (a.stage === "reading") toast.loading(a.label, { id: "autoread", duration: 600_000 });
+      else if (a.stage === "done") toast.success(a.label, { id: "autoread", duration: 8000, action: { label: "Open", onClick: () => openReview(a.matchId) } });
+      else if (a.stage === "waiting") toast.message(a.label, { id: "autoread", duration: 6000 });
+      else toast.error("Couldn't read the replay", { id: "autoread", description: a.label, duration: 10_000 });
+    });
     const offDebrief = coach().onMindDebrief((gameId) => {
       setDebriefFor(gameId);
       setTab("mind");
@@ -85,6 +93,8 @@ function Shell() {
       offStatus();
       offOpen();
       offDebrief();
+      offUpdated?.();
+      offAuto?.();
     };
   }, []);
 
@@ -107,6 +117,7 @@ function Shell() {
     }
     const fresh = res.reports.filter((r) => !(games ?? []).some((g) => g.metrics.matchId === r.metrics.matchId));
     setGames(res.reports);
+    if (res.warning) return void toast.warning("Showing saved games", { description: res.warning, duration: 12_000 });
     toast.success(fresh.length ? `${fresh.length} new game${fresh.length > 1 ? "s" : ""} analyzed` : "You're up to date", {
       description: fresh.length ? "Your coaching plan is updated." : undefined,
     });
@@ -125,19 +136,26 @@ function Shell() {
       {sync && <div className="top-progress" style={{ transform: `scaleX(${Math.max(0.04, syncPct)})` }} />}
       <aside className="rail">
         <div className="brand">
-          <span className="brand-mark" />
+          <BrandMark />
           <strong>League Coach</strong>
         </div>
         <nav>
           {NAV.map((n) => (
-            <button key={n.id} className={`nav ${tab === n.id ? "active" : ""}`} onClick={() => setTab(n.id)}>
-              <n.icon size={18} strokeWidth={1.8} aria-hidden />
-              {n.label}
-              {n.id === "review" && games && <UnreviewedBadge games={games} reviewed={progress.reviewedGames} />}
-            </button>
+            <Fragment key={n.id}>
+              {n.group && <span className="nav-group">{n.group}</span>}
+              <button className={`nav ${tab === n.id ? "active" : ""}`} onClick={() => setTab(n.id)}>
+                <n.icon size={18} strokeWidth={1.8} aria-hidden />
+                {n.label}
+                {n.id === "review" && games && <UnreviewedBadge games={games} reviewed={progress.reviewedGames} />}
+              </button>
+            </Fragment>
           ))}
         </nav>
         <div className="rail-foot">
+          <button className={`nav ${tab === "settings" ? "active" : ""}`} onClick={() => setTab("settings")}>
+            <SettingsIcon size={18} strokeWidth={1.8} aria-hidden />
+            Settings
+          </button>
           {postGame && postGame.stage !== "idle" && (
             <PostGamePill
               status={postGame}
@@ -149,12 +167,13 @@ function Shell() {
           <button className="sync" disabled={!!sync || !settings?.apiKey} onClick={runSync}>
             <span className="sync-fill" style={{ transform: `scaleX(${sync ? syncPct : 0})` }} />
             <RefreshCw size={15} className={`sync-icon ${sync ? "spinning" : ""}`} aria-hidden />
-            <span className="sync-label">{sync ? sync.label : "Sync games"}</span>
+            <span className="sync-label">{sync ? sync.label : "Sync"}</span>
             {sync && <span className="sync-pct">{Math.round(syncPct * 100)}%</span>}
           </button>
         </div>
       </aside>
 
+      <div className="dragbar" aria-hidden />
       <main className="main" key={tab}>
         {session && games && <SessionBar progress={progress} current={session} games={games} onGo={goStep} onEnd={() => setSession(null)} />}
         {loading ? (
@@ -197,7 +216,7 @@ function PostGamePill({ status, onOpen, onDismiss }: { status: PostGameStatus; o
     <button
       className={`postgame-pill ${status.stage}`}
       onClick={ready ? onOpen : failed ? onDismiss : undefined}
-      title={ready ? "Open the review" : failed ? "Dismiss" : undefined}
+      title={ready ? `${status.label}. Open the review` : failed ? `${status.label}. Dismiss` : status.label}
     >
       <Icon size={15} className={!ready && !failed ? "spinning" : undefined} aria-hidden />
       <span>{status.label}</span>

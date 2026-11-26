@@ -16,6 +16,8 @@ import { useProgress } from "../progress";
 import { Button, Empty, Kbd, ProgressBar, Spinner } from "../ui";
 import { buildChapters } from "../../core/walkthrough";
 import { Walkthrough } from "./Walkthrough";
+import { useFocus } from "./FocusCard";
+import { Findings } from "./Findings";
 import { champName } from "../../core/names";
 
 export function ReviewView({
@@ -47,6 +49,19 @@ export function ReviewView({
       onTargetConsumed();
     }
   }, [target, onTargetConsumed]);
+
+  // With a replay already open in League, start on that game: it is the one the player is looking at.
+  useEffect(() => {
+    if (target) return;
+    coach()
+      .replayOpenMatch?.()
+      .then((res) => {
+        if (res?.ok && res.value && games.some((g) => g.metrics.matchId === res.value)) setSelected((cur) => cur ?? res.value);
+      })
+      .catch(() => undefined);
+    // Once, when Review opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (games.length === 0) return <div className="page"><Empty title="No games yet" body="Sync your games first, then come back to review them." /></div>;
 
@@ -169,6 +184,7 @@ function ReviewPlayer({
   onPuzzles: () => void;
   onGameUpdated?: (r: GameReport) => void;
 }) {
+  const { focus } = useFocus(useMemo(() => [r], [r]));
   const m = r.metrics;
   const moments = useMemo(() => toMoments(r), [r]);
   const chapters = useMemo(() => buildChapters(r), [r]);
@@ -178,6 +194,7 @@ function ReviewPlayer({
     () =>
       coach().onOverlayClosed((e) => {
         if (e.matchId === m.matchId && e.finished) finishRef.current?.();
+        if (e.matchId === m.matchId && e.lost) toast.message("Walkthrough closed", { description: "The replay was closed, so the walkthrough stopped. Start it again to pick up where you were." });
       }),
     [m.matchId],
   );
@@ -333,6 +350,18 @@ function ReviewPlayer({
     refreshReplay();
   }
 
+  const readReplay = () =>
+    act("read", async () => {
+      setReading({ done: 0, total: 1, label: "Starting" });
+      const res = await coach().replayRead(m.matchId);
+      setReading(null);
+      if (res.ok) {
+        onGameUpdated?.(res.value);
+        toast.success("Replay read", { description: `${res.value.findings?.length ?? 0} findings measured from the replay.` });
+      }
+      return res;
+    });
+
   const reviewed = progress.reviewedGames.includes(m.matchId);
   const revealAt = media.kind === "clip" ? 12 : Math.min(5, per * 0.35);
   useEffect(() => {
@@ -380,6 +409,40 @@ function ReviewPlayer({
         </div>
         <span className="moments-big"><b>{momentCount(r)}</b><small>moments</small></span>
       </header>
+
+      {!r.wavesRead && (
+        <section className="unread">
+          <div>
+            <span className="eyebrow accent">Not read yet</span>
+            <h2>This game's replay hasn't been read</h2>
+            <p className="muted">
+              Wave, recall, jungler and fight findings are measured from the replay itself. Until it is read, everything below is an estimate from Riot's match data: it knows deaths and purchases, not where the waves were.
+              {reading ? ` ${reading.label}.` : " Reading plays the first 15 minutes fast on your screen and takes about 5 minutes. Leave the replay alone while it runs."}
+            </p>
+          </div>
+          <Button variant="primary" size="lg" loading={busy === "read" || !!reading} onClick={readReplay}>
+            Read the replay
+          </Button>
+        </section>
+      )}
+
+      {!!r.findings?.length && (
+        <Findings
+          focus={focus}
+          findings={r.findings}
+          matchId={m.matchId}
+          replayOpen={replay?.kind === "open"}
+          onNeedReplay={async () => {
+            const off = coach().onStageProgress((l) => setOpening(l));
+            setOpening("Opening the replay");
+            const res = await coach().stageOpen(m.matchId);
+            off();
+            setOpening(null);
+            if (!res.ok) toast.error("Couldn't open the replay", { description: res.error });
+            return res.ok;
+          }}
+        />
+      )}
 
       {moments.length === 0 ? (
         <div className="hero quiet">
@@ -569,16 +632,7 @@ function ReviewPlayer({
         })}
         onCancelRecord={() => coach().clipsCancel()}
         reading={reading}
-        onRead={() => act("read", async () => {
-          setReading({ done: 0, total: 1, label: "Starting" });
-          const res = await coach().replayRead(m.matchId);
-          setReading(null);
-          if (res.ok) {
-            onGameUpdated?.(res.value);
-            toast.success("Replay read", { description: "Wave state now comes from the replay's minimap." });
-          }
-          return res;
-        })}
+        onRead={readReplay}
         onCancelRead={() => coach().replayReadCancel()}
         onPickVod={() => act("vod", async () => {
           const res = await coach().vodPick(m.matchId);

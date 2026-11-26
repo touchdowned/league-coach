@@ -89,6 +89,8 @@ export interface DraftInfo {
   queue: ReturnType<typeof queueCheck>;
   plan: GamePlan | null;
   lastIntention: string | null;
+  /** The focus from your read replays: one rule for this game. */
+  focus: { title: string; rule: string; cue: string; pass: string; why: string } | null;
 }
 
 interface ChampSelectSession {
@@ -104,6 +106,8 @@ export interface MindDeps {
   league(): Promise<LeagueClient>;
   settings(): Promise<Settings>;
   reports(): GameReport[];
+  /** The one focus from the read replays, if there is one yet. */
+  focus?(): import("../core/focus").Focus | null;
   /** Sends to the main window. */
   send(channel: string, payload: unknown): void;
   focusMain(): void;
@@ -218,6 +222,7 @@ export class MindService {
       queue: queueCheck(tiltProfile(reports), this.data.debriefs),
       plan: this.draftPlan,
       lastIntention: lastDb?.nextIntention || null,
+      focus: ((f) => (f ? { title: f.title, rule: f.rule, cue: f.cue, pass: f.pass, why: f.why } : null))(this.deps.focus?.() ?? null),
     };
   }
 
@@ -335,7 +340,8 @@ export class MindService {
   }
 
   private pushView(view: LiveView, s?: Settings) {
-    const payload = { view, hidden: this.hidden, editing: this.editing, pos: s?.overlayPos ?? null, nudges: s?.overlayNudges !== false, intention: this.tracker?.plan?.intention ?? "", rules: this.rulesFor() };
+    const f = this.deps.focus?.() ?? null;
+    const payload = { view, hidden: this.hidden, editing: this.editing, pos: s?.overlayPos ?? null, nudges: s?.overlayNudges !== false, intention: this.tracker?.plan?.intention ?? "", rules: this.rulesFor(), replayFocus: f ? { title: f.title, rule: f.rule } : null };
     if (this.overlay && !this.overlay.isDestroyed()) this.overlay.webContents.send("mind:live", payload);
     this.deps.send("mind:live", payload);
   }

@@ -18,6 +18,11 @@ export interface Participant {
   visionScore: number;
   totalDamageDealtToChampions: number;
   win: boolean;
+  /** Summoner spell ids (4 = Flash). */
+  summoner1Id?: number;
+  summoner2Id?: number;
+  /** Runes: each style's picks by rune id. */
+  perks?: { styles?: { selections?: { perk: number }[] }[] };
   challenges?: { soloKills?: number; [k: string]: unknown };
 }
 
@@ -67,6 +72,9 @@ export interface TimelineEvent {
   laneType?: string;
   buildingType?: string;
   towerType?: string;
+  /** CHAMPION_KILL: every source of damage the victim took, and dealt, in the fight. */
+  victimDamageReceived?: { participantId?: number; name?: string }[];
+  victimDamageDealt?: { participantId?: number; name?: string }[];
 }
 
 export interface TimelineDto {
@@ -176,4 +184,6 @@ export interface GameReport {
   /** Every crash-plus-item-gold moment in laning, taken or passed (replay read only). */
   recallWindows?: import("./engine").RecallWindow[];
   waves?: import("./waves").WaveTrack;
+  /** Module 3: timestamped findings with proof, cost and fix (needs a replay read with champion positions). */
+  findings?: import("./synth").Finding[];
 }

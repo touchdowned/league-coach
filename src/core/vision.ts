@@ -203,7 +203,13 @@ export function canReach(p: { x: number; y: number }, r: { x: number; y: number 
  * usually a ring on the far side of the map). Champions cover under 500 units a second;
  * 1500 units of slack covers blinks, dashes and the read's own error.
  * Teleports and recalls move a champion once and stay, so they survive.
+ * At the end of a run there's no read after to compare (Kayle read in the blue fountain
+ * 0.45 s before dying in top lane on NA1_5686039660, her last read: Veigar's icon cut by the
+ * minimap corner, read as a second ring). So an out-of-reach read with a read within NEAR_MS
+ * on one side and none within UNCONFIRMED_MS on the other is dropped too.
  */
+const NEAR_MS = 1500;
+const UNCONFIRMED_MS = 3000;
 export function dropJumps(champs: ChampSample[]): number {
   let dropped = 0;
   for (const fog of ["off", "team"] as const) {
@@ -222,6 +228,21 @@ export function dropJumps(champs: ChampSample[]): number {
         const pn = Math.hypot(p.x - n.x, p.y - n.y);
         if (dp > reach(list[k - 1].s, list[k].s) && dn > reach(list[k].s, list[k + 1].s) && pn <= reach(list[k - 1].s, list[k + 1].s)) {
           (bad.get(list[k].s) ?? bad.set(list[k].s, new Set()).get(list[k].s)!).add(list[k].i);
+        }
+      }
+      // The ends of a run (no read of that champion for UNCONFIRMED_MS on one side): a read
+      // out of reach of a read just before it (or just after it) that nothing confirms. A real
+      // teleport or recall leaves the champion visible where they landed.
+      const kept = list.filter((r) => !bad.get(r.s)?.has(r.i));
+      for (let k = 0; k < kept.length; k++) {
+        const c = kept[k];
+        for (const [a, b] of [[kept[k - 1], kept[k + 1]], [kept[k + 1], kept[k - 1]]] as const) {
+          if (!a || Math.abs(a.s.t - c.s.t) > NEAR_MS) continue;
+          if (b && Math.abs(b.s.t - c.s.t) <= UNCONFIRMED_MS) continue;
+          const pa = a.s.at[a.i];
+          const pc = c.s.at[c.i];
+          if (Math.hypot(pc.x - pa.x, pc.y - pa.y) > 1500 + (Math.abs(a.s.t - c.s.t) / 1000) * 500)
+            (bad.get(c.s) ?? bad.set(c.s, new Set()).get(c.s)!).add(c.i);
         }
       }
     }

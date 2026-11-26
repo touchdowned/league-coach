@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseRiotId, RiotClient } from "../src/core/riot";
+import { parseRiotId, participantByRiotId, RiotClient } from "../src/core/riot";
 
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
 
@@ -43,5 +43,17 @@ describe("parseRiotId", () => {
   it("accepts spaces around the tag", () => {
     expect(parseRiotId("SomePlayer #NA1")).toEqual({ gameName: "SomePlayer", tagLine: "NA1" });
     expect(() => parseRiotId("nohash")).toThrow();
+  });
+});
+
+describe("participant by Riot ID", () => {
+  it("finds you in the match by name and tag, ignoring case, without the API", () => {
+    const ps = [
+      { participantId: 1, riotIdGameName: "Someone", riotIdTagline: "NA1" },
+      { participantId: 4, riotIdGameName: "Player One", riotIdTagline: "abc" },
+    ];
+    expect(participantByRiotId(ps, "player one", "ABC")?.participantId).toBe(4);
+    expect(participantByRiotId(ps, "Player One", "NA1")).toBeUndefined();
+    expect(participantByRiotId([{ participantId: 2 } as { participantId: number; riotIdGameName?: string }], "x", "y")).toBeUndefined();
   });
 });

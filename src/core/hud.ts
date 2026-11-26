@@ -31,11 +31,16 @@ export interface HudRead {
   res: number | null;
 }
 
-/** The strip of the screen that holds one side's five frames (for cropping before reading). */
+/**
+ * The strip of the screen that holds one side's five frames (for cropping before reading).
+ * It runs to y 650: the fifth frame's resource bar ends at y 632. (It used to stop at 600,
+ * which cut off the fifth frame's bars on both sides: Leona and Sona read 0% on NA1_5686039660,
+ * Leona and Alistar on NA1_5686076870.)
+ */
 export function hudStrip(side: 100 | 200, screen: { w: number; h: number }) {
   const k = screen.h / REF_H;
   const w = Math.ceil(110 * k);
-  return { x: side === 100 ? 0 : screen.w - w, y: Math.floor(140 * k), w, h: Math.min(screen.h, Math.ceil(600 * k)) - Math.floor(140 * k) };
+  return { x: side === 100 ? 0 : screen.w - w, y: Math.floor(140 * k), w, h: Math.min(screen.h, Math.ceil(650 * k)) - Math.floor(140 * k) };
 }
 
 /**
@@ -104,19 +109,112 @@ export interface HudSample {
   t: number;
   hp: (number | null)[];
   res: (number | null)[];
+  /** Flash off the summoner spell icons: true ready, false on cooldown, null not read or the player has no Flash. */
+  flash?: (boolean | null)[];
+  /** Ultimate off the ult indicator: true ready, false on cooldown or not learned, null not read. */
+  ult?: (boolean | null)[];
 }
 
-export function readHudStrips(t: number, blue: Frame, red: Frame, screen: { w: number; h: number }): HudSample {
+/**
+ * Summoner spell icons in each team frame (1920x1080 reference): D at y 157-175, F at y 180-198
+ * (+103 per frame), x 5-24 on the blue side and 1894-1913 on the red side.
+ * On cooldown the game darkens the icon and draws a clock wipe with thin white lines from the
+ * centre; ready, the icon is plain. Counting near-white pixels (all channels over 200) in the
+ * icon, measured on NA1_5686076870 at 5:55, 7:52 and 8:00 (hud-truth): ready Flash icons had
+ * 1-6, icons on cooldown 19-36 (the lines plus the bright wedge edge). Between FLASH_READY and
+ * FLASH_DOWN the read is left null.
+ */
+const SPELL = { x0: 5, x1: 24, ys: [157, 180], h: 19 };
+const RED_SPELL_X0 = 1894;
+const FLASH_READY = 8;
+const FLASH_DOWN = 14;
+export function spellWhite(f: Frame, side: 100 | 200, slot: number, which: 0 | 1, screen: { w: number; h: number }, origin: { x: number; y: number }): number | null {
+  const k = screen.h / REF_H;
+  const x0 = side === 100 ? Math.round(SPELL.x0 * k) - origin.x : Math.round(screen.w - (REF_W - RED_SPELL_X0) * k) - origin.x;
+  const w = Math.round((SPELL.x1 - SPELL.x0 + 1) * k);
+  const y0 = Math.round((SPELL.ys[which] + STEP * slot) * k) - origin.y;
+  const h = Math.round(SPELL.h * k);
+  if (x0 < 0 || y0 < 0 || x0 + w > f.w || y0 + h > f.h) return null;
+  let white = 0;
+  for (let y = y0; y < y0 + h; y++)
+    for (let x = x0; x < x0 + w; x++) {
+      const i = (y * f.w + x) * 4;
+      if (f.data[i] > 200 && f.data[i + 1] > 200 && f.data[i + 2] > 200) white++;
+    }
+  return Math.round(white / (k * k));
+}
+
+/**
+ * `flashSlot`: for each participant (id - 1), which summoner slot holds Flash (0 = D, 1 = F), or
+ * null when they don't have it. Without it, no Flash reads.
+ */
+export function readHudStrips(t: number, blue: Frame, red: Frame, screen: { w: number; h: number }, flashSlot?: (0 | 1 | null)[]): HudSample {
   const out: HudSample = { t, hp: [], res: [] };
+  if (flashSlot) out.flash = [];
   for (const [side, f] of [[100, blue], [200, red]] as const) {
     const o = hudStrip(side, screen);
     for (let slot = 0; slot < 5; slot++) {
       const r = readHud(f, side, slot, screen, { x: o.x, y: o.y });
       out.hp.push(r.hp);
       out.res.push(r.res);
+      if (flashSlot) {
+        const which = flashSlot[(side === 100 ? 0 : 5) + slot];
+        // A dead champion's frame is greyed: no read.
+        const white = which === null || which === undefined || r.hp === null || r.hp === 0 ? null : spellWhite(f, side, slot, which, screen, { x: o.x, y: o.y });
+        out.flash!.push(white === null ? null : white <= FLASH_READY ? true : white >= FLASH_DOWN ? false : null);
+      }
     }
   }
   return out;
+}
+
+/**
+ * Flash reads against what Flash can do: once it goes down it stays down for its cooldown
+ * (300 s, less with summoner spell haste: at most about 25% off from runes and boots) and comes
+ * back up. Each run of "down" reads that starts after an "up" read and ends with an "up" read
+ * must last between FLASH_MIN_MS and FLASH_MAX_MS; and an "up" read inside a down run is an error.
+ */
+const FLASH_MIN_MS = 225_000;
+const FLASH_MAX_MS = 315_000;
+export function checkFlash(hud: HudSample[]) {
+  const s = [...hud].filter((x) => x.flash).sort((a, b) => a.t - b.t);
+  let ok = 0;
+  let n = 0;
+  const bad: { id: number; t0: number; t1: number; ms: number }[] = [];
+  let reads = 0;
+  for (let id = 1; id <= 10; id++) {
+    let lastUp: number | null = null;
+    let downFrom: number | null = null;
+    let flips = 0;
+    for (const x of s) {
+      const v = x.flash![id - 1];
+      if (v === null || v === undefined) continue;
+      reads++;
+      if (v === false && downFrom === null && lastUp !== null) downFrom = x.t;
+      if (v === true) {
+        if (downFrom !== null) {
+          // Short blips (a read or two) are misreads either way; judge runs of 10 s or more.
+          const ms = x.t - downFrom;
+          if (ms >= 10_000) {
+            n++;
+            if (ms >= FLASH_MIN_MS && ms <= FLASH_MAX_MS) ok++;
+            else bad.push({ id, t0: downFrom, t1: x.t, ms });
+          } else flips++;
+          downFrom = null;
+        }
+        lastUp = x.t;
+      }
+    }
+    void flips;
+  }
+  return {
+    name: "hud: Flash down for its cooldown, then up",
+    measured: `${n ? Math.round((ok / n) * 1000) / 10 : 0}% (${ok}/${n}) of complete cooldowns last ${FLASH_MIN_MS / 1000}-${FLASH_MAX_MS / 1000} s; ${reads} Flash reads`,
+    bar: ">= 90% of complete cooldowns",
+    pass: n > 0 && ok / n >= 0.9,
+    n,
+    detail: bad,
+  };
 }
 
 /**

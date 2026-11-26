@@ -15,6 +15,7 @@ export interface Settings {
   autoAdvanceSec: number;
   autoReview: boolean;
   autoLaunchReplay: boolean;
+  autoRead: boolean;
   launchAtLogin: boolean;
   overlay: boolean;
   overlayNudges: boolean;
@@ -73,7 +74,7 @@ export interface TaskProgress {
 export interface CoachApi {
   getSettings(): Promise<Settings>;
   setSettings(s: Settings): Promise<void>;
-  sync(): Promise<{ ok: true; reports: GameReport[] } | { ok: false; error: string }>;
+  sync(): Promise<{ ok: true; reports: GameReport[]; warning?: string } | { ok: false; error: string }>;
   listGames(): Promise<GameReport[]>;
   onProgress(cb: (p: TaskProgress) => void): () => void;
 
@@ -81,14 +82,26 @@ export interface CoachApi {
   progressEvent(e: ProgressEvent): Promise<ProgressResult>;
 
   replayState(matchId: string): Promise<Result<ReplayState>>;
+  /** The synced game whose replay is open in League right now, or null. */
+  replayOpenMatch(): Promise<Result<string | null>>;
   replayDownload(matchId: string): Promise<Result<void>>;
   replayWatch(matchId: string): Promise<Result<void>>;
   replaySeek(sec: number, paused: boolean): Promise<Result<boolean>>;
   replayFollow(champion: string): Promise<Result<void>>;
+  /** Keeps the camera on the champion while the replay plays, until replayFollowStop (or the replay closes). */
+  replayFollowStart(champion: string): Promise<Result<void>>;
+  replayFollowStop(): Promise<Result<void>>;
   replayEnableApi(): Promise<Result<void>>;
   /** Plays the replay and reads minions off the minimap, then returns the re-read game. */
   replayRead(matchId: string): Promise<Result<GameReport>>;
   replayReadCancel(): Promise<Result<void>>;
+  /** Closes the open replay window (never a live game). */
+  replayClose(): Promise<Result<boolean>>;
+  /** The one focus worked out from the read replays, and the focus that just stuck (if one did). */
+  focusGet(): Promise<Result<{ focus: import("../core/focus").Focus | null; moved: string | null }>>;
+  /** A game's replay was read in the background. */
+  onGamesUpdated(cb: (r: GameReport) => void): () => void;
+  onAutoRead(cb: (s: { matchId: string; stage: "reading" | "done" | "waiting" | "failed"; label: string }) => void): () => void;
   benchGet(): Promise<Result<import("../core/benchmark").LaneStats[]>>;
   onBenchUpdated(cb: (added: number) => void): () => void;
   onScanProgress(cb: (p: TaskProgress & { phase?: string }) => void): () => void;
@@ -111,10 +124,17 @@ export interface CoachApi {
   onStageProgress(cb: (label: string) => void): () => void;
   /** Coaching overlay over the League replay window. */
   overlayOpen(matchId: string): Promise<Result<void>>;
+  /** Shows one finding as a card over the replay window (the app steps out of the way). */
+  overlayFinding(matchId: string, findingId: string): Promise<Result<void>>;
   overlayClose(finished: boolean): Promise<Result<void>>;
   overlayInteractive(on: boolean): Promise<Result<void>>;
   overlayFocus(): Promise<Result<void>>;
-  onOverlayClosed(cb: (e: { matchId: string; finished: boolean }) => void): () => void;
+  /** Where the overlay's own panels are (window px): the mouse is taken over them, let through elsewhere. */
+  overlayRects(rects: { x: number; y: number; w: number; h: number }[]): Promise<Result<void>>;
+  /** While on, the overlay takes the whole mouse and these keys (Electron accelerators), wherever the focus is. */
+  overlayModal(on: boolean, keys: string[]): Promise<Result<void>>;
+  onOverlayKey(cb: (key: string) => void): () => void;
+  onOverlayClosed(cb: (e: { matchId: string; finished: boolean; lost?: boolean }) => void): () => void;
 
   vodFind(matchId: string): Promise<Result<Vod | null>>;
   vodPick(matchId: string): Promise<Result<Vod | null>>;
@@ -173,6 +193,7 @@ export interface DraftInfo {
   queue: { tone: "good" | "warn" | "bad"; title: string; body: string };
   plan: GamePlan | null;
   lastIntention: string | null;
+  focus?: { title: string; rule: string; cue: string; pass: string; why: string } | null;
 }
 
 export interface LivePayload {
@@ -183,6 +204,8 @@ export interface LivePayload {
   nudges?: boolean;
   intention?: string;
   rules: { skill: string; mental: string; skillId: ChallengeId; mentalId: ChallengeId } | null;
+  /** The one focus from the read replays (core/focus.ts), if there is one yet. */
+  replayFocus?: { title: string; rule: string } | null;
   preview?: boolean;
 }
 

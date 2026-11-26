@@ -24,6 +24,8 @@ export interface LivePlayer {
   wardScore: number;
   isDead: boolean;
   respawnTimer: number;
+  /** Summoner spell names (D, F), as Live Client lists them. */
+  spells?: [string, string];
 }
 
 export interface LivePoll {
@@ -55,6 +57,12 @@ function liveChampion(p: Record<string, unknown>): string {
 }
 
 /** Parses one allgamedata response. Null when it isn't one. */
+function spellsOf(p: Record<string, unknown>): { spells?: [string, string] } {
+  const ss = p.summonerSpells as Record<string, { displayName?: string; rawDisplayName?: string }> | undefined;
+  const name = (x?: { displayName?: string; rawDisplayName?: string }) => String(x?.rawDisplayName ?? x?.displayName ?? "");
+  return ss ? { spells: [name(ss.summonerSpellOne), name(ss.summonerSpellTwo)] } : {};
+}
+
 export function parseLive(raw: unknown): LivePoll | null {
   const d = raw as { gameData?: { gameTime?: number }; allPlayers?: Record<string, unknown>[] } | null;
   if (!d?.gameData || typeof d.gameData.gameTime !== "number" || !Array.isArray(d.allPlayers)) return null;
@@ -77,6 +85,7 @@ export function parseLive(raw: unknown): LivePoll | null {
       wardScore: Number(sc.wardScore ?? 0),
       isDead: !!p.isDead,
       respawnTimer: Number(p.respawnTimer ?? 0),
+      ...spellsOf(p),
     };
   });
   return { t: Math.round(d.gameData.gameTime * 1000), players };
