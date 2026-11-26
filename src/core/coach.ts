@@ -250,7 +250,7 @@ function defs(rs: GameReport[]): IssueDef[] {
       rules: [
         "After 14:00, when dragon or a tower fight is coming, shove your wave and walk there before it starts.",
         "Don't farm a side lane while your team fights mid unless you're pushing a tower.",
-        "Watch the minimap every time a wave crashes.",
+        "Each time your wave reaches their tower you have about 15 s before the next one arrives: use it to walk to the fight or the objective, not to wait in lane.",
       ],
       passRule: `${Math.round(b.killParticipation * 100)}%+ kill participation`,
       check: (r) => r.metrics.killParticipation >= benchmarkFor(r.metrics.role).killParticipation,
