@@ -8,10 +8,11 @@ A personal, post-game League of Legends coach for Windows. It doesn't ask you to
 - **Guided review**: press play and it walks through every mistake in a game (what happened, what you were probably thinking, why that was wrong), then rolls into the next unreviewed game. It downloads and opens the game's replay through the League client, jumps the replay to each moment, and can record each moment as a clip that plays inside the app. Linked mp4 recordings (OBS, Outplayed) play inline too.
 - **Feedback loop**: XP and levels, a daily streak, daily targets (3 moments, 10 puzzles), level-up and toast feedback.
 - **Puzzles**: endless decision puzzles. First the moments right before your own deaths, then generated drills.
+- **Mind** (mental game): in champ select a small card shows your record on the champion and matchup, whether you should be queueing at all (stop-loss after losing streaks, tilted last game), and asks you to lock one skill goal and one mental goal. In game a click-through overlay tracks both live, keeps a focus score, shows one-line reminders when they matter (objective about to spawn, gold piling up, CS pace, shutdown on your head), and while you're dead shows what killed you, the fix, a breathing cue and a 1-5 focus check-in (Ctrl+Shift+1-5). When the game ends a two-minute debrief asks about your mood, then adaptive questions built from what happened (a death chain, a missed goal, what set you off) and turns the answers into rules for the next game. The Mind tab tracks goal record, focus over games, a tilt profile from your match history (win rate by game number in a session, after losses, by time of day, with and without death chains) and mood vs results.
 - **Champions**: your pool with win rate, gold lead and matchups, and a keep/drop verdict for each.
 - **Best role**: compares your roles and recommends one.
 
-Everything runs after the game. The app never reads game memory or draws over a live game, so it stays within Riot's third-party rules and Vanguard.
+The live overlay reads only League's own read-only Live Client Data API (`https://127.0.0.1:2999/liveclientdata`), which reports what you can already see on your screen, and draws only your own goals and stats. The app never reads game memory or sends input to the game. The overlay needs League in Borderless or Windowed mode, can be hidden with Ctrl+Shift+H and turned off in Settings. Everything else runs after the game.
 
 ## Install
 

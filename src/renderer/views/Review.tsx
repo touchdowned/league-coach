@@ -14,6 +14,9 @@ import { hasVision, lastSeen, visibleAt } from "../../core/vision";
 import { Rift, useGameClock } from "../rift";
 import { useProgress } from "../progress";
 import { Button, Empty, Kbd, ProgressBar, Spinner } from "../ui";
+import { buildChapters } from "../../core/walkthrough";
+import { Walkthrough } from "./Walkthrough";
+import { champName } from "../../core/names";
 
 export function ReviewView({
   games,
@@ -60,7 +63,7 @@ export function ReviewView({
             <button key={m.matchId} className={`game-item ${m.win ? "w" : "l"} ${current.metrics.matchId === m.matchId ? "on" : ""}`} onClick={() => { setSelected(m.matchId); setAutoplay(true); setStartKind(undefined); }}>
               <ChampIcon name={m.champion} size={34} />
               <span className="gi-main">
-                <strong>{m.champion}</strong>
+                <strong>{champName(m.champion)}</strong>
                 <small>
                   {ROLE_LABEL[m.role]} · {m.kills}/{m.deaths}/{m.assists}
                 </small>
@@ -168,6 +171,17 @@ function ReviewPlayer({
 }) {
   const m = r.metrics;
   const moments = useMemo(() => toMoments(r), [r]);
+  const chapters = useMemo(() => buildChapters(r), [r]);
+  const [theater, setTheater] = useState<null | "replay" | "map">(null);
+  const [opening, setOpening] = useState<string | null>(null);
+  useEffect(
+    () =>
+      coach().onOverlayClosed((e) => {
+        if (e.matchId === m.matchId && e.finished) finishRef.current?.();
+      }),
+    [m.matchId],
+  );
+  const finishRef = useRef<(() => void) | null>(null);
   const { state: progress, award } = useProgress();
   const [idx, setIdx] = useState(() => Math.max(0, startKind ? moments.findIndex((mo) => mo.main?.kind === startKind || mo.leak?.kind === startKind || mo.extra.some((x) => x.kind === startKind)) : 0));
   const [playing, setPlaying] = useState(autoplay && moments.length > 0);
@@ -265,6 +279,7 @@ function ReviewPlayer({
     await award({ type: "game", matchId: m.matchId });
   }, [award, m.matchId]);
 
+  finishRef.current = () => void finish();
   const go = useCallback(
     async (to: number) => {
       if (moment) await award({ type: "moment", id: moment.key });
@@ -338,13 +353,26 @@ function ReviewPlayer({
   };
   const timerPct = media.kind === "clip" ? elapsed / (videoRef.current?.duration || 19) : elapsed / per;
 
+  if (theater)
+    return (
+      <Walkthrough
+        r={r}
+        source={theater}
+        onExit={() => setTheater(null)}
+        onFinished={async () => {
+          setTheater(null);
+          await finish();
+        }}
+      />
+    );
+
   return (
     <div className="page review-page">
       <header className="review-head">
         <ChampIcon name={m.champion} size={52} />
         <div className="rh-main">
           <h1>
-            {m.champion} {m.opponentChampion && <span className="muted">vs {m.opponentChampion}</span>}
+            {champName(m.champion)} {m.opponentChampion && <span className="muted">vs {champName(m.opponentChampion)}</span>}
           </h1>
           <p className="muted">
             <span className={m.win ? "win" : "loss"}>{m.win ? "Victory" : "Defeat"}</span> · {ROLE_LABEL[m.role]} · {Math.round(m.durationMin)} min · {m.kills}/{m.deaths}/{m.assists} · {new Date(m.gameCreation).toLocaleDateString()}
@@ -359,6 +387,24 @@ function ReviewPlayer({
         </div>
       ) : finished ? (
         <Summary r={r} reviewed={reviewed} next={next} onNext={onNext} onPuzzles={onPuzzles} onRestart={() => { setFinished(false); setIdx(0); setPlaying(true); }} />
+      ) : chapters.length > 0 ? (
+        <GuidedStart
+          r={r}
+          chapters={chapters}
+          replay={replay}
+          opening={opening}
+          onStart={async (mode) => {
+            if (mode === "map") return setTheater("map");
+            setOpening("Opening the replay");
+            const off = coach().onStageProgress((l) => setOpening(l));
+            const res = await coach().stageOpen(m.matchId);
+            off();
+            setOpening(null);
+            if (!res.ok) return toast.error("Couldn't open the replay", { description: res.error });
+            // The review runs in a transparent layer drawn over the League replay window.
+            await coach().overlayOpen(m.matchId);
+          }}
+        />
       ) : (
         <section className="player">
           <div className="stories">
@@ -414,7 +460,7 @@ function ReviewPlayer({
                   {media.kind === "rift" ? (
                     junglerDrill ? (
                       <>
-                        <strong>Where's {enemyJungler!.champion}?</strong> The jungler is hidden, like on your minimap. {frozen ? "Click where you think they are." : "Watch the lead-up; it freezes 4 seconds before you die."} <Kbd>R</Kbd> skips.
+                        <strong>Where's {champName(enemyJungler!.champion)}?</strong> The jungler is hidden, like on your minimap. {frozen ? "Click where you think they are." : "Watch the lead-up; it freezes 4 seconds before you die."} <Kbd>R</Kbd> skips.
                       </>
                     ) : (
                       <>
@@ -795,7 +841,7 @@ function Summary({ r, reviewed, next, onNext, onPuzzles, onRestart }: { r: GameR
       <div className="summary-actions">
         {next ? (
           <Button variant="primary" size="lg" onClick={() => onNext(next.metrics.matchId)}>
-            Next: {next.metrics.champion} {count > 0 ? `in ${count}s` : ""}
+            Next: {champName(next.metrics.champion)} {count > 0 ? `in ${count}s` : ""}
           </Button>
         ) : (
           <Button variant="primary" size="lg" onClick={onPuzzles}>
@@ -877,3 +923,51 @@ function safeSet(k: string, v: string) {
   }
 }
 
+
+function GuidedStart({ r, chapters, replay, opening, onStart }: { r: GameReport; chapters: import("../../core/walkthrough").Chapter[]; replay: ReplayState | null; opening: string | null; onStart: (mode: "replay" | "map") => void }) {
+  const canReplay = !!replay && (replay.kind === "open" || replay.kind === "ready" || replay.kind === "can-download" || replay.kind === "downloading");
+  const total = chapters.reduce((s, c) => s + c.cost, 0);
+  const why =
+    !replay
+      ? "Checking the League client…"
+      : replay.kind === "client-closed"
+        ? "Open the League client to watch this on the real replay."
+        : replay.kind === "api-disabled"
+          ? "Turn on replay control below to watch this on the real replay."
+          : replay.kind === "unavailable"
+            ? replay.reason
+            : null;
+  return (
+    <section className="guided">
+      <div className="guided-head">
+        <div>
+          <span className="eyebrow">Guided review</span>
+          <h2>{chapters.length} decision{chapters.length > 1 ? "s" : ""} cost you about {total.toLocaleString("en-US")}g</h2>
+          <p className="muted">Each chapter starts a few seconds before the call that caused it, stops so you can make the call yourself, then shows what was really there and the better play.</p>
+        </div>
+        <div className="guided-cta">
+          {canReplay ? (
+            <Button variant="primary" size="lg" loading={!!opening} onClick={() => onStart("replay")}>
+              <Play size={16} fill="currentColor" /> {opening ?? "Start on the replay"}
+            </Button>
+          ) : null}
+          <Button variant={canReplay ? "ghost" : "primary"} size={canReplay ? "sm" : "lg"} onClick={() => onStart("map")}>
+            {canReplay ? "Use the map instead" : <><Play size={16} fill="currentColor" /> Start on the map</>}
+          </Button>
+          {why && <small className="muted">{why}</small>}
+        </div>
+      </div>
+      <ol className="guided-list">
+        {chapters.map((c, i) => (
+          <li key={c.id}>
+            <span className="wt-num">{i + 1}</span>
+            <span className="guided-label">{c.label}</span>
+            <span className="guided-kind">{{ death: "death", recall: "recall", objective: "objective", roam: "roam", farm: "farm" }[c.kind]}</span>
+            <span className={`wt-cost ${c.cost >= 600 ? "hi" : c.cost >= 300 ? "mid" : "lo"}`}>{c.cost.toLocaleString("en-US")}g</span>
+          </li>
+        ))}
+      </ol>
+      {!r.waves?.champs?.length && <p className="guided-tip">Tip: read the replay below first. Then each call shows exactly what was on your minimap, and what the fog was hiding.</p>}
+    </section>
+  );
+}

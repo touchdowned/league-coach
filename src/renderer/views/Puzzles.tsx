@@ -7,6 +7,7 @@ import { ChampIcon, MapBackdrop } from "../charts";
 import { Rift, useGameClock } from "../rift";
 import { useProgress } from "../progress";
 import { Button, Kbd } from "../ui";
+import { champName } from "../../core/names";
 
 const KEY = "lc.puzzles";
 interface Stats {
@@ -177,12 +178,12 @@ function DecisionPuzzles({ games, seg }: { games: GameReport[]; seg: React.React
             <span className={`tag ${p.source === "your-game" ? "tag-hot" : ""}`}>{p.source === "your-game" ? "From your game" : "Drill"}</span>
             <span className="cell-champ">
               <ChampIcon name={p.champion} size={28} />
-              {p.champion}
+              {champName(p.champion)}
               {p.opponent && (
                 <>
                   <span className="vs">vs</span>
                   <ChampIcon name={p.opponent} size={28} />
-                  {p.opponent}
+                  {champName(p.opponent)}
                 </>
               )}
             </span>

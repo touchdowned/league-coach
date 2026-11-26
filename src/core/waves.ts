@@ -50,7 +50,30 @@ export function projectLane(p: Pt): { lane: Lane; s: number } | null {
     const a = along(lane, p);
     if (a.off <= MAX_OFF && (!best || a.off < best.off)) best = { lane, ...a };
   }
-  return best && { lane: best.lane, s: best.s };
+  if (best) return { lane: best.lane, s: best.s };
+  // In a base, between the nexus and the lane's inhibitor: a wave that just spawned, or one
+  // walking home. Counted in the lane it belongs to, at that lane's end.
+  for (const [team, nexus] of [[100, NEXUS[100]], [200, NEXUS[200]]] as const) {
+    if (Math.hypot(p.x - nexus.x, p.y - nexus.y) > 3600) continue;
+    let pick: { lane: Lane; off: number } | null = null;
+    for (const lane of LANES) {
+      const end = team === 100 ? PATH[lane][0] : PATH[lane][PATH[lane].length - 1];
+      const off = segDist(p, nexus, end);
+      if (off <= MAX_OFF && (!pick || off < pick.off)) pick = { lane, off };
+    }
+    if (pick) return { lane: pick.lane, s: team === 100 ? 0 : 1 };
+  }
+  return null;
+}
+
+/** Nexus positions (game units). */
+const NEXUS = { 100: { x: 1550, y: 1660 }, 200: { x: 13230, y: 13250 } };
+
+function segDist(p: Pt, a: Pt, b: Pt): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
 }
 
 export interface WaveSample {
@@ -58,6 +81,8 @@ export interface WaveSample {
   t: number;
   /** Progress of each minion along the lane, per team (b = blue, r = red), 2 decimals. */
   lanes: Record<Lane, { b: number[]; r: number[] }>;
+  /** Ward icons on the fog-off minimap (game units). */
+  wards?: { team: 100 | 200; x: number; y: number }[];
 }
 
 /** Champions read off the minimap at one moment, in one view. */
@@ -65,7 +90,10 @@ export interface ChampSample {
   t: number;
   /** "team": your team's fog of war, what you could see. "off": everything. */
   fog: "team" | "off";
-  at: { id: number; x: number; y: number }[];
+  /** `inferred`: not read off the minimap, filled in while hidden under another icon (see fillOcclusions). */
+  at: { id: number; x: number; y: number; inferred?: true; /** Portrait match score (lower is surer), when matched by portrait. */ score?: number }[];
+  /** Rings seen but not matched to a champion (named later by tracking, if they can be). */
+  unk?: { team: 100 | 200; x: number; y: number }[];
 }
 
 export interface WaveTrack {
@@ -76,6 +104,30 @@ export interface WaveTrack {
   champs?: ChampSample[];
   /** Whose fog the "team" view showed. Vision reads are only used when it's yours. */
   viewTeam?: number;
+  /** Live Client Data polls taken during the pass (only the ones around a change). */
+  live?: import("./telemetry").LivePoll[];
+  /** HP and resource bars of all ten players per fog-off frame (index = participant id - 1). */
+  hud?: import("./hud").HudSample[];
+  /** How the pass ran: capture cost, sample counts, calibration. */
+  scanInfo?: {
+    /** "recorder": Riot's own frame recorder. "screenshot": desktop screenshots (the slow fallback). */
+    method?: "recorder" | "screenshot";
+    captureMsMedian: number;
+    captureMsP90: number;
+    samples: number;
+    polls: number;
+    minimap: { x: number; y: number; w: number; h: number };
+    screen: { w: number; h: number };
+    until: number;
+    /** Game ms of the last frame read: checks only cover up to here. */
+    lastFrame?: number;
+    /** Each pass: frames read, frames per game second, wall time. */
+    passes?: { fog: "off" | "team"; method: "recorder" | "screenshot"; frames: number; fps: number; wallMs: number; maxBacklog?: number; /** Frames the pass should give at its fps: a mismatch means frame times are off. */ expectedFrames?: number; segments?: number }[];
+    /** Champion reads dropped as impossible jumps, and unmatched rings named by tracking. */
+    tracking?: { dropped: number; named: number; filled?: number; rematched?: number };
+    /** The replay's Fog of War team view set before each pass, as read back from the screen. */
+    views?: { fog: "off" | "team"; want: "All" | "Blue" | "Red"; read: "All" | "Blue" | "Red" | null }[];
+  };
 }
 
 export function sampleFromDots(t: number, dots: Dot[]): WaveSample {
@@ -83,7 +135,7 @@ export function sampleFromDots(t: number, dots: Dot[]): WaveSample {
   for (const d of dots) {
     const p = projectLane(d);
     if (!p) continue;
-    lanes[p.lane][d.team === 100 ? "b" : "r"].push(Math.round(p.s * 100) / 100);
+    for (let k = 0; k < (d.n ?? 1); k++) lanes[p.lane][d.team === 100 ? "b" : "r"].push(Math.round(p.s * 100) / 100);
   }
   return { t, lanes };
 }

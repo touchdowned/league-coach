@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { findOpponent, findPlayer } from "../src/core/analysis";
 import { readGame } from "../src/core/engine";
-import { crop, detectDots, findMinimap, Frame, gameToPixel, medianFrame } from "../src/core/minimap";
+import { crop, detectDots, Dot, findMinimap, Frame, gameToPixel, medianFrame } from "../src/core/minimap";
 import { buildTrack } from "../src/core/track";
 import type { TimelineEvent } from "../src/core/types";
 import { minionsAt, pointOnLane, projectLane, sampleFromDots, waveAt, WaveSample, WaveTrack } from "../src/core/waves";
@@ -80,6 +80,63 @@ describe("minimap reading", () => {
     expect(c.w).toBe(20);
     expect(c.data[0]).toBe(f.data[(5 * 50 + 10) * 4]);
   });
+
+  it("reads a ward star once and does not count its pieces as minions", () => {
+    const size = 247;
+    const empty = blank(size, size, 5);
+    const withMinions = clone(empty);
+    for (const s of [0.4, 0.42, 0.44]) {
+      const p = pointOnLane("MIDDLE", s);
+      const { px, py } = gameToPixel(p.x, p.y, size);
+      paint(withMinions, px, py, 2, BLUE);
+    }
+    // A blue ward as drawn on a real 247 px minimap (copied from a replay frame):
+    // B team colour, # its dark navy outline, the rest map. Centre = row 4, column 7.
+    const STAR = [
+      "......#........",
+      "......#B##.....",
+      ".....#BBB#.....",
+      ".###.#BBB.####.",
+      ".#BB###B.##BB#.",
+      "..#BBB..#BBB##.",
+      "...#.BB.BBB##..",
+      "....##BBB###...",
+      ".....##B.#.....",
+      "......#B##.....",
+      "......##.......",
+    ];
+    const f = clone(withMinions);
+    const [cx, cy] = [60, 170]; // blue-side jungle: off the lanes, structures and fountain
+    STAR.forEach((row, dy) =>
+      [...row].forEach((c, dx) => {
+        if (c === ".") return;
+        const i = ((cy + dy - 4) * size + cx + dx - 7) * 4;
+        [f.data[i], f.data[i + 1], f.data[i + 2]] = c === "B" ? BLUE : [10, 35, 57];
+      }),
+    );
+    const before = detectDots(withMinions, empty).filter((d) => d.team === 100);
+    const wards: Dot[] = [];
+    const dots = detectDots(f, empty, { wards }).filter((d) => d.team === 100);
+    expect(wards).toHaveLength(1);
+    expect(wards[0].team).toBe(100);
+    const at = gameToPixel(wards[0].x, wards[0].y, size);
+    expect(Math.hypot(at.px - cx, at.py - cy)).toBeLessThan(2.5);
+    expect(dots.length).toBe(before.length);
+    expect(dots.reduce((n, d) => n + (d.n ?? 1), 0)).toBe(3);
+  });
+
+  it("counts two minions touching side by side as two, not as a bar", () => {
+    const size = 247;
+    const empty = blank(size, size, 5);
+    const f = clone(empty);
+    const p = pointOnLane("BOTTOM", 0.5);
+    const { px, py } = gameToPixel(p.x, p.y, size);
+    paint(f, px - 2, py, 2, BLUE);
+    paint(f, px + 2, py, 2, BLUE); // one 9x5 px blob, wider than one dot
+    const dots = detectDots(f, empty).filter((d) => d.team === 100);
+    expect(dots).toHaveLength(1);
+    expect(dots[0].n).toBe(2);
+  });
 });
 
 // ---- wave reads ----
@@ -127,8 +184,8 @@ describe("wave state from the replay", () => {
 });
 
 // ---- champions and vision ----
-import { detectChampions, iconGrid } from "../src/core/minimap";
-import { hasVision, lastSeen, mergeReplayPositions, truthAt, visibleAt } from "../src/core/vision";
+import { backgroundFrame, detectChampions, findRings, FOUNTAINS, iconGrid } from "../src/core/minimap";
+import { dropJumps, hasVision, lastSeen, mergeReplayPositions, nameRings, truthAt, visibleAt } from "../src/core/vision";
 import type { ChampSample } from "../src/core/waves";
 
 function icon(seed: number): Frame {
@@ -228,5 +285,100 @@ describe("what you could see vs what was true", () => {
     const d = readGame(g.match, g.timeline, buildTrack(g.match, g.timeline), me, findOpponent(g.match, me), w).find((l) => l.kind === "death")!;
     expect(d.nextTime).toMatch(/^You couldn't see Champ6 coming/);
     expect(d.evidence.join(" ")).toMatch(/With fog off, 20s before you died Champ6 was/);
+  });
+});
+
+describe("champion rings that touch or overlap", () => {
+  it("splits two touching same-team rings and keeps a half-covered one", () => {
+    const icons = [1, 2, 3, 4].map(icon);
+    const refs = [
+      { id: 1, team: 100 as const, grid: iconGrid(icons[0]) },
+      { id: 2, team: 100 as const, grid: iconGrid(icons[1]) },
+      { id: 6, team: 200 as const, grid: iconGrid(icons[2]) },
+      { id: 7, team: 200 as const, grid: iconGrid(icons[3]) },
+    ];
+    const f = blank(300, 300, 9);
+    // Two allies side by side (rings touch, one blob), and a red ring a third under a blue one.
+    stamp(f, icons[0], 100, 100, 11, BLUE);
+    stamp(f, icons[1], 121, 100, 11, BLUE);
+    stamp(f, icons[2], 200, 200, 11, RED);
+    stamp(f, icons[3], 214, 205, 11, RED);
+    const rings = findRings(f);
+    const near = (x: number, y: number, team: number) => rings.some((r) => r.team === team && Math.hypot(r.cx - x, r.cy - y) < 2.5);
+    expect(near(100, 100, 100)).toBe(true);
+    expect(near(121, 100, 100)).toBe(true);
+    expect(near(200, 200, 200)).toBe(true);
+    expect(near(214, 205, 200)).toBe(true);
+    expect(rings.length).toBe(4);
+    // The fully visible ones are still named; the covered ones come back named or as unknown, never as someone else.
+    const found = detectChampions(f, refs, 38, rings);
+    const at = (id: number) => found.find((c) => c.id === id);
+    expect(at(2)).toBeTruthy();
+    expect(at(7)).toBeTruthy();
+    for (const c of found) if (c.id === 1) expect(Math.hypot(gameToPixel(c.x, c.y, 300).px - 100, gameToPixel(c.x, c.y, 300).py - 100)).toBeLessThan(3);
+  });
+
+  it("doesn't count minion dots inside a champion ring, or fountain icons, as minions", () => {
+    const size = 300;
+    const empty = medianFrame([blank(size, size, 5)]);
+    const f = clone(empty);
+    stamp(f, icon(1), 150, 150, 11, BLUE);
+    paint(f, 150, 150, 2.5, BLUE); // a blue spot in the portrait art
+    const fountain = gameToPixel(500, 500, size);
+    paint(f, fountain.px, fountain.py, 2.5, BLUE);
+    const lane = gameToPixel(pointOnLane("MIDDLE", 0.3).x, pointOnLane("MIDDLE", 0.3).y, size);
+    paint(f, lane.px, lane.py, 2.5, RED);
+    const dots = detectDots(f, empty, { exclude: findRings(f) });
+    expect(dots.length).toBe(1);
+    expect(dots[0].team).toBe(200);
+  });
+});
+
+describe("naming rings by tracking", () => {
+  it("names an unmatched ring after the missing champion who was just there, and leaves ties alone", () => {
+    const champs: ChampSample[] = [
+      { t: 1000, fog: "off", at: [{ id: 6, x: 5000, y: 5000 }, { id: 7, x: 9000, y: 9000 }] },
+      { t: 2000, fog: "off", at: [{ id: 7, x: 9000, y: 9000 }], unk: [{ team: 200, x: 5200, y: 5100 }] },
+      { t: 3000, fog: "off", at: [{ id: 6, x: 5400, y: 5200 }, { id: 8, x: 5500, y: 5200 }] },
+      { t: 4000, fog: "off", at: [], unk: [{ team: 200, x: 5450, y: 5200 }] },
+    ];
+    const n = nameRings(champs, (id) => (id >= 6 ? 200 : 100));
+    expect(n).toBe(1);
+    expect(champs[1].at.find((a) => a.id === 6)).toEqual({ id: 6, x: 5200, y: 5100 });
+    expect(champs[1].unk).toBeUndefined();
+    expect(champs[3].unk?.length).toBe(1);
+  });
+});
+
+describe("scan cleanup", () => {
+  it("ignores blue map features that are on the empty map", () => {
+    const empty = blank(300, 300, 4);
+    // A bright blue arc on the map itself (a river edge), present in the background too.
+    for (let a = 0; a < Math.PI; a += 0.01) paint(empty, 80 + Math.cos(a) * 11, 80 + Math.sin(a) * 11, 1, BLUE);
+    const f = clone(empty);
+    stamp(f, icon(2), 200, 200, 11, BLUE);
+    expect(findRings(f).length).toBeGreaterThan(1);
+    const rings = findRings(f, empty);
+    expect(rings.length).toBe(1);
+    expect(Math.hypot(rings[0].cx - 200, rings[0].cy - 200)).toBeLessThan(2);
+  });
+
+  it("drops a read that jumps across the map and back", () => {
+    const champs: ChampSample[] = [1000, 2000, 3000, 4000].map((t) => ({ t, fog: "off" as const, at: [{ id: 1, x: 2000 + t / 10, y: 2000 }] }));
+    champs[2].at[0] = { id: 1, x: 12000, y: 12000 };
+    expect(dropJumps(champs)).toBe(1);
+    expect(champs[2].at).toEqual([]);
+    // A recall: moves once and stays. Kept.
+    const r: ChampSample[] = [1000, 2000, 3000, 4000].map((t) => ({ t, fog: "off" as const, at: [{ id: 1, x: t < 2500 ? 7000 : 400, y: t < 2500 ? 7000 : 400 }] }));
+    expect(dropJumps(r)).toBe(0);
+  });
+
+  it("takes the fountains from later frames", () => {
+    const early = blank(300, 300, 6);
+    const later = clone(early);
+    const fp = gameToPixel(FOUNTAINS[0].x, FOUNTAINS[0].y, 300);
+    stamp(early, icon(3), fp.px, fp.py, 11, BLUE); // a champion still in base at the start
+    const bg = backgroundFrame([early], [later]);
+    expect(findRings(bg).length).toBe(0);
   });
 });

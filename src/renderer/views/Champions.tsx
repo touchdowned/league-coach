@@ -3,6 +3,7 @@ import { ROLE_LABEL } from "../../core/benchmarks";
 import { championStats, ChampionStats } from "../../core/champions";
 import type { GameReport } from "../../core/types";
 import { ChampIcon } from "../charts";
+import { champName } from "../../core/names";
 
 const VERDICT: Record<ChampionStats["verdict"], { label: string; tip: string }> = {
   core: { label: "Core pick", tip: "You win on this and play it well. Spam it in ranked." },
@@ -30,7 +31,7 @@ export function ChampionsView({ games }: { games: GameReport[] }) {
           </p>
         </div>
       </div>
-      <div className="grid-2 wide-left">
+      <div className="grid-2 wide-left champ-grid">
         <div className="panel flush">
           <table className="table">
             <thead>
@@ -52,7 +53,7 @@ export function ChampionsView({ games }: { games: GameReport[] }) {
                     <span className="cell-champ">
                       <ChampIcon name={s.champion} size={28} />
                       <span>
-                        {s.champion}
+                        {champName(s.champion)}
                         <small className="muted"> {s.roles.map((r) => ROLE_LABEL[r]).join(", ")}</small>
                       </span>
                     </span>
@@ -86,7 +87,7 @@ export function ChampionsView({ games }: { games: GameReport[] }) {
             <div className="panel-head">
               <span className="cell-champ">
                 <ChampIcon name={sel.champion} size={40} />
-                <h3>{sel.champion}</h3>
+                <h3>{champName(sel.champion)}</h3>
               </span>
               <span className={`pill v-${sel.verdict}`}>{VERDICT[sel.verdict].label}</span>
             </div>
@@ -99,7 +100,7 @@ export function ChampionsView({ games }: { games: GameReport[] }) {
                 {sel.matchups.map((mu) => (
                   <li key={mu.opponent}>
                     <ChampIcon name={mu.opponent} size={26} />
-                    <span className="mu-name">{mu.opponent}</span>
+                    <span className="mu-name">{champName(mu.opponent)}</span>
                     <span className="muted small">
                       {mu.wins}W {mu.games - mu.wins}L
                     </span>

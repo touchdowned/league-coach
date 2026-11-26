@@ -16,9 +16,19 @@ export interface Settings {
   autoLaunchReplay: boolean;
   /** Start hidden at Windows sign-in so games are caught without opening the app. */
   launchAtLogin: boolean;
+  /** Draw the goal overlay over League while you play. */
+  overlay: boolean;
+  /** Short contextual reminders on the overlay (objective spawns, gold, pace). */
+  overlayNudges: boolean;
+  /** Where the overlay's goal panel sits, as fractions of the screen. */
+  overlayPos: { x: number; y: number } | null;
+  /** Show the goal card during champ select. */
+  draftCompanion: boolean;
+  /** Open the mental debrief when a game ends. */
+  autoDebrief: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { apiKey: "", riotId: "", region: "NA", matchCount: 40, leagueDir: "C:\\Riot Games\\League of Legends", vodDir: "", autoAdvanceSec: 14, autoReview: true, autoLaunchReplay: false, launchAtLogin: false };
+export const DEFAULT_SETTINGS: Settings = { apiKey: "", riotId: "", region: "NA", matchCount: 40, leagueDir: "C:\\Riot Games\\League of Legends", vodDir: "", autoAdvanceSec: 14, autoReview: true, autoLaunchReplay: false, launchAtLogin: false, overlay: true, overlayNudges: true, overlayPos: null, draftCompanion: true, autoDebrief: true };
 
 export class JsonStore {
   constructor(private dir: string) {}

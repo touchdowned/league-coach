@@ -211,6 +211,24 @@ export class LeagueClient {
     return !!r && r.status < 400;
   }
 
+  /** POST /replay/playback with any of time, paused, speed. */
+  async setPlayback(body: { time?: number; paused?: boolean; speed?: number }): Promise<{ time: number; length: number; paused: boolean; speed?: number } | null> {
+    const r = await request<{ time: number; length: number; paused: boolean; speed?: number }>("https://127.0.0.1:2999/replay/playback", { method: "POST", body, timeoutMs: 1500 }).catch(() => null);
+    return r?.status === 200 ? r.data : null;
+  }
+
+  /** Keyframed camera/playback sequence (smooth camera moves). An empty object clears it. */
+  async setSequence(body: Record<string, unknown>): Promise<boolean> {
+    const r = await request("https://127.0.0.1:2999/replay/sequence", { method: "POST", body, timeoutMs: 1500 }).catch(() => null);
+    return !!r && r.status < 400;
+  }
+
+  /** /liveclientdata/allgamedata: answers during replays too, at the replay's current time. */
+  async liveData(): Promise<unknown | null> {
+    const r = await request<unknown>("https://127.0.0.1:2999/liveclientdata/allgamedata", { timeoutMs: 1500 }).catch(() => null);
+    return r?.status === 200 ? r.data : null;
+  }
+
   /** The game id of whatever the client is running right now (a replay or a live game). */
   async currentGameId(): Promise<string | null> {
     const s = await this.lcuGet<{ gameData?: { gameId?: number } }>("/lol-gameflow/v1/session");
@@ -224,6 +242,31 @@ export class LeagueClient {
     } catch {
       /* not critical */
     }
+  }
+
+  /**
+   * Starts Riot's recorder writing PNG frames of [startSec, endSec] at `fps`, one file per
+   * game frame step (frame k is game time startSec + k / fps). Riot puts the frames in a new
+   * subfolder of `dir`. The caller drives playback. True when the recorder accepted it.
+   */
+  async startFrameRecording(dir: string, startSec: number, endSec: number, fps: number): Promise<boolean> {
+    await fs.mkdir(dir, { recursive: true });
+    const r = await request("https://127.0.0.1:2999/replay/recording", {
+      method: "POST",
+      body: { recording: true, path: dir, codec: "png", startTime: startSec, endTime: endSec, currentTime: startSec, framesPerSecond: fps, enforceFrameRate: true, lossless: true, replaySpeed: 1 },
+      timeoutMs: 3000,
+    }).catch(() => null);
+    return !!r && r.status < 400;
+  }
+
+  async stopRecording(): Promise<void> {
+    await request("https://127.0.0.1:2999/replay/recording", { method: "POST", body: { recording: false }, timeoutMs: 3000 }).catch(() => null);
+  }
+
+  /** The recorder's state, or null when the Replay API doesn't answer. */
+  async recordingState(): Promise<{ recording: boolean; currentTime?: number; path?: string; width?: number; height?: number } | null> {
+    const r = await request<{ recording: boolean; currentTime?: number; path?: string; width?: number; height?: number }>("https://127.0.0.1:2999/replay/recording", { timeoutMs: 1500 }).catch(() => null);
+    return r?.status === 200 ? r.data : null;
   }
 
   /**

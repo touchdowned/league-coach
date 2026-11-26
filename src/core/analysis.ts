@@ -15,6 +15,7 @@ import type {
   TimelineDto,
   TimelineEvent,
 } from "./types";
+import { champName } from "./names";
 
 const MIN = 60_000;
 const LANE_PHASE_END = 14 * MIN;
@@ -234,7 +235,7 @@ export function findMistakes(match: MatchDto, timeline: TimelineDto, puuid: stri
         "threw_lead",
         6,
         `Threw a ${goldDiff}g lead at ${at}`,
-        `You were ${goldDiff}g ahead of ${opp.championName} and died, giving most of it back.`,
+        `You were ${goldDiff}g ahead of ${champName(opp.championName)} and died, giving most of it back.`,
         "You were ahead, so you likely played as if the lead made you safe from everything, not just your lane opponent.",
         "When you're ahead in lane, the only way to lose it is to die. Shove, take plates, recall on a good timer. Make them come to you.",
       );
@@ -258,7 +259,7 @@ export function findMistakes(match: MatchDto, timeline: TimelineDto, puuid: stri
         "early_death",
         4,
         `Died in lane at ${at}`,
-        killer ? `${killer.championName} killed you${involved.length > 1 ? ` with help` : " 1v1"}.` : "You died during laning.",
+        killer ? `${champName(killer.championName)} killed you${involved.length > 1 ? ` with help` : " 1v1"}.` : "You died during laning.",
         "You likely misjudged how much damage they had, or traded when their key ability was up.",
         "Before trading, check their level, items and whether their main spell is up. If you can't name their kill combo, trade only when it's on cooldown.",
       );
@@ -276,7 +277,7 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
 
   const strengths: string[] = [];
   if (m.cs10 >= bench.cs10 + 5) strengths.push(`Strong farming: ${m.cs10} CS at 10 min (typical is ~${bench.cs10}).`);
-  if ((m.goldDiff15 ?? 0) >= 500) strengths.push(`Won lane: +${m.goldDiff15}g on ${m.opponentChampion} at 15 min.`);
+  if ((m.goldDiff15 ?? 0) >= 500) strengths.push(`Won lane: +${m.goldDiff15}g on ${champName(m.opponentChampion)} at 15 min.`);
   if (m.deathsPre14 === 0) strengths.push("No deaths before 14 minutes.");
   if (m.killParticipation >= bench.killParticipation + 0.1)
     strengths.push(`High kill participation (${Math.round(m.killParticipation * 100)}%).`);

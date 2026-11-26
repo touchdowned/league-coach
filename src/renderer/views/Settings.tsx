@@ -1,4 +1,4 @@
-import { Film, FolderOpen, Gauge, KeyRound, Power, Zap } from "lucide-react";
+import { Film, FolderOpen, Gauge, KeyRound, Power, Zap, HeartPulse } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { REGIONS } from "../../core/riot";
@@ -120,6 +120,36 @@ export function SettingsView({ value, onSave }: { value: Settings; onSave: (s: S
             <small>Runs in the background from sign-in, so games are caught even if you didn't open the app. It shows itself when a review is ready.</small>
           </div>
           <input type="checkbox" checked={s.launchAtLogin} onChange={(e) => setS({ ...s, launchAtLogin: e.target.checked })} />
+        </label>
+
+        <h3><HeartPulse size={14} /> Mental game</h3>
+        <label className="inline-action">
+          <div>
+            <strong>Goal card in champ select</strong>
+            <small>A small card next to the client to pick one skill goal and one mental goal for the game.</small>
+          </div>
+          <input type="checkbox" checked={s.draftCompanion !== false} onChange={(e) => setS({ ...s, draftCompanion: e.target.checked })} />
+        </label>
+        <label className="inline-action">
+          <div>
+            <strong>Overlay over League</strong>
+            <small>Your goals, focus and a reset card while dead, drawn over League in a click-through panel. Needs Borderless or Windowed mode. Reads only League's own Live Client Data API. Ctrl+Shift+H hides it.</small>
+          </div>
+          <input type="checkbox" checked={s.overlay !== false} onChange={(e) => setS({ ...s, overlay: e.target.checked })} />
+        </label>
+        <label className="inline-action">
+          <div>
+            <strong>Reminders on the overlay</strong>
+            <small>One line for a few seconds when it matters: an objective about to spawn, gold piling up, CS pace, a shutdown on your head.</small>
+          </div>
+          <input type="checkbox" checked={s.overlayNudges !== false} disabled={s.overlay === false} onChange={(e) => setS({ ...s, overlayNudges: e.target.checked })} />
+        </label>
+        <label className="inline-action">
+          <div>
+            <strong>Debrief when a game ends</strong>
+            <small>Opens a two-minute mental debrief as soon as you leave the game. The review opens after it.</small>
+          </div>
+          <input type="checkbox" checked={s.autoDebrief !== false} onChange={(e) => setS({ ...s, autoDebrief: e.target.checked })} />
         </label>
 
         <h3><Gauge size={14} /> Review</h3>
