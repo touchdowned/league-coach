@@ -53,6 +53,8 @@ const RECKON_REACH = 3000;
 const PORTRAIT = 850;
 /** A wave fighting under a portrait is held in place this long without a read. */
 const HIDE_MS = 15_000;
+/** A portrait within this of the fight (lane units) hides its dots: the read's counts don't count (same as tempo's STATE_COVER). */
+const STATE_COVER = 800;
 /** No enemy minion near for this long: the wave is walking, not fighting. */
 const FREE_MS = 4000;
 /** How long a wave that reached a tower unread is taken to last there: a tower alone kills a six-minion wave in about 20 s. */
@@ -81,6 +83,8 @@ export interface LaneRead {
   underMyTower: number;
   /** A lead here is where an unread wave must be (hidden under a portrait, or walked on to a tower), not a read (see follow). */
   inferred?: true;
+  /** A champion portrait covered the fight (front or a lead) in this read: the counts are held from the last uncovered read. */
+  occluded?: true;
   /** What this one frame read, before smoothing or following: attackers in tower range, and each side's lead minion. */
   seen?: { underMyTower: number; underTheirTower: number; leadMine: number | null; leadTheirs: number | null; mine: number; theirs: number; myTower: number; theirTower: number };
 }
@@ -276,7 +280,17 @@ export function laneSeries(track: WaveTrack, lane: Lane, teamId: number, geo: La
     portraits.set(c.t, xs);
   }
   const { rm, rt } = follow(raws, sm, st, (t) => portraits.get(t) ?? []);
+  // A read is occluded when a portrait sits within STATE_COVER of the fight: the front or either
+  // lead. Its dots under the portrait aren't drawn, so its counts say nothing (a 5 v 5 under two
+  // laners reads as 0 v 0). Counts come only from uncovered reads in the window, else are held.
+  const occluded = raws.map((r, i) => {
+    const ports = portraits.get(r.t) ?? [];
+    const pts = [sm[i], st[i], rm.lead[i], rt.lead[i]].filter((x): x is number => x !== null);
+    return ports.some((p) => pts.some((x) => Math.abs(p - x) <= STATE_COVER));
+  });
   const out: LaneRead[] = [];
+  let heldMine = 0;
+  let heldTheirs = 0;
   for (let i = 0; i < n; i++) {
     const leadMine = rm.lead[i];
     const leadTheirs = rt.lead[i];
@@ -284,11 +298,18 @@ export function laneSeries(track: WaveTrack, lane: Lane, teamId: number, geo: La
     let theirs = 0;
     let ut = 0;
     let um = 0;
+    let open = 0;
     for (let k = win[i][0]; k <= win[i][1]; k++) {
-      mine = Math.max(mine, groupMine(raws[k], leadMine));
-      theirs = Math.max(theirs, groupTheirs(raws[k], leadTheirs));
       ut = Math.max(ut, underTheirs(raws[k]));
       um = Math.max(um, underMine(raws[k]));
+      if (occluded[k]) continue;
+      open++;
+      mine = Math.max(mine, groupMine(raws[k], leadMine));
+      theirs = Math.max(theirs, groupTheirs(raws[k], leadTheirs));
+    }
+    if (!open) {
+      mine = leadMine === null ? 0 : heldMine;
+      theirs = leadTheirs === null ? 0 : heldTheirs;
     }
     if (rm.size[i] !== null) {
       mine = Math.max(mine, rm.size[i]!);
@@ -298,8 +319,13 @@ export function laneSeries(track: WaveTrack, lane: Lane, teamId: number, geo: La
       theirs = Math.max(theirs, rt.size[i]!);
       if (leadTheirs! <= raws[i].myTower + TOWER_RANGE) um = Math.max(um, rt.size[i]!);
     }
+    if (open) {
+      heldMine = mine;
+      heldTheirs = theirs;
+    }
     const r = derive(raws[i], leadMine, leadTheirs, mine, theirs, ut, um);
     if (rm.size[i] !== null || rt.size[i] !== null) r.inferred = true;
+    if (occluded[i]) r.occluded = true;
     r.seen = { underMyTower: underMine(raws[i]), underTheirTower: underTheirs(raws[i]), leadMine: lm[i], leadTheirs: lt[i], mine: groupMine(raws[i], lm[i]), theirs: groupTheirs(raws[i], lt[i]), myTower: raws[i].myTower, theirTower: raws[i].theirTower };
     out.push(r);
   }
@@ -552,7 +578,7 @@ export function waveEvents(series: LaneRead[], lane: Lane, falls?: { my: number[
           const r = series[k];
           const back = side === "mine" ? r.zone === "my side" || r.zone === "my tower" : r.zone === "their side" || r.zone === "their tower";
           const bigger = side === "mine" ? r.theirs > r.mine : r.mine > r.theirs;
-          if (back && bigger && r.front !== null) {
+          if (back && bigger && r.front !== null && !r.occluded) {
             out.push({ kind: "bounce", lane, side, t0: series[last].t, t1: r.t, size: side === "mine" ? r.theirs : r.mine, against: side === "mine" ? r.mine : r.theirs, at: r.front, value: (r.t - series[last].t) / 1000, reliable: RELIABLE.bounce });
             break;
           }
@@ -578,7 +604,7 @@ export function waveEvents(series: LaneRead[], lane: Lane, falls?: { my: number[
         if (held(j)) last = j;
         j++;
       }
-      const run = series.slice(i, last + 1).filter((r) => r.front !== null);
+      const run = series.slice(i, last + 1).filter((r) => r.front !== null && !r.occluded);
       const span = series[last].t - series[i].t;
       // The front must also stay put over the whole run, not just drift slowly.
       const fronts = run.map((r) => r.front!);
@@ -636,26 +662,36 @@ export function waveEvents(series: LaneRead[], lane: Lane, falls?: { my: number[
     const other = (r: LaneRead) => (side === "mine" ? r.theirs : r.mine);
     const own = (r: LaneRead) => (side === "mine" ? r.mine : r.theirs);
     for (let i = 1; i < n; i++) {
-      if (!(series[i].contact && !series[i - 1].contact && other(series[i]) >= 3 && own(series[i]) >= 1)) continue;
+      if (!(series[i].contact && !series[i - 1].contact && other(series[i]) >= 3 && own(series[i]) >= 1) || series[i].occluded) continue;
       // First sample after contact began where the other group is gone or no longer in contact.
       let k = i;
       while (k < n && series[k].t - series[i].t <= 12_000 && series[k].contact) k++;
-      if (k >= n || series[k].t - series[i].t > 12_000 || own(series[k]) < 1) continue;
+      if (k >= n || series[k].t - series[i].t > 12_000 || own(series[k]) < 1 || series[k].occluded) continue;
       // The other side's lead must have fallen back by a group's length or vanished: wiped, not walked past.
       const gone = (q: number) => (side === "mine" ? series[q].leadTheirs === null || series[q].leadTheirs! - (series[i].leadTheirs ?? 0) > GROUP : series[q].leadMine === null || (series[i].leadMine ?? 0) - series[q].leadMine! > GROUP);
       // And stayed gone: a count that reads 0 for a second and comes back was dots merging.
       let held = 0;
       let lostLead = true;
       for (let q = k; q < n && series[q].t - series[k].t <= WIPE_HOLD_MS; q++) {
-        if (!gone(q)) lostLead = false;
+        if (!gone(q) || series[q].occluded) lostLead = false;
         held = series[q].t - series[k].t;
       }
       if (!lostLead || held < WIPE_HOLD_MS - 1000) continue;
       out.push({ kind: "fast push", lane, side, t0: series[i].t, t1: series[k].t, size: own(series[k]), against: other(series[i]), at: (side === "mine" ? series[k].leadMine : series[k].leadTheirs) ?? series[k].front ?? 0, value: (series[k].t - series[i].t) / 1000, reliable: RELIABLE["fast push"] });
     }
   }
-  return out.sort((a, b) => a.t0 - b.t0);
+  // Evidence: a wipe, bounce or lead stands on at least EVIDENCE_READS uncovered reads inside it,
+  // and lasts its minimum (a single sample, t0 == t1, is never an event). Crashes have their own rule.
+  const evident = (e: WaveEvent) => {
+    if (e.kind === "crash") return true;
+    if (e.t1 - e.t0 < (MIN_MS[e.kind] ?? 1)) return false;
+    return series.filter((r) => r.t >= e.t0 && r.t <= e.t1 && !r.occluded).length >= EVIDENCE_READS;
+  };
+  return out.filter(evident).sort((a, b) => a.t0 - b.t0);
 }
+
+const EVIDENCE_READS = 2;
+const MIN_MS: Partial<Record<WaveEventKind, number>> = { "fast push": 4000, bounce: 4000 };
 
 /** All three lanes. */
 export function allWaveEvents(track: WaveTrack, teamId: number, geo: LaneGeometry, events?: TimelineEvent[]): WaveEvent[] {
