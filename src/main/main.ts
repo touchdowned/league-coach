@@ -913,7 +913,11 @@ app.whenReady().then(async () => {
     },
   });
   handle("postgame:status", () => watcher?.status);
+  // A saved read that stopped early isn't a read: the game goes back to unread and is queued again.
+  const short = reports.filter((r) => r.waves && shortRead(r.waves.scanInfo));
+  for (const r of short) Object.assign(r, { waves: undefined, wavesRead: false, findings: undefined, recallWindows: undefined });
   readQueue.pending = (await store.readJson<PendingRead[]>("pending-reads.json", [])).filter((p) => reports.some((r) => r.metrics.matchId === p.matchId && !Array.isArray(r.findings)));
+  for (const r of short) readQueue.add(r.metrics.matchId, Date.now());
   handle("focus:get", () => currentFocus());
   await currentFocus().catch(() => undefined);
   handle("replay:close", async () => (await league()).closeReplay());

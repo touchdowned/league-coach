@@ -147,6 +147,11 @@ type OnFrame = (minimap: Frame, t: number, hud?: { blue: Frame; red: Frame; scre
 /** Where the minimap is in a frame of the given size. */
 type RectFor = (size: { w: number; h: number }) => Rect;
 
+/** Segments a pass may take before it gives up: a recorder that keeps stopping on its own isn't going to finish. */
+const MAX_SEGMENTS = 12;
+/** Unreadable recorder states in a row (1.5 s timeout each) before the recorder counts as gone. */
+const STATE_MISSES = 3;
+
 /**
  * One pass with Riot's recorder: it renders [from, to] frame by frame and writes PNGs at
  * exact game times (frame k = from + k / fps), much faster than screen capture and
@@ -158,8 +163,18 @@ type RectFor = (size: { w: number; h: number }) => Rect;
  * 1901 frames for a 1 fps pass of 835 s). If reading falls far behind (each frame is ~2 MB
  * on disk), the recording is stopped, the frames on disk are read, and a new recording
  * starts from the next frame's time.
+ *
+ * Why each segment ended is logged and kept in scanInfo: "cancelled", "backlog" (we stopped it to
+ * catch up), "recorder stopped at <s>" (League ended it on its own), "state unreadable" (the Replay
+ * API stopped answering), "no progress" (no frame for 25 s), "start failed", or "done". A recorder
+ * that stops on its own before the end is restarted from where it got to.
  */
-async function recorderPass(lc: LeagueClient, from: number, to: number, fps: number, rectFor: RectFor, onFrame: OnFrame, isCancelled: () => boolean, onTime: (t: number) => void): Promise<{ frames: number; wallMs: number; maxBacklog: number; expectedFrames: number; segments: number } | null> {
+async function recorderPass(lc: LeagueClient, from: number, to: number, fps: number, rectFor: RectFor, onFrame: OnFrame, isCancelled: () => boolean, onTime: (t: number) => void): Promise<{ frames: number; wallMs: number; maxBacklog: number; expectedFrames: number; segments: number; stops: string[] } | null> {
+  const stops: string[] = [];
+  const stop = (why: string) => {
+    stops.push(why);
+    console.log(`[scan] recorder segment ${stops.length} ended: ${why}`);
+  };
   const root = pathMod.join(app.getPath("temp"), "league-coach-frames", String(Date.now()));
   const t0 = Date.now();
   let frames = 0;
@@ -172,16 +187,22 @@ async function recorderPass(lc: LeagueClient, from: number, to: number, fps: num
       const base = pathMod.join(root, String(segments));
       await lc.setPlayback({ time: segFrom, paused: true });
       await sleep(1200);
-      if (!(await lc.startFrameRecording(base, segFrom, to, fps))) return segments ? { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments } : null;
+      if (!(await lc.startFrameRecording(base, segFrom, to, fps))) {
+        stop(`start failed at ${segFrom.toFixed(1)}`);
+        return segments ? { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments, stops } : null;
+      }
       segments++;
       await lc.setPlayback({ time: segFrom, paused: false, speed: 8 });
       let next = 0;
       let lastProgress = Date.now();
       let dir: string | null = null;
       let stopped = false;
+      let misses = 0;
+      let selfStop = false;
       while (true) {
         if (isCancelled()) {
           await lc.stopRecording();
+          stop("cancelled");
           break;
         }
         if (!dir) {
@@ -190,13 +211,24 @@ async function recorderPass(lc: LeagueClient, from: number, to: number, fps: num
           dir = d ? pathMod.join(base, d.name) : null;
         }
         const st = await lc.recordingState();
+        // One unanswered request isn't the recorder ending: keep going until several in a row fail.
+        misses = st ? 0 : misses + 1;
+        if (!st && misses < STATE_MISSES) {
+          await sleep(300);
+          continue;
+        }
         const done = stopped || !st || !st.recording;
+        if (done && !stopped && !selfStop) {
+          selfStop = true;
+          stop(!st ? `state unreadable ${misses}x after ${(segFrom + next / fps).toFixed(1)}` : `recorder stopped at ${(segFrom + next / fps).toFixed(1)}`);
+        }
         if (dir) {
           const files = (await fsp.readdir(dir).catch(() => [] as string[])).filter((f) => /^\d+\.png$/i.test(f)).sort();
           const have = new Set(files.map((f) => parseInt(f, 10)));
           if (files.length > maxBacklog) maxBacklog = files.length;
           if (!done && files.length > 80) {
             await lc.stopRecording();
+            stop(`backlog ${files.length} at ${(segFrom + next / fps).toFixed(1)}`);
             stopped = true;
             await sleep(500);
             continue;
@@ -228,6 +260,7 @@ async function recorderPass(lc: LeagueClient, from: number, to: number, fps: num
         if (pb?.paused) await lc.setPaused(false);
         if (Date.now() - lastProgress > 25_000) {
           await lc.stopRecording();
+          stop(`no progress for 25 s at ${(segFrom + next / fps).toFixed(1)}`);
           if (frames === 0) return null;
           stopped = true;
           break;
@@ -236,14 +269,17 @@ async function recorderPass(lc: LeagueClient, from: number, to: number, fps: num
       }
       await lc.setPaused(true);
       const segEnd = segFrom + Math.max(0, next - 1) / fps;
-      if (!stopped || isCancelled() || next === 0) break;
+      // League ended the recording before the end of the range: start again from where it got to.
+      const early = selfStop && segEnd < to - 1 / fps;
+      if (selfStop && !early) stops[stops.length - 1] = `done at ${segEnd.toFixed(1)}`;
+      if ((!stopped && !early) || isCancelled() || next === 0 || segments >= MAX_SEGMENTS) break;
       segFrom = segEnd + 1 / fps;
     }
   } finally {
     await lc.setPaused(true);
     await fsp.rm(root, { recursive: true, force: true }).catch(() => undefined);
   }
-  return { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments };
+  return { frames, wallMs: Date.now() - t0, maxBacklog, expectedFrames, segments, stops };
 }
 
 /**
@@ -474,7 +510,7 @@ export async function scanReplay(
       if (method === "recorder") {
         const r = await recorderPass(lc, from, end, fps, rectFor, reader(fog), isCancelled, label);
         if (r) {
-          passes.push({ fog, method, frames: r.frames, fps, wallMs: r.wallMs, maxBacklog: r.maxBacklog, expectedFrames: r.expectedFrames, segments: r.segments });
+          passes.push({ fog, method, frames: r.frames, fps, wallMs: r.wallMs, maxBacklog: r.maxBacklog, expectedFrames: r.expectedFrames, segments: r.segments, stops: r.stops });
           return;
         }
         method = "screenshot";

@@ -250,7 +250,10 @@ function lostWhile(c: Ctx, from: number, to: number) {
 
 function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
   const out: Leak[] = [];
+  let prevVisit = 0;
   for (const t0 of recallVisits(c, deaths)) {
+    const lastVisit = prevVisit;
+    prevVisit = t0;
     const from = positionAt(c.track, c.me.participantId, t0 - 20_000);
     if (!from) continue;
     const walk = Math.min(60, dist(from, FOUNTAIN[c.me.teamId]) / MOVE_SPEED);
@@ -310,7 +313,7 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
     }
 
     // Gold you sat on before this recall.
-    const fs = c.timeline.info.frames.filter((f) => f.timestamp < t0 && f.timestamp > t0 - 6 * MIN);
+    const fs = c.timeline.info.frames.filter((f) => f.timestamp < t0 && f.timestamp > Math.max(t0 - 6 * MIN, lastVisit + 30_000));
     const firstRich = fs.find((f) => (f.participantFrames[String(c.me.participantId)]?.currentGold ?? 0) >= 1300 && !wasDeadAt(c, deaths, f.timestamp));
     if (firstRich && t0 - firstRich.timestamp >= 90_000) {
       const held = Math.round((t0 - firstRich.timestamp) / 1000);
