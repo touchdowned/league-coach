@@ -1238,7 +1238,7 @@ body.overlay-body { user-select: none; }
 /* A finding over the replay (the overlay window is transparent and click-through outside the card). */
 .fo-root { position: fixed; inset: 0; pointer-events: none; }
 .fo-card { pointer-events: auto; position: absolute; left: 20px; top: 18%; width: min(470px, 34vw); display: grid; gap: 10px; padding: 16px 18px; border-radius: 16px; background: rgba(13, 15, 21, 0.93); backdrop-filter: blur(16px); box-shadow: 0 0 0 1px var(--hair-2), 0 24px 60px -20px #000; color: var(--text); font-size: 13.5px; line-height: 1.5; }
-.fo-card.small { width: min(360px, 26vw); }
+.fo-card.fo-compact { width: min(360px, 26vw); }
 .fo-head { display: flex; align-items: center; gap: 8px; }
 .fo-time { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); font-size: 15px; }
 .fo-status { margin-left: auto; color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }

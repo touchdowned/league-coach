@@ -57,7 +57,7 @@ export function FindingOverlay({ matchId, findingId }: { matchId: string; findin
 
   return (
     <div className="fo-root">
-      <div className={`fo-card ${small ? "small" : ""}`} {...hitMark}>
+      <div className={`fo-card ${small ? "fo-compact" : ""}`} {...hitMark}>
         <header className="fo-head">
           <span className="fo-time">{f.time}</span>
           <span className={`finding-kind k-${f.kind}`}>{KIND[f.kind]}</span>
