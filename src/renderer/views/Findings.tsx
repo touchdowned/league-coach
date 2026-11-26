@@ -11,7 +11,7 @@ const KIND: Record<Finding["kind"], string> = { recall: "Recall", exposure: "Jun
  * Module 3's findings for one game: the moment, the telemetry behind it, what it cost and
  * the fix, each with a button that seeks the open replay to a few seconds before it.
  */
-export function Findings({ findings, replayOpen, onNeedReplay }: { findings: Finding[]; replayOpen: boolean; onNeedReplay: () => Promise<boolean> }) {
+export function Findings({ findings, matchId, replayOpen, onNeedReplay }: { findings: Finding[]; matchId?: string; replayOpen: boolean; onNeedReplay: () => Promise<boolean> }) {
   const [open, setOpen] = useState<string | null>(findings[0]?.id ?? null);
   const [busy, setBusy] = useState<string | null>(null);
   const jump = async (f: Finding) => {
@@ -21,7 +21,9 @@ export function Findings({ findings, replayOpen, onNeedReplay }: { findings: Fin
       const res = await coach().replaySeek(f.jump.t / 1000, true);
       if (!res.ok || !res.value) return void toast.error("Couldn't move the replay", { description: res.ok ? "The replay window didn't answer. Is the replay still open?" : res.error });
       await coach().replayFollow(f.jump.follow);
-      toast.success(`Replay at ${fmtTime(f.jump.t)}, paused`, { description: `The moment is at ${f.time}. Press space in the replay to play.` });
+      // The app steps aside and the finding rides along on the replay.
+      const shown = matchId ? await coach().overlayFinding?.(matchId, f.id) : null;
+      if (!shown?.ok) toast.success(`Replay at ${fmtTime(f.jump.t)}, paused`, { description: `The moment is at ${f.time}. Press space in the replay to play.` });
     } finally {
       setBusy(null);
     }

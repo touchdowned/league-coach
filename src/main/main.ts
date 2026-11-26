@@ -90,7 +90,7 @@ function sameGame(matchId: string, replayLength: number): boolean {
 
 let overlayWatch: ReturnType<typeof setInterval> | null = null;
 
-async function openOverlay(matchId: string) {
+async function openOverlay(matchId: string, route = `overlay/${encodeURIComponent(matchId)}`) {
   overlayRender = await (await league()).getRender();
   overlay?.destroy();
   overlayMatch = matchId;
@@ -117,7 +117,7 @@ async function openOverlay(matchId: string) {
   overlay.setIgnoreMouseEvents(true, { forward: true });
   overlay.setVisibleOnAllWorkspaces(true);
   const dev = process.env.VITE_DEV_SERVER_URL;
-  const hash = `overlay/${encodeURIComponent(matchId)}`;
+  const hash = route;
   if (dev) overlay.loadURL(`${dev}#${hash}`);
   else overlay.loadFile(path.join(__dirname, "../../dist-renderer/index.html"), { hash });
   overlay.once("ready-to-show", () => overlay?.showInactive());
@@ -611,6 +611,8 @@ app.whenReady().then(async () => {
   });
   handle("stage:focus", () => focusWindow());
   handle("overlay:open", (matchId: string) => openOverlay(matchId));
+  // One finding shown as a card over the replay, after Jump has put the replay on its moment.
+  handle("overlay:finding", (matchId: string, findingId: string) => openOverlay(matchId, `finding/${encodeURIComponent(matchId)}/${encodeURIComponent(findingId)}`));
   handle("overlay:close", (finished: boolean) => closeOverlay(!!finished));
   handle("overlay:interactive", (on: boolean) => overlay?.setIgnoreMouseEvents(!on, { forward: true }));
   handle("overlay:focus", () => {

@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld("coach", {
   stageFocus: call("stage:focus"),
   onStageProgress: (cb: Cb<string>) => on("stage:progress", cb),
   overlayOpen: call("overlay:open"),
+  overlayFinding: call("overlay:finding"),
   overlayClose: call("overlay:close"),
   overlayInteractive: call("overlay:interactive"),
   overlayFocus: call("overlay:focus"),

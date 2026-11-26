@@ -113,6 +113,8 @@ export interface CoachApi {
   onStageProgress(cb: (label: string) => void): () => void;
   /** Coaching overlay over the League replay window. */
   overlayOpen(matchId: string): Promise<Result<void>>;
+  /** Shows one finding as a card over the replay window (the app steps out of the way). */
+  overlayFinding(matchId: string, findingId: string): Promise<Result<void>>;
   overlayClose(finished: boolean): Promise<Result<void>>;
   overlayInteractive(on: boolean): Promise<Result<void>>;
   overlayFocus(): Promise<Result<void>>;

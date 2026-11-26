@@ -427,6 +427,7 @@ function ReviewPlayer({
       {!!r.findings?.length && (
         <Findings
           findings={r.findings}
+          matchId={m.matchId}
           replayOpen={replay?.kind === "open"}
           onNeedReplay={async () => {
             const off = coach().onStageProgress((l) => setOpening(l));
