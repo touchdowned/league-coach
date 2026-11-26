@@ -1,0 +1,59 @@
+# Builds the Windows installer on every push and publishes it as a GitHub Release.
+# The installed app checks these releases and updates itself (see src/main/updater.ts).
+name: Release Windows app
+
+on:
+  push:
+    branches: [phase-1-match-review, main]
+    paths-ignore: ["**.md", "docs/**"]
+  # Pull requests build the installer too (as a downloadable artifact) but don't publish it.
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Every workflow run gets a unique run number, used below as the patch version.
+
+concurrency:
+  group: release-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm test
+
+      # Each build gets a higher version (0.1.<run number>) so installed copies see it as new.
+      - name: Pick version
+        id: version
+        shell: bash
+        run: |
+          base=$(node -p "require('./package.json').version.split('.').slice(0,2).join('.')")
+          echo "version=$base.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - run: npm run build
+
+      - name: Build installer${{ github.event_name != 'pull_request' && ' and publish release' || '' }}
+        # bash, because PowerShell splits the -c.extraMetadata... argument at the dot.
+        shell: bash
+        run: npx electron-builder --win --publish ${{ github.event_name == 'pull_request' && 'never' || 'always' }} -c.extraMetadata.version=${{ steps.version.outputs.version }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v5
+        with:
+          name: League-Coach-Setup
+          path: release/League-Coach-Setup-*.exe
