@@ -5,7 +5,9 @@ import { buildReport } from "../../core/analysis";
 import { EMPTY_PROGRESS, applyEvent, type ProgressState } from "../../core/progress";
 import type { GameReport, TimelineEvent } from "../../core/types";
 import { death, makeGame, ME } from "../../../tests/fixtures";
-import type { CoachApi, Settings } from "../api";
+import { coachPlan } from "../../core/coach";
+import { baselineFrom, challengeDefs, ISSUE_CHALLENGE, matchupRead, queueCheck, suggestMental, tiltProfile, type ChallengeId, type LiveView } from "../../core/mind";
+import type { CoachApi, DraftInfo, DraftOption, LivePayload, Settings } from "../api";
 
 const CHAMPS = ["Garen", "LeeSin", "Ahri", "Jinx", "Thresh", "Darius", "Viego", "Zed", "Caitlyn", "Lulu"];
 const MINE = ["Ahri", "Ahri", "Syndra", "Ahri", "Orianna", "Syndra", "Ahri", "Ahri", "Orianna", "Ahri", "Syndra", "Ahri"];
@@ -41,6 +43,41 @@ function games(): GameReport[] {
   return out;
 }
 
+/** Mirrors MindManager.buildDraft in the main process, for champ select as Ahri into Zed. */
+function draft(reports: GameReport[]): DraftInfo {
+  const defs = challengeDefs(baselineFrom(reports, "MIDDLE"));
+  const plan = coachPlan(reports);
+  const opt = (id: ChallengeId, reason: string): DraftOption => ({ id, title: defs[id].title, rule: defs[id].rule, why: defs[id].why, pass: defs[id].pass, reason });
+  const skill: DraftOption[] = [];
+  const add = (id: ChallengeId, reason: string) => !skill.some((x) => x.id === id) && skill.push(opt(id, reason));
+  if (plan.current) add(ISSUE_CHALLENGE[plan.current.id], plan.current.evidence);
+  for (const i of plan.upNext) add(ISSUE_CHALLENGE[i.id], i.evidence);
+  for (const id of ["deaths14", "cs10", "vision"] as ChallengeId[]) if (skill.length < 3) add(id, "A solid default while the coach learns your games.");
+  const m = suggestMental(reports, []);
+  return {
+    phase: "champ-select", champion: "Ahri", championName: "Ahri", role: "MIDDLE", enemy: "Zed", enemyName: "Zed",
+    read: matchupRead(reports, "Ahri", "Zed"), skillOptions: skill.slice(0, 3),
+    mentalOptions: (["reset_after_death", "steady_after_death", "check_ins"] as ChallengeId[]).map((id) => opt(id, id === m.id ? m.reason : defs[id].why)),
+    recommendedSkill: skill[0]?.id ?? "deaths14", recommendedMental: m.id, queue: queueCheck(tiltProfile(reports), []), plan: null, lastIntention: null,
+  };
+}
+
+/** The overlay as it looks mid-game; ?dead shows the death card. */
+function live(): LivePayload {
+  const dead = new URLSearchParams(location.search).has("dead");
+  const t = 742;
+  const view: LiveView = {
+    gameTime: t, champion: "Ahri", role: "MIDDLE", isDead: dead, respawnIn: dead ? 12 : 0, gold: 1240, kda: [3, 2, 4], cs: 74, focus: 72,
+    skill: { id: "cs10", kind: "skill", title: "70 CS by 10:00", status: "passed", progress: 1, value: "74 / 70", detail: "Hit at 10:00" },
+    mental: { id: "reset_after_death", kind: "mental", title: "Reset after every death", status: dead ? "at-risk" : "on-track", progress: dead ? 0 : 0.6, value: dead ? "Dead" : "36s", detail: dead ? "Breathe. Plan the next 90s." : "Farm and ward, no trades" },
+    deaths: [],
+    lastDeath: dead ? { t: t - 4, gold: 1240, killer: "Player1", killerChamp: "Lee Sin", helpers: 1, jungler: true, streak: 0, chain: false, respawnAt: t + 12, beforeObjective: null, csBefore: 7.2, csAfter: null, checkIn: null } : null,
+    nudges: dead ? [] : [{ key: "drag", at: t, tone: "info", text: "Dragon in 58s. Reset now if you need to, then group. No solo side lane." }],
+    nextObjective: { name: "Dragon", inSec: 58 },
+  };
+  return { view, intention: "Play for the long game", rules: { skill: "Last hit first, trade second. Never miss a cannon.", mental: "First 90s after you respawn: farm, ward, no trades.", skillId: "cs10", mentalId: "reset_after_death" } };
+}
+
 export function installMock() {
   // ?fresh shows a first run: no Riot ID, no games.
   const fresh = new URLSearchParams(location.search).has("fresh");
@@ -52,6 +89,7 @@ export function installMock() {
   };
   if (fresh) settings = { ...settings, apiKey: "", riotId: "" };
   let progress: ProgressState = { ...EMPTY_PROGRESS };
+  let mind: import("../api").MindData = { plans: [], records: [], debriefs: [], pending: [] };
   const off = () => () => {};
   const no = async () => ({ ok: false as const, error: "Not available in the preview." });
   const known: Partial<CoachApi> = {
@@ -63,10 +101,15 @@ export function installMock() {
     progressEvent: async (e) => { const r = applyEvent(progress, e); progress = r.state; return r; },
     replayState: async () => ({ ok: true, value: { kind: "client-closed" } }),
     postGameStatus: async () => ({ ok: true, value: undefined }),
-    mindGet: async () => ({ ok: true, value: { plans: [], records: [], debriefs: [], pending: [] } }),
+    // ?debrief leaves the newest game waiting for its debrief.
+    mindGet: async () => ({ ok: true, value: { ...mind, pending: new URLSearchParams(location.search).has("debrief") && reports[0] ? [reports[0].metrics.matchId.split("_").pop()!] : [] } }),
+    mindSaveDebrief: async (db) => { mind = { ...mind, debriefs: [db, ...mind.debriefs] }; return { ok: true, value: { ...mind, pending: [] } }; },
+    mindSkipDebrief: async () => ({ ok: true, value: { ...mind, pending: [] } }),
     clipsList: async () => ({ ok: true, value: {} }),
     vodFind: async () => ({ ok: true, value: null }),
     benchGet: async () => ({ ok: true, value: [] }),
+    mindDraftInfo: async () => ({ ok: true, value: draft(reports) }),
+    onMindLive: (cb) => { if (location.hash === "#live-overlay") setTimeout(() => cb(live()), 50); return () => {}; },
   };
   window.coach = new Proxy(known as CoachApi, {
     get: (t, k: string) => (k in t ? (t as any)[k] : k.startsWith("on") ? off : no),

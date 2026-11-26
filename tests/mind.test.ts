@@ -245,4 +245,13 @@ describe("debrief", () => {
     expect(qs.some((q) => q.id === "worst")).toBe(true);
     expect(baselineFrom([rep]).games).toBe(1);
   });
+
+  it("names the costliest moment's time once and keeps its capitals", () => {
+    const rep = report(0, false, 0, [5]);
+    rep.mistakes[0] = { ...rep.mistakes[0], title: "Lee Sin ganked you at 4:12", timeMs: 252_000 };
+    const worst = debriefQuestions(null, ["calm"], rep).find((q) => q.id === "worst")!;
+    expect(worst.prompt).toBe("Your costliest moment: Lee Sin ganked you at 4:12. What were you trying to do?");
+    rep.mistakes[0] = { ...rep.mistakes[0], title: "Fought without vision" };
+    expect(debriefQuestions(null, ["calm"], rep).find((q) => q.id === "worst")!.prompt).toContain("Fought without vision (4:12)");
+  });
 });

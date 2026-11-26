@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { MapEvent } from "../core/types";
+import { champKey, champName } from "../core/names";
 
 // ---------- Champion icons (Riot Data Dragon) ----------
 
@@ -20,13 +21,14 @@ export function ChampIcon({ name, size = 36 }: { name: string; size?: number }) 
   const v = useDdragonVersion();
   const [broken, setBroken] = useState(false);
   const style = { width: size, height: size };
-  if (!v || broken) return <span className="champ-icon fallback" style={style}>{name.slice(0, 2)}</span>;
+  // Callers pass match-v5 keys ("LeeSin") or Live Client display names ("Lee Sin"); Data Dragon wants the key.
+  if (!v || broken) return <span className="champ-icon fallback" style={style}>{champKey(name).slice(0, 2)}</span>;
   return (
     <img
       className="champ-icon"
       style={style}
-      alt={name}
-      src={`https://ddragon.leagueoflegends.com/cdn/${v}/img/champion/${name}.png`}
+      alt={champName(name)}
+      src={`https://ddragon.leagueoflegends.com/cdn/${v}/img/champion/${champKey(name)}.png`}
       onError={() => setBroken(true)}
     />
   );

@@ -27,3 +27,10 @@ export function champName(key: string | null | undefined): string {
   // "LeeSin" -> "Lee Sin", "MissFortune" -> "Miss Fortune", "AurelionSol" -> "Aurelion Sol".
   return key.replace(/([a-z])([A-Z])/g, "$1 $2");
 }
+
+const KEY_OF = Object.fromEntries(Object.entries(IRREGULAR).map(([k, v]) => [v, k]));
+
+/** The reverse: "Lee Sin" or "LeeSin" -> "LeeSin", "Wukong" -> "MonkeyKing", "Kai'Sa" -> "Kaisa". */
+export function champKey(name: string): string {
+  return KEY_OF[name] ?? name.replace(/[^A-Za-z0-9]/g, "");
+}

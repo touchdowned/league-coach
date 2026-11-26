@@ -76,6 +76,11 @@ const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const fmtG = (n: number) => `${Math.round(n).toLocaleString("en-US")}g`;
 export const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 
+/** Most moment titles already carry their time ("Death at 4:12 cost ..."); say it once, keep names capitalised. */
+function costliestPrompt(title: string, time: string): string {
+  return `Your costliest moment: ${title}${title.includes(time) ? "" : ` (${time})`}. What were you trying to do?`;
+}
+
 export function baselineFrom(reports: GameReport[], role?: Position): Baseline {
   const counts = new Map<Position, number>();
   for (const r of reports.slice(0, 20)) counts.set(r.metrics.role, (counts.get(r.metrics.role) ?? 0) + 1);
@@ -790,7 +795,7 @@ export function debriefQuestions(rec: LiveRecord | null, moods: Mood[], report?:
     const m = report.mistakes[0];
     qs.push({
       id: "worst",
-      prompt: `Your costliest moment was at ${mmss(m.timeMs / 1000)}: ${m.title.toLowerCase()}. What were you trying to do?`,
+      prompt: costliestPrompt(m.title, mmss(m.timeMs / 1000)),
       options: [
         { id: "play", label: "Make a play" },
         { id: "farm", label: "Just farming" },

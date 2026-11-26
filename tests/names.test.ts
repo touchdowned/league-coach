@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { champName } from "../src/core/names";
+import { champKey, champName } from "../src/core/names";
 
 describe("champName", () => {
   it("spaces camel-case keys", () => {
@@ -19,5 +19,19 @@ describe("champName", () => {
     expect(champName("Ahri")).toBe("Ahri");
     expect(champName("Lee Sin")).toBe("Lee Sin");
     expect(champName("")).toBe("");
+  });
+});
+
+describe("champKey", () => {
+  it("turns display names back into Data Dragon keys", () => {
+    expect(champKey("Lee Sin")).toBe("LeeSin");
+    expect(champKey("Wukong")).toBe("MonkeyKing");
+    expect(champKey("Kai'Sa")).toBe("Kaisa");
+    expect(champKey("Nunu & Willump")).toBe("Nunu");
+    expect(champKey("Dr. Mundo")).toBe("DrMundo");
+    expect(champKey("LeBlanc")).toBe("Leblanc");
+  });
+  it("keeps keys as they are", () => {
+    for (const k of ["LeeSin", "MonkeyKing", "Kaisa", "Ahri", "JarvanIV"]) expect(champKey(k)).toBe(k);
   });
 });
