@@ -2,6 +2,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Pause, Play, RotateCcw } from "lu
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fmtTime } from "../../core/analysis";
 import type { Finding } from "../../core/synth";
+import { hitMark, useOverlayHits } from "../overlayHits";
 import { coach } from "../api";
 
 const KIND: Record<Finding["kind"], string> = { recall: "Recall", exposure: "Jungler", fight: "Fight", objective: "Objective", death: "Death" };
@@ -16,7 +17,6 @@ export function FindingOverlay({ matchId, findingId }: { matchId: string; findin
   const [id, setId] = useState(findingId);
   const [pb, setPb] = useState<{ time: number; paused: boolean } | null>(null);
   const [small, setSmall] = useState(false);
-  const hits = useRef(0);
 
   useEffect(() => {
     document.body.classList.add("overlay-body");
@@ -48,12 +48,8 @@ export function FindingOverlay({ matchId, findingId }: { matchId: string; findin
     setId(x.id);
   }, []);
 
-  // Space and the arrows work while the mouse is over the card (the window is click-through elsewhere).
-  const hit = (on: boolean) => {
-    hits.current = Math.max(0, hits.current + (on ? 1 : -1));
-    coach().overlayInteractive?.(hits.current > 0);
-  };
-  const hitProps = { onMouseEnter: () => hit(true), onMouseLeave: () => hit(false) };
+  // The window is click-through everywhere but the card (see useOverlayHits).
+  useOverlayHits(true);
 
   if (!f) return null;
   const until = pb ? f.t - pb.time : null;
@@ -61,7 +57,7 @@ export function FindingOverlay({ matchId, findingId }: { matchId: string; findin
 
   return (
     <div className="fo-root">
-      <div className={`fo-card ${small ? "small" : ""}`} {...hitProps}>
+      <div className={`fo-card ${small ? "small" : ""}`} {...hitMark}>
         <header className="fo-head">
           <span className="fo-time">{f.time}</span>
           <span className={`finding-kind k-${f.kind}`}>{KIND[f.kind]}</span>

@@ -52,6 +52,9 @@ contextBridge.exposeInMainWorld("coach", {
   overlayClose: call("overlay:close"),
   overlayInteractive: call("overlay:interactive"),
   overlayFocus: call("overlay:focus"),
+  overlayRects: call("overlay:rects"),
+  overlayModal: call("overlay:modal"),
+  onOverlayKey: (cb: Cb<unknown>) => on("overlay:key", cb),
   onOverlayClosed: (cb: Cb<unknown>) => on("overlay:closed", cb),
 
   vodFind: call("vod:find"),

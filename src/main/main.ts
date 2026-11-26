@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, Notification, protocol, screen } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, Notification, protocol, screen, globalShortcut } from "electron";
 import { promises as fs } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
@@ -81,6 +81,17 @@ const send = (channel: string, payload: unknown) => win?.webContents.send(channe
 let overlay: BrowserWindow | null = null;
 let overlayMatch: string | null = null;
 let overlayRender: Record<string, unknown> | null = null;
+let overlayRects: { x: number; y: number; w: number; h: number }[] = [];
+let overlayHit: ReturnType<typeof setInterval> | null = null;
+let overlayModalOn = false;
+let overlayKeys: string[] = [];
+/** A question is waiting: the overlay takes the whole mouse, and these keys from anywhere. */
+function setOverlayModal(on: boolean, keys: string[]) {
+  for (const k of overlayKeys) globalShortcut.unregister(k);
+  overlayModalOn = on && !!overlay;
+  overlayKeys = overlayModalOn ? keys.filter((k) => /^([1-4]|Return)$/.test(k)) : [];
+  for (const k of overlayKeys) globalShortcut.register(k, () => overlay?.webContents.send("overlay:key", k));
+}
 
 /**
  * A replay runs a few seconds longer than the game it shows (1900.98 s for a 1895 s game), so the
@@ -120,6 +131,23 @@ async function openOverlay(matchId: string, route = `overlay/${encodeURIComponen
   });
   overlay.setAlwaysOnTop(true, "screen-saver");
   overlay.setIgnoreMouseEvents(true, { forward: true });
+  // Take the mouse only over our own panels (or everywhere while a question waits). The cursor
+  // is polled: with the League window active under an ignored window, no mouse-enter arrives.
+  overlayRects = [];
+  setOverlayModal(false, []);
+  let taking = false;
+  if (overlayHit) clearInterval(overlayHit);
+  overlayHit = setInterval(() => {
+    if (!overlay || overlay.isDestroyed()) return;
+    const c = screen.getCursorScreenPoint();
+    const b = overlay.getBounds();
+    const [x, y] = [c.x - b.x, c.y - b.y];
+    const want = overlayModalOn || overlayRects.some((r) => x >= r.x - 4 && x <= r.x + r.w + 4 && y >= r.y - 4 && y <= r.y + r.h + 4);
+    if (want === taking) return;
+    taking = want;
+    if (want) overlay.setIgnoreMouseEvents(false);
+    else overlay.setIgnoreMouseEvents(true, { forward: true });
+  }, 40);
   overlay.setVisibleOnAllWorkspaces(true);
   const dev = process.env.VITE_DEV_SERVER_URL;
   const hash = route;
@@ -228,6 +256,9 @@ async function startFollow(champ: string): Promise<void> {
 
 async function closeOverlay(finished: boolean, lost = false) {
   const matchId = overlayMatch;
+  if (overlayHit) clearInterval(overlayHit);
+  overlayHit = null;
+  setOverlayModal(false, []);
   stopFollow();
   if (overlayWatch) clearInterval(overlayWatch);
   overlayWatch = null;
@@ -785,6 +816,10 @@ app.whenReady().then(async () => {
   handle("overlay:finding", (matchId: string, findingId: string) => openOverlay(matchId, `finding/${encodeURIComponent(matchId)}/${encodeURIComponent(findingId)}`));
   handle("overlay:close", (finished: boolean) => closeOverlay(!!finished));
   handle("overlay:interactive", (on: boolean) => overlay?.setIgnoreMouseEvents(!on, { forward: true }));
+  handle("overlay:rects", (rects: { x: number; y: number; w: number; h: number }[]) => {
+    overlayRects = Array.isArray(rects) ? rects.slice(0, 20) : [];
+  });
+  handle("overlay:modal", (on: boolean, keys: string[]) => setOverlayModal(!!on, Array.isArray(keys) ? keys : []));
   handle("overlay:focus", () => {
     if (!overlay) return;
     overlay.setIgnoreMouseEvents(false);

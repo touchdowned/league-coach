@@ -15,6 +15,7 @@ import type { GameReport } from "../../core/types";
 import { hasVision, lastSeen, visibleAt } from "../../core/vision";
 import { buildChapters, type Beat, type Chapter, type Mark, type Pt } from "../../core/walkthrough";
 import { minionsAt } from "../../core/waves";
+import { hitMark, useOverlayHits } from "../overlayHits";
 import { coach, type Playback, type RenderState } from "../api";
 import { ChampIcon } from "../charts";
 import { useProgress } from "../progress";
@@ -131,17 +132,6 @@ function useCamera(active: boolean): Cam | null {
   return cam;
 }
 
-/**
- * The overlay window ignores the mouse so League stays usable underneath; while the
- * pointer is over one of our panels it takes clicks.
- */
-let hits = 0;
-function hit(on: boolean) {
-  hits = Math.max(0, hits + (on ? 1 : -1));
-  coach().overlayInteractive?.(hits > 0);
-}
-const hitProps = { onMouseEnter: () => hit(true), onMouseLeave: () => hit(false) };
-
 // ---------------------------------------------------------------------------
 
 export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; source: Source; onExit: () => void; onFinished: () => void }) {
@@ -195,12 +185,19 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     };
   }, [live, render]);
 
-  // A panel that unmounts under the pointer never sends mouseleave: start each phase clean.
+  useOverlayHits(live);
+  // On a question, its answer and the debrief the replay is paused and waiting for you: the
+  // overlay takes the whole mouse and the answer keys, so a pick can't fall through to League.
   useEffect(() => {
     if (!live) return;
-    hits = 0;
-    coach().overlayInteractive?.(false);
-  }, [phase, idx, live]);
+    const keys = phase === "decide" ? ["1", "2", "3", "4"] : phase === "reveal" || phase === "debrief" ? ["Return"] : null;
+    coach().overlayModal?.(!!keys, keys ?? []);
+    return () => void coach().overlayModal?.(false, []);
+  }, [live, phase, idx]);
+  useEffect(() => {
+    if (!live) return;
+    return coach().onOverlayKey?.((key) => window.dispatchEvent(new KeyboardEvent("keydown", { key: key === "Return" ? "Enter" : key })));
+  }, [live]);
 
   // ---- Chapter flow ----
   const startChapter = useCallback(
@@ -344,16 +341,16 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
           idx={idx}
           count={chapters.length}
         >
-          {phase === "decide" && <DecisionCard ch={ch} onPick={choose} />}
+          {phase === "decide" && <DecisionCard ch={ch} onPick={choose} onSkip={next} />}
           {phase === "reveal" && pick !== null && <RevealCard ch={ch} pick={pick} onPlay={playOut} />}
           {phase === "debrief" && <DebriefCard ch={ch} last={idx + 1 >= chapters.length} onReplay={() => startChapter(idx)} onNext={next} />}
         </Stage>
 
-        <div className="wt-scrub-wrap" {...(live ? hitProps : {})}>
+        <div className="wt-scrub-wrap" {...(live ? hitMark : {})}>
           <Scrubber ch={ch} t={t} onSeek={(ms) => clock.set({ time: ms / 1000 })} />
         </div>
 
-        <div className="wt-transport" {...(live ? hitProps : {})}>
+        <div className="wt-transport" {...(live ? hitMark : {})}>
           <button className="wt-ctl" onClick={() => nudge(-5000)} title="Back 5s (←)"><Rewind size={16} /></button>
           <button className="wt-ctl primary" onClick={togglePause} disabled={phase === "decide" || phase === "reveal"} title="Play / pause (Space)">
             {paused || phase === "debrief" ? <Play size={18} fill="currentColor" /> : <Pause size={18} fill="currentColor" />}
@@ -371,7 +368,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
         </div>
       </div>
 
-      <aside className="wt-rail" {...(live ? hitProps : {})}>
+      <aside className="wt-rail" {...(live ? hitMark : {})}>
         <div className="wt-rail-head">
           <ChampIcon name={me} size={40} />
           <div>
@@ -519,7 +516,7 @@ function Stage(props: {
 
       {props.children && (
         <div className="wt-card-layer">
-          <div className="wt-card-hit" {...(live ? hitProps : {})}>{props.children}</div>
+          <div className="wt-card-hit" {...(live ? hitMark : {})}>{props.children}</div>
         </div>
       )}
     </div>
@@ -660,7 +657,7 @@ function WorldMarks({ cam, w, h, marks }: { cam: Cam; w: number; h: number; mark
 // ---------------------------------------------------------------------------
 // Cards
 
-function DecisionCard({ ch, onPick }: { ch: Chapter; onPick: (i: number) => void }) {
+function DecisionCard({ ch, onPick, onSkip }: { ch: Chapter; onPick: (i: number) => void; onSkip: () => void }) {
   return (
     <div className="wt-card decide">
       <span className="eyebrow">Your call · {fmtTime(ch.root)}</span>
@@ -680,6 +677,11 @@ function DecisionCard({ ch, onPick }: { ch: Chapter; onPick: (i: number) => void
             <ChevronRight size={16} className="go" />
           </button>
         ))}
+      </div>
+      <div className="wt-card-actions">
+        <button className="wt-skip" onClick={onSkip}>
+          Skip this one
+        </button>
       </div>
     </div>
   );

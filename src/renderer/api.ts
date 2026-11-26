@@ -129,6 +129,11 @@ export interface CoachApi {
   overlayClose(finished: boolean): Promise<Result<void>>;
   overlayInteractive(on: boolean): Promise<Result<void>>;
   overlayFocus(): Promise<Result<void>>;
+  /** Where the overlay's own panels are (window px): the mouse is taken over them, let through elsewhere. */
+  overlayRects(rects: { x: number; y: number; w: number; h: number }[]): Promise<Result<void>>;
+  /** While on, the overlay takes the whole mouse and these keys (Electron accelerators), wherever the focus is. */
+  overlayModal(on: boolean, keys: string[]): Promise<Result<void>>;
+  onOverlayKey(cb: (key: string) => void): () => void;
   onOverlayClosed(cb: (e: { matchId: string; finished: boolean; lost?: boolean }) => void): () => void;
 
   vodFind(matchId: string): Promise<Result<Vod | null>>;
