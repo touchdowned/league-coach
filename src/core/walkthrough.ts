@@ -12,6 +12,7 @@
  */
 import { fmtTime } from "./analysis";
 import type { Leak } from "./engine";
+import type { Finding } from "./synth";
 import { describeSpot, dist, positionAt, type Track } from "./track";
 import type { GameReport } from "./types";
 import { hasVision, lastSeen, truthAt, visibleAt } from "./vision";
@@ -73,6 +74,8 @@ export interface Chapter {
   better: { text: string; from: Pt | null; to: Pt | null; label: string };
   /** Full engine write-up, for the "why" panel. */
   leak: Leak;
+  /** The measured finding about the same moment, when the replay scan produced one. */
+  finding?: Finding;
 }
 
 const LEAD = 6000; // start this long before the root cause
@@ -204,7 +207,45 @@ export function buildChapters(r: GameReport, max = 6): Chapter[] {
     out.push(c);
     if (out.length >= max) break;
   }
+  attachFindings(out, r.findings ?? []);
   return out;
+}
+
+/** A finding and a chapter are about the same moment when they share the death, or sit this close in time. */
+const SAME_MOMENT: Record<Finding["kind"], number> = { death: 3 * SEC, fight: 20 * SEC, exposure: 20 * SEC, recall: 20 * SEC, objective: 30 * SEC };
+
+/**
+ * Give each chapter the finding that measured the same moment, each finding used once.
+ * A death chapter takes the finding that explains that death (by `deathAt`); a recall or
+ * objective chapter takes a finding of its own kind near its outcome.
+ */
+export function attachFindings(chapters: Chapter[], findings: Finding[]): void {
+  const used = new Set<string>();
+  for (const c of chapters) {
+    let best: Finding | undefined;
+    let bestGap = Infinity;
+    for (const f of findings) {
+      if (used.has(f.id)) continue;
+      let gap: number;
+      if (c.kind === "death") {
+        if (f.deathAt === undefined) continue;
+        gap = Math.abs(f.deathAt - c.outcome);
+        if (gap > SAME_MOMENT.death) continue;
+      } else {
+        if (f.kind !== c.kind) continue;
+        gap = Math.min(Math.abs(f.t - c.outcome), Math.abs(f.t - c.root));
+        if (gap > SAME_MOMENT[f.kind]) continue;
+      }
+      if (gap < bestGap) {
+        best = f;
+        bestGap = gap;
+      }
+    }
+    if (best) {
+      c.finding = best;
+      used.add(best.id);
+    }
+  }
 }
 
 function chapterFor(g: G, l: Leak): Chapter | null {

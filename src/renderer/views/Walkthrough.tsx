@@ -722,32 +722,34 @@ function RevealCard({ ch, pick, onPlay }: { ch: Chapter; pick: number; onPlay: (
 
 function DebriefCard({ ch, last, onReplay, onNext }: { ch: Chapter; last: boolean; onReplay: () => void; onNext: () => void }) {
   const [more, setMore] = useState(false);
+  const f = ch.finding;
   return (
     <div className="wt-card debrief">
-      <span className="eyebrow">Root cause</span>
-      <h3>{ch.headline}</h3>
-      <div className="cost-row">
-        <span className="cost-total">≈ {ch.cost.toLocaleString("en-US")}g</span>
-        {ch.costParts.map((p) => (
-          <span key={p.label} className="cost-part">
-            {p.label} <b>{p.gold.toLocaleString("en-US")}g</b>
-          </span>
-        ))}
-      </div>
+      <span className="eyebrow">{f ? `Measured at ${f.time}` : "Root cause"}</span>
+      <h3>{f ? f.title : ch.headline}</h3>
+      {f ? (
+        <p className="wt-measured">{f.cost}</p>
+      ) : (
+        <div className="cost-row">
+          <span className="cost-total">≈ {ch.cost.toLocaleString("en-US")}g</span>
+          {ch.costParts.map((p) => (
+            <span key={p.label} className="cost-part">
+              {p.label} <b>{p.gold.toLocaleString("en-US")}g</b>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="fix">
-        <p className="eyebrow">Next time</p>
-        <p>{ch.leak.nextTime}</p>
+        <p className="eyebrow">Do this instead</p>
+        <p>{f ? f.fix : ch.leak.nextTime}</p>
       </div>
       {more && (
         <ul className="evidence">
-          <li>{ch.leak.doing}</li>
-          {ch.leak.evidence.map((e) => (
-            <li key={e}>{e}</li>
-          ))}
+          {f ? f.proof.map((e) => <li key={e}>{e}</li>) : [ch.leak.doing, ...ch.leak.evidence].map((e) => <li key={e}>{e}</li>)}
         </ul>
       )}
       <div className="wt-card-actions">
-        <Button variant="ghost" size="sm" onClick={() => setMore((m) => !m)}>{more ? "Less" : "The evidence"}</Button>
+        <Button variant="ghost" size="sm" onClick={() => setMore((m) => !m)}>{more ? "Less" : f ? "The proof" : "The evidence"}</Button>
         <span className="wt-spacer" />
         <Button variant="ghost" onClick={onReplay}><ChevronLeft size={15} /> Rewatch</Button>
         <Button variant="primary" onClick={onNext}>

@@ -845,6 +845,7 @@ label.inline-action:has(input:disabled) { opacity: 0.5; cursor: default; }
 @keyframes wt-card { from { opacity: 0; transform: translateY(16px) scale(0.98); } }
 .wt-card h3 { font-size: 19px; font-weight: 650; letter-spacing: -0.015em; line-height: 1.3; }
 .wt-card.decide .eyebrow { color: var(--accent); }
+.wt-measured { color: var(--text-2); font-size: 14px; line-height: 1.5; margin: 0; }
 .wt-seen, .wt-truth { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
 .wt-seen li::before { content: "◉"; color: var(--cyan); margin-right: 8px; font-size: 10px; }
 .wt-truth li::before { content: "◉"; color: var(--bad); margin-right: 8px; font-size: 10px; }

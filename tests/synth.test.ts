@@ -60,3 +60,22 @@ describe("coaching synthesizer", () => {
     expect(lint({ ...base, time: "early" })).toContain("no MM:SS timestamp");
   });
 });
+
+import { attachFindings, type Chapter } from "../src/core/walkthrough";
+
+describe("findings on walkthrough chapters", () => {
+  const ch = (kind: Chapter["kind"], root: number, outcome: number) => ({ kind, root, outcome }) as Chapter;
+  const fd = (id: string, kind: Finding["kind"], t: number, deathAt?: number) => ({ id, kind, t, deathAt }) as Finding;
+
+  it("gives a death chapter the finding that explains that death, and each finding to one chapter", () => {
+    const chapters = [ch("death", 190_000, 200_000), ch("death", 395_000, 400_000), ch("recall", 300_000, 308_000)];
+    attachFindings(chapters, [fd("a", "exposure", 185_000, 200_500), fd("b", "recall", 310_000), fd("c", "fight", 398_000), fd("d", "recall", 600_000)]);
+    expect(chapters.map((c) => c.finding?.id)).toEqual(["a", undefined, "b"]);
+  });
+
+  it("takes the nearer of two findings of the same kind", () => {
+    const chapters = [ch("recall", 300_000, 308_000)];
+    attachFindings(chapters, [fd("far", "recall", 325_000), fd("near", "recall", 309_000)]);
+    expect(chapters[0].finding?.id).toBe("near");
+  });
+});
