@@ -12,6 +12,7 @@ import { openReplay, scanReplay } from "./scan";
 import { champKey, checkAllies, checkCs, checkFogOff, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
 import { checkGold, itemTable } from "../core/gold";
 import { checkWards, placeWards } from "../core/wards";
+import { checkHud } from "../core/hud";
 import { growBench, readBench } from "./bench";
 import type { WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
@@ -342,6 +343,10 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     checkGold(timeline, items, until),
     checkWards(placeWards(waves.samples, waves.champs ?? [], events, (id) => players.find((p) => p.id === id)?.teamId ?? 0, until)),
   ];
+  // HP reads against deaths and respawns seen by Live Client (participants are 1-5 blue, 6-10 red, in frame order).
+  const idOf = (champion: string) => players.find((p) => champKey(p.champion) === champKey(champion))?.id ?? 0;
+  const lifeEvents = (kind: "death" | "respawn") => changes.filter((c) => c.kind === kind && c.t <= until).map((c) => ({ id: idOf(c.champion), t: c.t })).filter((e) => e.id > 0);
+  const hudCheck = (({ detail, ...c }) => ({ c, detail }))(checkHud(waves.hud ?? [], lifeEvents("death"), lifeEvents("respawn")));
   const report = {
     matchId,
     me,
@@ -352,7 +357,8 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     scanInfo: waves.scanInfo,
     samples: waves.samples.length,
     champSamples: waves.champs?.length ?? 0,
-    checks: [framesCheck, viewCheck, checkFogOff(waves), ...checks.map(({ detail, ...c }) => c)],
+    checks: [framesCheck, viewCheck, checkFogOff(waves), ...checks.map(({ detail, ...c }) => c), hudCheck.c],
+    hudWrong: hudCheck.detail,
     positionErrors: checks[0].detail,
     missedBuys: checks[2].detail,
     csDetail: checks[4].detail,

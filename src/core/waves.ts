@@ -106,6 +106,8 @@ export interface WaveTrack {
   viewTeam?: number;
   /** Live Client Data polls taken during the pass (only the ones around a change). */
   live?: import("./telemetry").LivePoll[];
+  /** HP and resource bars of all ten players per fog-off frame (index = participant id - 1). */
+  hud?: import("./hud").HudSample[];
   /** How the pass ran: capture cost, sample counts, calibration. */
   scanInfo?: {
     /** "recorder": Riot's own frame recorder. "screenshot": desktop screenshots (the slow fallback). */

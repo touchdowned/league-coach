@@ -7,6 +7,7 @@ import { gameIdOf, LeagueClient } from "./league";
 import { champKey, parseLive, type LivePoll } from "../core/telemetry";
 import { FogView, readFogDropdown, viewOf } from "../core/fogview";
 import { clickFogView } from "./fogswitch";
+import { hudStrip, readHudStrips, type HudSample } from "../core/hud";
 import { promises as fsp } from "fs";
 import pathMod from "path";
 
@@ -138,7 +139,8 @@ const MIN_COVER = Number(process.env.LEAGUE_COACH_MIN_COVER) || 0;
 
 const toRectangle = (r: Rect) => ({ x: r.x, y: r.y, width: r.w, height: r.h });
 
-type OnFrame = (minimap: Frame, t: number) => Promise<void> | void;
+/** `hud`: the two side strips holding the players' team frames (see core/hud), with the size of the frame they were cut from. */
+type OnFrame = (minimap: Frame, t: number, hud?: { blue: Frame; red: Frame; screen: { w: number; h: number } }) => Promise<void> | void;
 /** Where the minimap is in a frame of the given size. */
 type RectFor = (size: { w: number; h: number }) => Rect;
 
@@ -206,7 +208,9 @@ async function recorderPass(lc: LeagueClient, from: number, to: number, fps: num
             if (!img.isEmpty()) {
               const sz = img.getSize();
               // Crop before converting: only the minimap's pixels get copied.
-              await onFrame(imageToFrame(img.crop(toRectangle(rectFor({ w: sz.width, h: sz.height })))), Math.round((segFrom + k / fps) * 1000));
+              const size = { w: sz.width, h: sz.height };
+              const strip = (side: 100 | 200) => imageToFrame(img.crop(toRectangle(hudStrip(side, size))));
+              await onFrame(imageToFrame(img.crop(toRectangle(rectFor(size)))), Math.round((segFrom + k / fps) * 1000), { blue: strip(100), red: strip(200), screen: size });
             } else if (!done) break;
             await fsp.unlink(file).catch(() => undefined);
             next = k + 1;
@@ -279,7 +283,7 @@ async function screenshotPass(lc: LeagueClient, from: number, to: number, rectFo
     const after = await lc.playback();
     const t = Math.round(((before.time + (after?.time ?? before.time)) / 2) * 1000);
     lastT = before.time;
-    await onFrame(crop(full, rectFor(full)), t);
+    await onFrame(crop(full, rectFor(full)), t, { blue: crop(full, hudStrip(100, full)), red: crop(full, hudStrip(200, full)), screen: { w: full.w, h: full.h } });
     frames++;
     onTime(before.time);
     const now = Date.now();
@@ -370,7 +374,10 @@ export async function scanReplay(
     const learned = new Map<number, { team: 100 | 200; grids: number[][] }>();
     const unknownGrids: { sample: ChampSample; i: number; grid: number[]; team: 100 | 200 }[] = [];
     const rectFor: RectFor = (size) => scaleRect(minimap, screenSize, size);
-    const reader = (fog: ChampSample["fog"]): OnFrame => async (frame, t) => {
+    const hud: HudSample[] = [];
+    const reader = (fog: ChampSample["fog"]): OnFrame => async (frame, t, strips) => {
+      // HP and resource bars of all ten players, read with everything visible.
+      if (fog === "off" && strips) hud.push(readHudStrips(t, strips.blue, strips.red, strips.screen));
       // Minimap scale differs from the background's? (recorder at another resolution)
       const okBg = frame.w === bg.w && frame.h === bg.h;
       const rings = findRings(frame, okBg ? bg : undefined, MIN_COVER ? { minCover: MIN_COVER } : {});
@@ -438,7 +445,7 @@ export async function scanReplay(
       const want: FogView = fog === "off" ? "All" : viewOf(me.teamId);
       views.push({ fog, want, read: await setView(want) });
       if (fog === "off") startPolling();
-      await lc.setRender({ fogOfWar: fog === "team" });
+      await lc.setRender({ fogOfWar: fog === "team", interfaceFrames: true });
       await sleep(300);
       const label = (t: number) =>
         onProgress({ phase: "reading", label: `Reading the ${fog === "off" ? "map" : "fog of war"} at ${fmt(t)} of ${fmt(end)}`, done: Math.round((fog === "off" ? 0 : end) + t), total: Math.round(end * 2) });
@@ -527,7 +534,8 @@ export async function scanReplay(
       tracking: { dropped, named, filled, rematched },
       views,
     };
-    return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, scanInfo };
+    hud.sort((a, b) => a.t - b.t);
+    return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, hud, scanInfo };
   } finally {
     await lc.setPaused(true);
     if (original) {
