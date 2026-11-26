@@ -107,6 +107,7 @@ function Shell() {
     }
     const fresh = res.reports.filter((r) => !(games ?? []).some((g) => g.metrics.matchId === r.metrics.matchId));
     setGames(res.reports);
+    if (res.warning) return void toast.warning("Showing saved games", { description: res.warning, duration: 12_000 });
     toast.success(fresh.length ? `${fresh.length} new game${fresh.length > 1 ? "s" : ""} analyzed` : "You're up to date", {
       description: fresh.length ? "Your coaching plan is updated." : undefined,
     });

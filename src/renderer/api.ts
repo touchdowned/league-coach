@@ -73,7 +73,7 @@ export interface TaskProgress {
 export interface CoachApi {
   getSettings(): Promise<Settings>;
   setSettings(s: Settings): Promise<void>;
-  sync(): Promise<{ ok: true; reports: GameReport[] } | { ok: false; error: string }>;
+  sync(): Promise<{ ok: true; reports: GameReport[]; warning?: string } | { ok: false; error: string }>;
   listGames(): Promise<GameReport[]>;
   onProgress(cb: (p: TaskProgress) => void): () => void;
 

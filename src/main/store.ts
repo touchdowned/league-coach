@@ -94,4 +94,10 @@ export class JsonStore {
       },
     };
   }
+
+  /** Keys in the disk cache ("match-NA1_1", "timeline-NA1_1", ...). */
+  async cacheKeys(): Promise<string[]> {
+    const files = await fs.readdir(path.join(this.dir, "cache")).catch(() => [] as string[]);
+    return files.filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5));
+  }
 }

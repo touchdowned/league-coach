@@ -4,7 +4,7 @@ import path from "path";
 import { pathToFileURL } from "url";
 import { buildReport } from "../core/analysis";
 import { applyEvent, EMPTY_PROGRESS, ProgressEvent, ProgressState } from "../core/progress";
-import { parseRiotId, RiotClient, SR_QUEUES } from "../core/riot";
+import { parseRiotId, RiotApiError, RiotClient, SR_QUEUES } from "../core/riot";
 import type { GameReport } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
@@ -182,6 +182,35 @@ async function matchPublished(gameId: string): Promise<boolean> {
   return ids.some((id) => gameIdOf(id) === gameId);
 }
 
+/** Set by the last sync when it could only use what was on disk. */
+let syncWarning: string | null = null;
+
+/**
+ * Reports for every game whose match and timeline are in the disk cache and that the player
+ * (by Riot ID name) took part in. Needs no network: used when the API key no longer works.
+ */
+async function offlineReports(gameName: string): Promise<GameReport[]> {
+  const cache = store.cache();
+  const keys = await store.cacheKeys();
+  const ids = keys.filter((k) => k.startsWith("match-") && keys.includes(`timeline-${k.slice(6)}`)).map((k) => k.slice(6));
+  const name = gameName.trim().toLowerCase();
+  const out: GameReport[] = [];
+  for (let i = 0; i < ids.length; i++) {
+    send("sync:progress", { done: i, total: ids.length, label: `Reading saved game ${i + 1} of ${ids.length}` });
+    const match = (await cache.get(`match-${ids[i]}`)) as import("../core/types").MatchDto | undefined;
+    const timeline = (await cache.get(`timeline-${ids[i]}`)) as import("../core/types").TimelineDto | undefined;
+    if (!match?.info?.participants || !timeline?.info?.frames) continue;
+    if (!SR_QUEUES.includes(match.info.queueId) || match.info.gameDuration < 600) continue;
+    const me = match.info.participants.find((p) => (p.riotIdGameName ?? "").trim().toLowerCase() === name);
+    if (!me) continue;
+    const waves = await store.readJson<WaveTrack | null>(wavesFile(ids[i]), null);
+    // Item prices come from the per-patch cache; a patch never fetched leaves the item lines out.
+    const items = waves ? await itemsFor(match.info.gameVersion).catch(() => undefined) : undefined;
+    out.push(buildReport(match, timeline, me.puuid, waves ?? undefined, items));
+  }
+  return out.sort((a, b) => b.metrics.gameCreation - a.metrics.gameCreation);
+}
+
 async function runSync(): Promise<GameReport[]> {
   const s = await store.readSettings();
   if (!s.apiKey) throw new Error("Add your Riot API key in Settings first.");
@@ -189,8 +218,23 @@ async function runSync(): Promise<GameReport[]> {
   const riot = new RiotClient(s.apiKey.trim(), s.region, store.cache());
 
   send("sync:progress", { done: 0, total: 1, label: "Finding your account" });
-  const puuid = await riot.getPuuid(gameName, tagLine);
-  const ids = await riot.getMatchIds(puuid, s.matchCount);
+  syncWarning = null;
+  let puuid: string;
+  let ids: string[];
+  try {
+    puuid = await riot.getPuuid(gameName, tagLine);
+    ids = await riot.getMatchIds(puuid, s.matchCount);
+  } catch (err) {
+    // An expired key can't list games, but every game already downloaded is still on disk.
+    if (!(err instanceof RiotApiError) || (err.status !== 401 && err.status !== 403)) throw err;
+    const offline = await offlineReports(gameName);
+    if (!offline.length) throw err;
+    syncWarning = `Your Riot API key has expired, so no new games were fetched. Showing the ${offline.length} game${offline.length > 1 ? "s" : ""} already on this PC. Paste a fresh key in Settings to fetch new ones.`;
+    send("sync:progress", { done: 1, total: 1, label: "Done" });
+    reports = offline;
+    await store.writeReports(reports);
+    return reports;
+  }
 
   const out: GameReport[] = [];
   for (let i = 0; i < ids.length; i++) {
@@ -441,7 +485,8 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("games:sync", async () => {
     try {
-      return { ok: true, reports: await sync() };
+      const reports = await sync();
+      return { ok: true, reports, ...(syncWarning ? { warning: syncWarning } : {}) };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
     }
