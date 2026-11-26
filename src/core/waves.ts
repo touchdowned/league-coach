@@ -4,7 +4,7 @@
  * Positions along a lane are stored as progress from the blue base (0) to the red
  * base (1). Reads flip that so 0 is always *your* base.
  */
-import type { Dot } from "./minimap";
+import { STRUCTURES, type Dot } from "./minimap";
 import type { Position } from "./types";
 
 export type Lane = "TOP" | "MIDDLE" | "BOTTOM";
@@ -88,7 +88,7 @@ export interface WaveSample {
   /** Progress of each minion along the lane, per team (b = blue, r = red), 2 decimals. */
   lanes: Record<Lane, { b: number[]; r: number[] }>;
   /** Ward icons on the fog-off minimap (game units). */
-  wards?: { team: 100 | 200; x: number; y: number }[];
+  wards?: { team: 100 | 200; x: number; y: number; kind?: "stealth" | "stealth_low" | "control" }[];
 }
 
 /** Champions read off the minimap at one moment, in one view. */
@@ -136,6 +136,51 @@ export interface WaveTrack {
     /** The replay's Fog of War team view set before each pass, as read back from the screen. */
     views?: { fog: "off" | "team"; want: "All" | "Blue" | "Red"; read: "All" | "Blue" | "Red" | null }[];
   };
+}
+
+/**
+ * Minion dots that aren't minions because they don't move: a blob that stays within
+ * STATIC_UNITS of one spot, about the same size, for STATIC_MS or more, with no dot of the
+ * other team within FIGHT_UNITS (a wave held in a fight can stand still; nothing else
+ * minion-coloured that holds still is a minion). On NA1_5686039660 this was a teal vision disc
+ * around a jungle plant read as 3 blue minions for 30+ s (projected onto mid lane, it made a
+ * 36 s "crash"), and a control ward's eye. Removes them from each frame's list in place;
+ * returns how many were removed. Frames must be sorted by time.
+ */
+const STATIC_UNITS = 150;
+const STATIC_MS = 10_000;
+const FIGHT_UNITS = 1000;
+/** Turret range plus a caster's: minions attacking a structure stand within this of it. */
+const SIEGE_UNITS = 1400;
+export function dropStaticDots(frames: { t: number; dots: Dot[] }[]): number {
+  const same = (a: Dot, b: Dot) => a.team === b.team && Math.hypot(a.x - b.x, a.y - b.y) <= STATIC_UNITS && b.area >= a.area * 0.7 && b.area <= a.area / 0.7;
+  const drop = frames.map(() => new Set<Dot>());
+  for (let i = 0; i < frames.length; i++)
+    for (const d of frames[i].dots) {
+      if (frames[i].dots.some((o) => o.team !== d.team && Math.hypot(o.x - d.x, o.y - d.y) <= FIGHT_UNITS)) continue;
+      // Minions hitting a structure stand still for as long as it takes.
+      if (STRUCTURES.some((st) => Math.hypot(st.x - d.x, st.y - d.y) <= SIEGE_UNITS)) continue;
+      // How far it stays put either way (a missed read in between is allowed).
+      const reach = (step: 1 | -1) => {
+        let t = frames[i].t;
+        let miss = 0;
+        for (let j = i + step; j >= 0 && j < frames.length && Math.abs(frames[j].t - frames[i].t) <= STATIC_MS; j += step) {
+          if (frames[j].dots.some((o) => same(d, o))) {
+            t = frames[j].t;
+            miss = 0;
+          } else if (++miss > 1) break;
+        }
+        return t;
+      };
+      if (reach(1) - reach(-1) >= STATIC_MS) drop[i].add(d);
+    }
+  let n = 0;
+  frames.forEach((f, i) => {
+    if (!drop[i].size) return;
+    n += drop[i].size;
+    f.dots = f.dots.filter((d) => !drop[i].has(d));
+  });
+  return n;
 }
 
 export function sampleFromDots(t: number, dots: Dot[]): WaveSample {

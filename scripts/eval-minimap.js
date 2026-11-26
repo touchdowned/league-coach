@@ -23,6 +23,22 @@ function load(file) {
   return { w: width, h: height, data };
 }
 
+// The game's ward icons (kinds, control wards): from WARD_ICONS_DIR if set, else CommunityDragon.
+async function wardTemplatesFor() {
+  const out = [];
+  for (const [file, kind] of [["minimap_ward_green_full.png", "stealth"], ["minimap_ward_green_low.png", "stealth_low"], ["minimap_jammer_friendly.png", "control"], ["minimap_jammer_enemy.png", "control"]]) {
+    try {
+      const buf = process.env.WARD_ICONS_DIR ? fs.readFileSync(path.join(process.env.WARD_ICONS_DIR, file)) : Buffer.from(await (await net.fetch("https://raw.communitydragon.org/latest/game/assets/ux/minimap/icons/" + file)).arrayBuffer());
+      const img = nativeImage.createFromBuffer(buf);
+      const { width, height } = img.getSize();
+      const data = new Uint8ClampedArray(img.toBitmap());
+      mm.bgraToRgba(data);
+      out.push(mm.wardTemplate(kind, { w: width, h: height, data }));
+    } catch {}
+  }
+  return out;
+}
+
 async function refsFor(champs) {
   const v = (await (await net.fetch("https://ddragon.leagueoflegends.com/api/versions.json")).json())[0];
   const out = [];
@@ -43,6 +59,7 @@ app.whenReady().then(async () => {
   const names = new Map();
   for (const [k, l] of Object.entries(labels)) if (!k.startsWith("_")) for (const c of l.champs || []) names.set(c.name, c.team);
   const refs = await refsFor([...names].map(([name, team]) => ({ name, team })));
+  const wardTemplates = process.env.NO_WARD_ICONS ? [] : await wardTemplatesFor();
   const nameOf = (id) => refs.find((r) => r.id === id)?.name;
   const sweep = (process.env.MIN_COVER || "0.42,0.36,0.3").split(",").map(Number);
   const runs = [];
@@ -90,9 +107,9 @@ app.whenReady().then(async () => {
     let minions = null;
     if (isOff && l.minions) {
       const wardDots = [];
-      const dots = mm.detectDots(f, bg, { exclude: rings, minFill, wards: wardDots });
+      const dots = mm.detectDots(f, bg, { exclude: rings, minFill, wards: wardDots, wardTemplates });
       if (Array.isArray(l.wards)) {
-        const wpx = wardDots.map((d) => ({ team: d.team, ...mm.gameToPixel(d.x, d.y, f.w) }));
+        const wpx = wardDots.map((d) => ({ team: d.team, kind: d.kind, ...mm.gameToPixel(d.x, d.y, f.w) }));
         const hit = new Set();
         for (const lw of l.wards) {
           tot.wardsLabelled++;
@@ -103,7 +120,7 @@ app.whenReady().then(async () => {
           }
         }
         tot.wardsFalse += wpx.length - hit.size;
-        var wardRows = { labelled: l.wards.length, found: hit.size, falseAt: wpx.filter((_, k) => !hit.has(k)).map((d) => [Math.round(d.px), Math.round(d.py), d.team]) };
+        var wardRows = { labelled: l.wards.length, found: hit.size, falseAt: wpx.filter((_, k) => !hit.has(k)).map((d) => [Math.round(d.px), Math.round(d.py), d.team, d.kind]), kinds: wpx.map((d) => d.kind || "-").join(",") };
       }
       const s = waves.sampleFromDots(0, dots);
       // Each blob, for looking at what was counted where.

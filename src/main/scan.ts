@@ -2,12 +2,13 @@ import { app, desktopCapturer, nativeImage, net, screen } from "electron";
 import { bgraToRgba, crop, detectChampions, detectDots, backgroundFrame, Dot, findMinimap, findRings, Frame, rematch, iconGrid, PortraitRef, Rect } from "../core/minimap";
 import { cameraLookingAt } from "../core/camera";
 import { dropJumps, fillOcclusions, nameRings } from "../core/vision";
-import { ChampSample, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
+import { ChampSample, dropStaticDots, sampleFromDots, WaveSample, WaveTrack } from "../core/waves";
 import { gameIdOf, LeagueClient } from "./league";
 import { champKey, parseLive, type LivePoll } from "../core/telemetry";
 import { FogView, readFogDropdown, viewOf } from "../core/fogview";
 import { clickFogView } from "./fogswitch";
 import { hudStrip, readHudStrips, type HudSample } from "../core/hud";
+import { wardTemplates } from "./wardicons";
 import { promises as fsp } from "fs";
 import pathMod from "path";
 
@@ -323,6 +324,8 @@ export async function scanReplay(
 
   const original = await lc.getRender();
   const refs = await portraitRefs(players).catch(() => [] as PortraitRef[]);
+  // The game's ward icons (kinds, control wards); without them the star rule alone.
+  const wardTpl = await wardTemplates().catch(() => []);
   try {
     // 2. Find the minimap: capture with it on and off while paused. Your champion is
     // selected, and the camera looks at a point off the map for the whole pass, so the
@@ -348,9 +351,9 @@ export async function scanReplay(
       throw new Error("Couldn't find the minimap on screen. Keep the replay on your main monitor, in Borderless or Windowed mode, and don't cover it while it reads.");
     const minimap = rect;
 
-    // 3. The empty map: frames before minions spawn, median removes the champions.
+    // 3. The empty map: frames before the first wave spawns at 0:30, median removes the champions.
     const bgFrames: Frame[] = [];
-    for (const t of [12, 22, 32, 42, 52, 60, 64]) {
+    for (const t of [4, 8, 12, 16, 20, 24, 28]) {
       if (isCancelled()) break;
       await lc.seek(t, true);
       await sleep(700);
@@ -367,6 +370,7 @@ export async function scanReplay(
     const bg = backgroundFrame(bgFrames, lateFrames);
 
     const samples: WaveSample[] = [];
+    const offFrames: { t: number; dots: Dot[]; wards: NonNullable<WaveSample["wards"]> }[] = [];
     const champs: ChampSample[] = [];
     const captureMs: number[] = [];
     const passes: NonNullable<NonNullable<WaveTrack["scanInfo"]>["passes"]> = [];
@@ -382,8 +386,9 @@ export async function scanReplay(
       const okBg = frame.w === bg.w && frame.h === bg.h;
       const rings = findRings(frame, okBg ? bg : undefined, MIN_COVER ? { minCover: MIN_COVER } : {});
       const wardDots: Dot[] = [];
-      const dots = fog === "off" && okBg ? detectDots(frame, bg, { exclude: rings, wards: wardDots }) : [];
-      if (fog === "off") samples.push({ ...sampleFromDots(t, dots), ...(wardDots.length ? { wards: wardDots.map(({ team, x, y }) => ({ team, x, y })) } : {}) });
+      const dots = fog === "off" && okBg ? detectDots(frame, bg, { exclude: rings, wards: wardDots, wardTemplates: wardTpl }) : [];
+      // Minion samples are built once the pass is over: a blob that never moves is taken out first (dropStaticDots).
+      if (fog === "off") offFrames.push({ t, dots, wards: wardDots.map(({ team, x, y, kind }) => ({ team, x, y, ...(kind ? { kind } : {}) })) });
       if (refs.length) {
         const found = detectChampions(frame, refs, 38, rings);
         // Weak matches keep their score, so naming can overrule them against a champion's track.
@@ -422,9 +427,9 @@ export async function scanReplay(
       })();
     };
 
-    // 4. Two passes over 1:05 to the end: fog off (minions, true positions) at 2 frames
+    // 4. Two passes over 0:30 (the first minion wave spawns then; season 2026) to the end: fog off (minions, true positions) at 2 frames
     // per game second, then your team's fog (what you could see) at 1.
-    const from = 65;
+    const from = 30;
     let method = opts.method ?? "recorder";
     // Which units the minimap draws is the replay's own Fog of War dropdown: All for the
     // fog-off pass, your team for the team pass. Clicked, then read back off the screen.
@@ -495,6 +500,9 @@ export async function scanReplay(
     // re-run offline on the same frames (--reuse --reprocess).
     const champsRaw = debugDir ? (JSON.parse(JSON.stringify(champs)) as ChampSample[]) : undefined;
     const { dropped, named, filled } = trackChampions(champs, players, me, live);
+    offFrames.sort((a, b) => a.t - b.t);
+    const staticDots = dropStaticDots(offFrames);
+    for (const f of offFrames) samples.push({ ...sampleFromDots(f.t, f.dots), ...(f.wards.length ? { wards: f.wards } : {}) });
     samples.sort((a, b) => a.t - b.t);
     onProgress({ phase: "done", label: "Done", done: 1, total: 1 });
     if (debugDir) await dumpFrame(debugDir, "background", bg, { rect: minimap });
@@ -515,7 +523,7 @@ export async function scanReplay(
       until: end * 1000,
       lastFrame,
       passes,
-      tracking: { dropped, named, filled, rematched },
+      tracking: { dropped, named, filled, rematched, staticDots },
       views,
     };
     hud.sort((a, b) => a.t - b.t);
