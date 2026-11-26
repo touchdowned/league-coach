@@ -146,6 +146,8 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
 
   const [idx, setIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("intro");
+  /** You paused it yourself (Space or the button): the watchdog below leaves it alone. */
+  const userPaused = useRef(false);
   const [pick, setPick] = useState<number | null>(null);
   const [fogOff, setFogOff] = useState(false);
   const [done, setDone] = useState<Set<string>>(new Set());
@@ -208,6 +210,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
       setPick(null);
       setFogOff(false);
       setPhase("intro");
+      userPaused.current = false;
       clock.set({ time: c.start / 1000, paused: true, speed: 1 });
       follow();
     },
@@ -227,6 +230,22 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     }, 2200);
     return () => clearTimeout(id);
   }, [phase, idx, clock]);
+
+  // The lead-up and the play-out are meant to be running. A seek late in a long game can take
+  // League several seconds and swallow the "play" sent with it, leaving the replay paused with
+  // nothing on screen; if it sits paused for two checks and you didn't pause it, play is sent again.
+  useEffect(() => {
+    if (!live || (phase !== "lead" && phase !== "playout")) return;
+    let stuck = 0;
+    const id = setInterval(() => {
+      stuck = clock.paused() && !userPaused.current ? stuck + 1 : 0;
+      if (stuck >= 2) {
+        stuck = 0;
+        clock.set({ paused: false });
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [live, phase, idx, clock]);
 
   // Freeze on the decision; play out to the end.
   useEffect(() => {
@@ -267,7 +286,11 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     setPhase("playout");
     setFogOff(false);
     follow();
-    clock.set({ time: ch.root / 1000, paused: false, speed: 1 });
+    userPaused.current = false;
+    // Already frozen on the decision: just let it run. A seek to where it already is makes League
+    // reload the moment, and the replay can come back from that still paused.
+    const there = Math.abs(clock.now() - ch.root) < 750;
+    clock.set(there ? { paused: false, speed: 1 } : { time: ch.root / 1000, paused: false, speed: 1 });
   }, [ch, clock, follow]);
 
   const next = useCallback(async () => {
@@ -291,6 +314,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
   const togglePause = useCallback(() => {
     if (phase === "decide" || phase === "reveal" || phase === "intro") return;
     if (phase === "debrief") return startChapter(idx);
+    userPaused.current = !clock.paused();
     clock.set({ paused: !clock.paused() });
   }, [phase, clock, startChapter, idx]);
 
