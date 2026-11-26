@@ -903,6 +903,34 @@ function cornerRing(frame: Frame, team: 100 | 200, r0: number): Ring | null {
 const CORNER_FILL = 0.4;
 const RIM_BRIGHT = 190;
 
+/**
+ * A champion ring is drawn bright (brightest channel about 240 all round); an arc of the
+ * fountain floor or a river bank that differs from the empty map has the team's hue but is dull
+ * (about 160 at most). On NA1_5686025956 the blue fountain floor's edge was read as a ring for
+ * minutes and named Smolder, putting him in base during lane. At least RIM_SHARE of the circle's
+ * team-coloured points must be bright.
+ */
+const RIM_SHARE = 0.4;
+function brightRim(frame: Frame, cx: number, cy: number, r: number): boolean {
+  let team = 0;
+  let bright = 0;
+  for (let k = 0; k < 48; k++) {
+    const a = (k / 48) * 2 * Math.PI;
+    for (let dr = -1; dr <= 1; dr++) {
+      const x = Math.round(cx + (r + dr) * Math.cos(a));
+      const y = Math.round(cy + (r + dr) * Math.sin(a));
+      if (x < 0 || y < 0 || x >= frame.w || y >= frame.h) continue;
+      const i = (y * frame.w + x) * 4;
+      const d = frame.data;
+      if (!teamColor(d[i], d[i + 1], d[i + 2])) continue;
+      team++;
+      if (Math.max(d[i], d[i + 1], d[i + 2]) >= RIM_BRIGHT) bright++;
+      break;
+    }
+  }
+  return team > 0 && bright >= team * RIM_SHARE;
+}
+
 export function findRings(frame: Frame, bg?: Frame, opts: { minCover?: number } = {}): Ring[] {
   const { w, h } = frame;
   const all = blobs(teamLabels(frame, bg), w, h);
@@ -935,7 +963,7 @@ export function findRings(frame: Frame, bg?: Frame, opts: { minCover?: number } 
     // Too small to hold an arc of a ring, or too big to be a few icons.
     if (Math.max(bw, bh) < r0 * 1.1 || bw > r0 * 9 || bh > r0 * 9 || b.px.length < r0 * 2.5) continue;
     if (b.px.length / (bw * bh) > 0.6) continue; // filled: a structure, not icons
-    for (const c of houghRings(b, w, r0 - 1, opts.minCover ?? 0.3)) rings.push({ team: b.l === 1 ? 100 : 200, cx: c.cx, cy: c.cy, r: r0, cover: c.cover });
+    for (const c of houghRings(b, w, r0 - 1, opts.minCover ?? 0.3)) if (brightRim(frame, c.cx, c.cy, r0 - 1)) rings.push({ team: b.l === 1 ? 100 : 200, cx: c.cx, cy: c.cy, r: r0, cover: c.cover });
   }
   // Champions standing in their fountain, drawn three quarters off the minimap's corner.
   for (const team of [100, 200] as const) {
