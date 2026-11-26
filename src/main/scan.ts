@@ -76,11 +76,13 @@ async function waitFor<T>(fn: () => Promise<T | null>, ms: number, isCancelled: 
 }
 
 /** Gets this game's replay open in League (downloading it first if needed). */
-export async function openReplay(lc: LeagueClient, matchId: string, onLabel: (label: string) => void, isCancelled: () => boolean = () => false) {
+export async function openReplay(lc: LeagueClient, matchId: string, onLabel: (label: string) => void, isCancelled: () => boolean = () => false, expectedSec?: number) {
   let pb = await lc.playback();
   if (pb) {
     const open = await lc.currentGameId();
-    if (open && open !== gameIdOf(matchId)) throw new Error("A different replay is open. Close it and try again.");
+    // The client often doesn't name the game while a replay plays, so the replay's length is
+    // checked too: it runs a few seconds past the game's own duration.
+    if ((open && open !== gameIdOf(matchId)) || (expectedSec !== undefined && Math.abs(pb.length - expectedSec) > 20)) throw new Error("A different game's replay is open in League. Close it, then start this one again.");
     return pb;
   }
   const st = await lc.state(matchId);

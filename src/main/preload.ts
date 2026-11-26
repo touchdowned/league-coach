@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("coach", {
   progressEvent: call("progress:event"),
 
   replayState: call("replay:state"),
+  replayOpenMatch: call("replay:openMatch"),
   replayDownload: call("replay:download"),
   replayWatch: call("replay:watch"),
   replaySeek: call("replay:seek"),

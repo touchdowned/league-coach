@@ -81,6 +81,8 @@ export interface CoachApi {
   progressEvent(e: ProgressEvent): Promise<ProgressResult>;
 
   replayState(matchId: string): Promise<Result<ReplayState>>;
+  /** The synced game whose replay is open in League right now, or null. */
+  replayOpenMatch(): Promise<Result<string | null>>;
   replayDownload(matchId: string): Promise<Result<void>>;
   replayWatch(matchId: string): Promise<Result<void>>;
   replaySeek(sec: number, paused: boolean): Promise<Result<boolean>>;
@@ -114,7 +116,7 @@ export interface CoachApi {
   overlayClose(finished: boolean): Promise<Result<void>>;
   overlayInteractive(on: boolean): Promise<Result<void>>;
   overlayFocus(): Promise<Result<void>>;
-  onOverlayClosed(cb: (e: { matchId: string; finished: boolean }) => void): () => void;
+  onOverlayClosed(cb: (e: { matchId: string; finished: boolean; lost?: boolean }) => void): () => void;
 
   vodFind(matchId: string): Promise<Result<Vod | null>>;
   vodPick(matchId: string): Promise<Result<Vod | null>>;

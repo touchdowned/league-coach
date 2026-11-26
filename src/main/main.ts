@@ -77,6 +77,19 @@ let overlay: BrowserWindow | null = null;
 let overlayMatch: string | null = null;
 let overlayRender: Record<string, unknown> | null = null;
 
+/**
+ * A replay runs a few seconds longer than the game it shows (1900.98 s for a 1895 s game), so the
+ * open replay is this game's when the two lengths are within SAME_GAME_SEC. The client's
+ * gameflow session doesn't name the game while a replay plays.
+ */
+const SAME_GAME_SEC = 20;
+function sameGame(matchId: string, replayLength: number): boolean {
+  const r = reports.find((x) => x.metrics.matchId === matchId);
+  return !r || Math.abs(r.metrics.durationMin * 60 - replayLength) <= SAME_GAME_SEC;
+}
+
+let overlayWatch: ReturnType<typeof setInterval> | null = null;
+
 async function openOverlay(matchId: string) {
   overlayRender = await (await league()).getRender();
   overlay?.destroy();
@@ -112,10 +125,25 @@ async function openOverlay(matchId: string) {
     overlay = null;
   });
   win?.minimize();
+  // The overlay sits over the replay window: when the replay closes (or another game's replay
+  // takes its place) there is nothing under it, so it closes itself and the app comes back.
+  if (overlayWatch) clearInterval(overlayWatch);
+  let misses = 0;
+  overlayWatch = setInterval(async () => {
+    if (!overlay || overlayMatch !== matchId) return;
+    const pb = await (await league()).playback().catch(() => null);
+    misses = pb && sameGame(matchId, pb.length) ? 0 : misses + 1;
+    // Three misses in a row (6 s): a seek or a loading hitch answers again well within that.
+    if (misses >= 3) {
+      void closeOverlay(false, true);
+    }
+  }, 2000);
 }
 
-async function closeOverlay(finished: boolean) {
+async function closeOverlay(finished: boolean, lost = false) {
   const matchId = overlayMatch;
+  if (overlayWatch) clearInterval(overlayWatch);
+  overlayWatch = null;
   // Put League's camera, fog and HUD back the way they were.
   const lc = await league();
   await lc.setPaused(true);
@@ -124,7 +152,7 @@ async function closeOverlay(finished: boolean) {
   overlay?.destroy();
   overlay = null;
   overlayMatch = null;
-  if (matchId) send("overlay:closed", { matchId, finished });
+  if (matchId) send("overlay:closed", { matchId, finished, lost });
   focusWindow();
 }
 
@@ -466,6 +494,9 @@ function handle<T>(channel: string, fn: (...args: any[]) => Promise<T> | T) {
   });
 }
 
+// Windows groups the taskbar button and notifications under this id, in a test run too.
+if (process.platform === "win32") app.setAppUserModelId("com.touchdowned.leaguecoach");
+
 app.whenReady().then(async () => {
   store = new JsonStore(app.getPath("userData"));
   // Reports saved by an older version may lack newer fields; drop those so the UI never sees them.
@@ -503,7 +534,23 @@ app.whenReady().then(async () => {
   });
 
   // League client replays
-  handle("replay:state", async (matchId: string) => (await league()).state(matchId));
+  handle("replay:state", async (matchId: string) => {
+    const st = await (await league()).state(matchId);
+    // Any open replay reads as "open". If it is another game's, this game's review must not drive it.
+    if (st.kind === "open" && !sameGame(matchId, st.length)) return { kind: "unavailable", reason: "A different game's replay is open in League. Close it, then open this game's replay from here." } as const;
+    return st;
+  });
+  // Which synced game the open replay is, by its length; null when no replay is open or none fits.
+  handle("replay:openMatch", async () => {
+    const pb = await (await league()).playback();
+    if (!pb) return null;
+    let best: { id: string; d: number } | null = null;
+    for (const r of reports) {
+      const d = Math.abs(r.metrics.durationMin * 60 - pb.length);
+      if (d <= SAME_GAME_SEC && (!best || d < best.d)) best = { id: r.metrics.matchId, d };
+    }
+    return best?.id ?? null;
+  });
   handle("replay:download", async (matchId: string) => (await league()).download(matchId));
   handle("replay:watch", async (matchId: string) => (await league()).watch(matchId));
   handle("replay:seek", async (sec: number, paused: boolean) => (await league()).seek(sec, paused));
@@ -514,7 +561,8 @@ app.whenReady().then(async () => {
   // Guided walkthrough: the League replay window is streamed into the app and driven
   // through the Replay API (camera, fog, playback). No game memory, no file decoding.
   handle("stage:open", async (matchId: string) => {
-    const pb = await openReplay(await league(), matchId, (label) => send("stage:progress", label));
+    const dur = reports.find((x) => x.metrics.matchId === matchId)?.metrics.durationMin;
+    const pb = await openReplay(await league(), matchId, (label) => send("stage:progress", label), () => false, dur ? dur * 60 : undefined);
     focusWindow();
     return pb;
   });
