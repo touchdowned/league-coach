@@ -93,7 +93,7 @@ export const FOCUS_DEFS: Record<FocusKey, Def> = {
     title: "Check levels, items and numbers before you fight",
     rule: "Before you commit, hold Tab for a second. If the one you are about to fight has reached level 2, 3, 6, 11 or 16 before you, has 875 gold more in items, or they have more champions within 2500 units, walk back instead of fighting.",
     cue: "The moment someone walks at you, ask: level, items, how many of them?",
-    unit: ["fight taken a level breakpoint, 875 gold of items, or a champion down", "fights taken a level breakpoint, 875 gold of items, or a champion down"],
+    unit: ["fight taken while down a level breakpoint, 875 gold of items, or a champion", "fights taken while down a level breakpoint, 875 gold of items, or a champion"],
   },
   objective: {
     title: "Be on the map before the objective spawns",
