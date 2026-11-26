@@ -25,6 +25,7 @@ import { ComboDrill } from "./mechanics/ComboDrill";
 import { LaneDrill, LaneSettings } from "./mechanics/LaneDrill";
 import type { SetSummary } from "./mechanics/types";
 import { spellIcon, useDdVersion, useKit } from "./mechanics/useKit";
+import { champName } from "../../core/names";
 
 const KEY = "lc.mechanics";
 const SETTINGS_KEY = "lc.mechanics.settings";
@@ -107,9 +108,9 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
   const oppNoSkillshots = !!oppKit && !oppKit.abilities.some(isSkillshot);
   const why = (d: Drill): string | null =>
     (d === "aim" || d === "trade") && noSkillshots
-      ? `${champion} has no skillshots to aim. Try dodging or combos.`
+      ? `${champName(champion)} has no skillshots to aim. Try dodging or combos.`
       : (d === "dodge" || d === "trade") && oppNoSkillshots
-        ? `${opp} has no skillshots to dodge. Pick another opponent.`
+        ? `${champName(opp)} has no skillshots to dodge. Pick another opponent.`
         : null;
 
   return (
@@ -140,7 +141,7 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
               {pool.map((p) => (
                 <button key={p.champion} className={`champ-chip ${p.champion === champion ? "active" : ""}`} disabled={!!active} onClick={() => setChampion(p.champion)}>
                   <ChampIcon name={p.champion} size={28} />
-                  <span>{p.champion}</span>
+                  <span>{champName(p.champion)}</span>
                   {p.games > 0 && <span className="muted small">{p.games} games</span>}
                 </button>
               ))}
@@ -148,7 +149,7 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
                 <option value="">Other champion…</option>
                 {CURATED_CHAMPIONS.map((c) => (
                   <option key={c} value={c}>
-                    {c}
+                    {champName(c)}
                   </option>
                 ))}
               </select>
@@ -160,7 +161,7 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
               {opponents.map((o) => (
                 <button key={o} className={`champ-chip ${o === opp ? "active enemy" : ""}`} disabled={!!active} onClick={() => setOpponent(o)}>
                   <ChampIcon name={o} size={28} />
-                  <span>{o}</span>
+                  <span>{champName(o)}</span>
                 </button>
               ))}
             </div>
@@ -173,7 +174,7 @@ export function MechanicsView({ games }: { games: GameReport[] }) {
         <div className="panel lane-panel">
           <div className="panel-head">
             <h2>
-              {DRILLS.find((d) => d.id === active)!.label} · {champion} vs {opp}
+              {DRILLS.find((d) => d.id === active)!.label} · {champName(champion)} vs {champName(opp)}
             </h2>
             <Button variant="ghost" size="sm" onClick={() => setActive(null)}>
               Stop set
@@ -303,7 +304,7 @@ function KitPanel({ kit, loading, champion }: { kit: Kit | null; loading: boolea
   return (
     <div className="panel">
       <div className="panel-head">
-        <h3>{champion}'s kit in the trainer</h3>
+        <h3>{champName(champion)}'s kit in the trainer</h3>
         {kit && <span className="muted small">{kit.source === "curated" ? "Riot data plus hand-checked spell shapes" : "Shapes guessed from Riot's spell text"}</span>}
       </div>
       {loading || !kit ? (

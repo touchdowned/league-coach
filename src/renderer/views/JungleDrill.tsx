@@ -7,6 +7,7 @@ import { ChampIcon } from "../charts";
 import { useProgress } from "../progress";
 import { Rift, useGameClock } from "../rift";
 import { Button, Empty, Kbd } from "../ui";
+import { champName } from "../../core/names";
 
 const KEY = "lc.jungle";
 
@@ -99,20 +100,20 @@ export function JungleDrill({ games }: { games: GameReport[] }) {
           onPick={guess ? undefined : pick}
         />
         <span className="rift-clock">{fmtTime(guess ? t : q.t)}</span>
-        {!guess && <span className="rift-frozen">Click where {q.jungler.champion} is</span>}
+        {!guess && <span className="rift-frozen">Click where {champName(q.jungler.champion)} is</span>}
       </div>
       <div className="panel jungle-side">
         <p className="eyebrow icon-eyebrow"><Footprints size={13} /> Jungle tracking</p>
         <h2 className="jungle-q">
-          <ChampIcon name={q.jungler.champion} size={30} /> {fmtTime(q.t)}. Where is {q.jungler.champion}?
+          <ChampIcon name={q.jungler.champion} size={30} /> {fmtTime(q.t)}. Where is {champName(q.jungler.champion)}?
         </h2>
         <p className="muted">
-          From your {game.metrics.champion} game. They were {describeSpot(q.lastSeen, q.teamId)} a minute ago (the grey icon). Everyone else is where they really were.
+          From your {champName(game.metrics.champion)} game. They were {describeSpot(q.lastSeen, q.teamId)} a minute ago (the grey icon). Everyone else is where they really were.
         </p>
         {guess ? (
           <div className={`answer ${g.right ? "right" : "wrong"}`}>
             <strong>
-              {g.label}. {q.jungler.champion} was {describeSpot(q.answer, q.teamId)}.
+              {g.label}. {champName(q.jungler.champion)} was {describeSpot(q.answer, q.teamId)}.
             </strong>
             <p>
               You were {Math.round(off).toLocaleString()} units off{off >= 3000 ? ", about a lane's width or more" : ""}. Watch the path from the grey icon: that's the route to expect next time at this minute.

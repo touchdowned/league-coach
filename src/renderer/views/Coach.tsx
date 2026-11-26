@@ -12,6 +12,7 @@ import { ChampIcon, LineChart, Meter, Radar, ResultDots } from "../charts";
 import { coach } from "../api";
 import { useProgress } from "../progress";
 import { Button, Empty, Ring } from "../ui";
+import { champName } from "../../core/names";
 
 const TRENDS = [
   { key: "gd15", label: "Gold @15", pick: (m: GameReport["metrics"]) => m.goldDiff15, fmt: (n: number) => `${n >= 0 ? "+" : ""}${Math.round(n)}`, zero: true },
@@ -76,17 +77,19 @@ export function CoachView({
           <p className="eyebrow">Coach</p>
           <h1>{plan.current ? "Here's what to fix next." : "No major leaks right now."}</h1>
         </div>
-        {onStartSession && (
-          <Button variant="primary" onClick={onStartSession}>
-            <Play size={15} fill="currentColor" /> Start today's training
-          </Button>
-        )}
-        <div className="seg">
-          {(["ALL", ...roles] as (Position | "ALL")[]).map((r) => (
-            <button key={r} className={role === r ? "on" : ""} onClick={() => setRole(r)}>
-              {r === "ALL" ? "All" : ROLE_LABEL[r]}
-            </button>
-          ))}
+        <div className="page-actions">
+          {onStartSession && (
+            <Button variant="primary" onClick={onStartSession}>
+              <Play size={15} fill="currentColor" /> Start today's training
+            </Button>
+          )}
+          <div className="seg">
+            {(["ALL", ...roles] as (Position | "ALL")[]).map((r) => (
+              <button key={r} className={role === r ? "on" : ""} onClick={() => setRole(r)}>
+                {r === "ALL" ? "All" : ROLE_LABEL[r]}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -120,7 +123,7 @@ export function CoachView({
                 <ChampIcon name={nextReview.metrics.champion} size={40} />
                 <div>
                   <strong>
-                    {nextReview.metrics.champion} {nextReview.metrics.opponentChampion ? `vs ${nextReview.metrics.opponentChampion}` : ""}
+                    {champName(nextReview.metrics.champion)} {nextReview.metrics.opponentChampion ? `vs ${champName(nextReview.metrics.opponentChampion)}` : ""}
                   </strong>
                   <small>
                     {momentCount(nextReview)} moments · {nextReview.metrics.win ? "Win" : "Loss"}
@@ -161,7 +164,7 @@ export function CoachView({
               .slice()
               .reverse()
               .map((g) => (
-                <button key={g.metrics.matchId} className={`form-cell ${g.metrics.win ? "w" : "l"}`} onClick={() => onReview(g.metrics.matchId)} title={`${g.metrics.champion}: ${momentCount(g)} moments to review`}>
+                <button key={g.metrics.matchId} className={`form-cell ${g.metrics.win ? "w" : "l"}`} onClick={() => onReview(g.metrics.matchId)} title={`${champName(g.metrics.champion)}: ${momentCount(g)} moments to review`}>
                   <ChampIcon name={g.metrics.champion} size={28} />
                   <b className={momentCount(g) > 2 ? "g-D" : momentCount(g) ? "g-C" : "g-A"}>{momentCount(g)}</b>
                   {progress.reviewedGames.includes(g.metrics.matchId) && <i className="check" />}
@@ -267,7 +270,7 @@ function NextStep({ plan, games, onReview, onPuzzles, onMechanics }: { plan: Coa
               </Button>
               {example && (
                 <Button onClick={() => onReview(example.metrics.matchId, true, t.kind)}>
-                  <Play size={14} /> Watch it happen ({example.metrics.champion}, {hits(example)}x)
+                  <Play size={14} /> Watch it happen ({champName(example.metrics.champion)}, {hits(example)}x)
                 </Button>
               )}
             </div>
@@ -358,9 +361,9 @@ function VsMasters({ games }: { games: GameReport[] }) {
   return (
     <section className="card vs-masters">
       <div className="card-head">
-        <h3 className="icon-eyebrow"><Trophy size={15} /> You vs Master+ {b?.champion ?? ROLE_LABEL[role]}</h3>
+        <h3 className="icon-eyebrow"><Trophy size={15} /> You vs Master+ {b?.champion ? champName(b.champion) : ROLE_LABEL[role]}</h3>
         <small className="muted">
-          {b ? `Medians: your last ${yours.length} ${yours === onChamp ? b.champion : ROLE_LABEL[role]} games vs ${b.n} Master+ games${b.champion ? ` on ${b.champion}` : ""}.` : `Collecting Master+ games: ${inRoleN} so far. A few more are added after each sync.`}
+          {b ? `Medians: your last ${yours.length} ${yours === onChamp ? champName(b.champion) : ROLE_LABEL[role]} games vs ${b.n} Master+ games${b.champion ? ` on ${champName(b.champion)}` : ""}.` : `Collecting Master+ games: ${inRoleN} so far. A few more are added after each sync.`}
         </small>
       </div>
       {b && (

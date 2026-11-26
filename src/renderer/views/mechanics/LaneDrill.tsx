@@ -26,6 +26,7 @@ import { LaneScene } from "./LaneScene";
 import { sfx } from "./sfx";
 import type { SetSummary } from "./types";
 import { spellIcon, useDdVersion } from "./useKit";
+import { champName } from "../../../core/names";
 
 const STEP = 1 / 120;
 const TRADE_SECONDS = 90;
@@ -322,7 +323,7 @@ export function LaneDrill({
             Bot level <b>{hud.level}</b>
           </span>
           <span className="muted">
-            vs {enemyKit.champion}
+            vs {champName(enemyKit.champion)}
           </span>
         </div>
         {hud.countdown > 0 && <div className="lane-count">{hud.countdown}</div>}

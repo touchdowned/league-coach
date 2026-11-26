@@ -6,6 +6,7 @@ import { coach, DraftInfo, LivePayload, MindData } from "../api";
 import { ChampIcon, LineChart } from "../charts";
 import { DraftCard } from "../overlay/Draft";
 import { Button } from "../ui";
+import { champName } from "../../core/names";
 
 const gameIdOf = (matchId: string) => matchId.split("_").pop() ?? matchId;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -84,6 +85,7 @@ export function MindView({ games, debriefFor, onDebriefDone, onReview }: { games
             <span className="muted small">Shows up by itself in champ select</span>
           </div>
           {draft && <DraftCard info={draft} onLocked={() => coach().mindDraftInfo().then((r) => r.ok && setDraft(r.value))} />}
+          {!draft && <p className="muted">Your goal card opens here, and over League, when you enter champ select.</p>}
         </section>
         <div className="mind-col">
           <OverlayCard mode={mode} />
@@ -261,17 +263,32 @@ function TiltCard({ p }: { p: TiltProfile }) {
         </div>
         <div className={`tilt-stat ${p.stopAfter ? "bad" : "good"}`}>
           <TriangleAlert size={16} aria-hidden />
-          <b>{p.stopAfter ? `Stop after ${p.stopAfter} loss${p.stopAfter > 1 ? "es" : ""}` : "No stop-loss needed yet"}</b>
-          <span>{p.stopAfter ? `After ${p.stopAfter} in a row your next game is clearly worse than your ${pct(p.winRate)} average.` : "Losses don't drag your next game down much. Keep watching it."}</span>
+          <b>{p.stopAfter ? `Stop after ${p.stopAfter} loss${p.stopAfter > 1 ? "es" : ""}` : p.afterLoss.games < 5 ? "Stop-loss: not enough data" : "No stop-loss needed yet"}</b>
+          <span>
+            {p.stopAfter
+              ? `After ${p.stopAfter} in a row your next game is clearly worse than your ${pct(p.winRate)} average.`
+              : p.afterLoss.games < 5
+                ? "It needs a few games played right after a loss to tell whether losses drag your next game down."
+                : "Losses don't drag your next game down much. Keep watching it."}
+          </span>
         </div>
         <div className="tilt-stat">
           <Moon size={16} aria-hidden />
-          <b>
-            {pct(p.afterLoss.winRate)} <small>after a loss</small>
-          </b>
-          <span>
-            {pct(p.afterWin.winRate)} after a win, {pct(p.afterTwoLosses.winRate)} after two losses ({p.afterTwoLosses.games} games)
-          </span>
+          {p.afterLoss.games + p.afterWin.games === 0 ? (
+            <>
+              <b>No sessions yet</b>
+              <span>Play two games within 45 minutes of each other and this shows how a loss changes your next game.</span>
+            </>
+          ) : (
+            <>
+              <b>
+                {rate(p.afterLoss)} <small>after a loss</small>
+              </b>
+              <span>
+                {rate(p.afterWin)} after a win, {rate(p.afterTwoLosses)} after two losses ({p.afterTwoLosses.games} games)
+              </span>
+            </>
+          )}
         </div>
       </div>
       <div className="tilt-charts">
@@ -286,6 +303,11 @@ function TiltCard({ p }: { p: TiltProfile }) {
       </div>
     </section>
   );
+}
+
+/** A bucket's win rate, or a dash when no games fell in it (0 games is not 0%). */
+function rate(b: { games: number; winRate: number }): string {
+  return b.games ? pct(b.winRate) : "—";
 }
 
 function MoodCard({ debriefs }: { debriefs: Debrief[] }) {
@@ -411,7 +433,7 @@ function DebriefFlow({ gameId, rec, report, profile, onDone, onReview }: { gameI
             <span className="eyebrow accent">Debrief</span>
             <h2>
               {win === null ? "That game" : win ? "Win" : "Loss"}
-              {champion ? ` on ${champion}` : ""}
+              {champion ? ` on ${champName(champion)}` : ""}
               {rec ? ` · ${mmss(rec.durationSec)}` : ""}
             </h2>
           </div>

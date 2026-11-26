@@ -17,6 +17,7 @@ import { describeSpot, dist, positionAt, Track } from "./track";
 import type { MatchDto, Participant, ParticipantFrame, TimelineDto, TimelineEvent } from "./types";
 import { hasVision, lastSeen, truthAt, visibleAt } from "./vision";
 import { laneOf, waveAt, waveSeries, type WaveRead, type WaveTrack } from "./waves";
+import { champName } from "./names";
 
 export type LeakKind = "recall" | "farm" | "roam" | "objective" | "death";
 
@@ -254,8 +255,8 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
       const theirs = cs(c, c.opp.participantId, winB) - cs(c, c.opp.participantId, winA);
       lostCs = Math.max(0, Math.round(theirs - mine));
       if (lostCs >= 4) {
-        evidence.push(`${c.opp.championName} took ${lostCs} more CS than you between ${fmtTime(winA)} and ${fmtTime(winB)}.`);
-        tips.push(`Shove the wave into ${c.opp.championName}'s tower before you back, so it crashes while you're gone instead of dying to their tower.`);
+        evidence.push(`${champName(c.opp.championName)} took ${lostCs} more CS than you between ${fmtTime(winA)} and ${fmtTime(winB)}.`);
+        tips.push(`Shove the wave into ${champName(c.opp.championName)}'s tower before you back, so it crashes while you're gone instead of dying to their tower.`);
       }
     } else {
       // After laning: whatever you'd normally farm while walking.
@@ -267,7 +268,7 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
     if (lost.plates.length) {
       parts.push({ label: `${lost.plates.length} plate${lost.plates.length > 1 ? "s" : ""} fell while you were gone`, gold: lost.plates.length * 160 });
       evidence.push(`${lost.plates.length} of your tower plates fell between ${fmtTime(leftAt)} and ${fmtTime(backAt + 15_000)}.`);
-      if (!tips.some((x) => x.startsWith("Shove"))) tips.unshift(`Plates only fall when the wave is sitting on your tower. You left with the wave pushing into you: crash it into ${c.opp ? `${c.opp.championName}'s` : "their"} tower first, or back right after you clear a big wave under yours, never with one still walking in.`);
+      if (!tips.some((x) => x.startsWith("Shove"))) tips.unshift(`Plates only fall when the wave is sitting on your tower. You left with the wave pushing into you: crash it into ${c.opp ? `${champName(c.opp.championName)}'s` : "their"} tower first, or back right after you clear a big wave under yours, never with one still walking in.`);
     }
     for (const o of lost.objectives) {
       const v = OBJECTIVE_VALUE[o.monsterType ?? ""] ?? 300;
@@ -390,7 +391,7 @@ function farmLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
       : [];
     const waveTip =
       underTheirs >= 0.5
-        ? `${c.opp.championName} kept the wave frozen in front of their tower, so every last-hit meant walking into their range. Don't stand there and lose it slowly: hit it hard with ${c.opp.championName} on cooldown, or ask your jungler to break the freeze with you.`
+        ? `${champName(c.opp.championName)} kept the wave frozen in front of their tower, so every last-hit meant walking into their range. Don't stand there and lose it slowly: hit it hard with ${champName(c.opp.championName)} on cooldown, or ask your jungler to break the freeze with you.`
         : underMine >= 0.5
           ? `The wave sat under your tower and you lost the tower last-hits. Melee minions: 2 tower shots then an auto. Casters: 1 tower shot then an auto. Practice it in the lane lab until it's automatic.`
           : null;
@@ -399,12 +400,12 @@ function farmLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
         kind: "roam",
         t: a + MIN,
         cost,
-        costParts: [{ label: `${gap} CS behind ${c.opp.championName} while you were away`, gold: cost }],
+        costParts: [{ label: `${gap} CS behind ${champName(c.opp.championName)} while you were away`, gold: cost }],
         title: `Roam at ${fmtTime(a + MIN)} got nothing and cost ${gap} CS`,
-        doing: `You left lane: at ${fmtTime(a + MIN)} you were ${spot(c, mid)} while ${c.opp.championName} stayed ${spot(c, oppMid!)}.`,
-        evidence: [`${c.opp.championName} farmed ${Math.round(theirs)} CS from ${fmtTime(a)} to ${fmtTime(b)}; you farmed ${Math.round(mine)}.`, "No kill, assist or objective for your team in that window."],
+        doing: `You left lane: at ${fmtTime(a + MIN)} you were ${spot(c, mid)} while ${champName(c.opp.championName)} stayed ${spot(c, oppMid!)}.`,
+        evidence: [`${champName(c.opp.championName)} farmed ${Math.round(theirs)} CS from ${fmtTime(a)} to ${fmtTime(b)}; you farmed ${Math.round(mine)}.`, "No kill, assist or objective for your team in that window."],
         tags: { cause: "roam-got-nothing", area: areaOf(mid, c.me.teamId), phase: phaseOf(a) },
-        nextTime: `Only roam after you shove the wave into their tower, and turn back if the play isn't there within about 25 seconds. If ${c.opp.championName} doesn't follow, the roam has to make more than the ${gap} CS you give up.`,
+        nextTime: `Only roam after you shove the wave into their tower, and turn back if the play isn't there within about 25 seconds. If ${champName(c.opp.championName)} doesn't follow, the roam has to make more than the ${gap} CS you give up.`,
         focus: mid,
       });
     } else {
@@ -412,8 +413,8 @@ function farmLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
         kind: "farm",
         t: a + MIN,
         cost,
-        costParts: [{ label: `${gap} CS behind ${c.opp.championName} in lane`, gold: cost }],
-        title: `${c.opp.championName} out-farmed you by ${gap} CS from ${fmtTime(a)} to ${fmtTime(b)}`,
+        costParts: [{ label: `${gap} CS behind ${champName(c.opp.championName)} in lane`, gold: cost }],
+        title: `${champName(c.opp.championName)} out-farmed you by ${gap} CS from ${fmtTime(a)} to ${fmtTime(b)}`,
         doing: `You were both in lane, but you took ${Math.round(mine)} CS to their ${Math.round(theirs)}.`,
         evidence: [`That's about ${(gap / 2).toFixed(1)} CS a minute lost with no death or recall to explain it.`, ...waveEvidence],
         nextTime: waveTip ?? (
@@ -513,7 +514,7 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
   const jg = enemies.find((p) => p.teamPosition === "JUNGLE");
   if (jg) {
     const seen = positionAt(c.track, jg.participantId, t - 45_000);
-    if (seen && seen.certainty > 0.3) evidence.push(`${jg.championName} was ${spot(c, seen)} 45s before (${(dist(seen, pos) / 1000).toFixed(1)}k units away).`);
+    if (seen && seen.certainty > 0.3) evidence.push(`${champName(jg.championName)} was ${spot(c, seen)} 45s before (${(dist(seen, pos) / 1000).toFixed(1)}k units away).`);
   }
   evidence.push(
     `${enemies.length} enemy champion${enemies.length === 1 ? "" : "s"} took part (${enemies.map((p) => p.championName).join(", ") || "tower"}); ${alliesNear.length} of your teammates were within reach.`,
@@ -537,19 +538,19 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
   let cause = "other";
   if (inLane && w!.theirs >= w!.mine + 3) {
     cause = "fought-into-bigger-wave";
-    nextTime = `You fought ${c.opp!.championName} with ${w!.mine} of your minions against ${w!.theirs} of theirs. Early on, a minion wave that size does as much damage as a champion. Trade when the wave is yours, or wait until theirs is under your tower and your tower is the extra hit.`;
+    nextTime = `You fought ${champName(c.opp!.championName)} with ${w!.mine} of your minions against ${w!.theirs} of theirs. Early on, a minion wave that size does as much damage as a champion. Trade when the wave is yours, or wait until theirs is under your tower and your tower is the extra hit.`;
   } else if (enemies.length >= 3) {
     cause = "collapsed-on";
     const farSide = pos.x - pos.y > 0 ? "top side" : "bottom side";
     const open = farSide === "bottom side" && dragonUp ? "dragon was up" : farSide === "top side" && baronUp ? "baron was up" : "their towers on that side were open";
-    nextTime = `${enemies.length} of them came for you, which left ${enemiesElsewhere.length} on the rest of the map, and on the ${farSide} ${open}. That's the trade: when you see 3+ missing while you're ${sideLane ? "side-laning" : "out"} like this, walk back toward ${nearestAlly ? `${nearestAlly.p.champion} (${spot(c, nearestAlly.q!).replace(/^in /, "")})` : "your tower"} and ping your team to take it. Make them pay for sending ${enemies.length} to you instead of dying to it.`;
+    nextTime = `${enemies.length} of them came for you, which left ${enemiesElsewhere.length} on the rest of the map, and on the ${farSide} ${open}. That's the trade: when you see 3+ missing while you're ${sideLane ? "side-laning" : "out"} like this, walk back toward ${nearestAlly ? `${champName(nearestAlly.p.champion)} (${spot(c, nearestAlly.q!).replace(/^in /, "")})` : "your tower"} and ping your team to take it. Make them pay for sending ${enemies.length} to you instead of dying to it.`;
   } else if (jg && t < LANE_END) {
     cause = "ganked";
     const seen = positionAt(c.track, jg.participantId, t - 45_000);
     const secs = seen ? Math.round(dist(seen, pos) / 400) : null;
     nextTime = seen
-      ? `${jg.championName} was ${spot(c, seen)} at ${fmtTime(t - 45_000)}, about ${secs}s from where you died. Once you know where they are, start a ${secs}-second clock: when it runs out and your wave is past the middle, step back toward your tower until they show up again.`
-      : `${jg.championName} came to your lane. Track where they were last seen and when your wave is past the middle, assume they're coming.`;
+      ? `${champName(jg.championName)} was ${spot(c, seen)} at ${fmtTime(t - 45_000)}, about ${secs}s from where you died. Once you know where they are, start a ${secs}-second clock: when it runs out and your wave is past the middle, step back toward your tower until they show up again.`
+      : `${champName(jg.championName)} came to your lane. Track where they were last seen and when your wave is past the middle, assume they're coming.`;
   } else if (myFight) {
     cause = "chased-after-kill";
     nextTime = `The kill at ${fmtTime(myFight.timestamp)} was already the win. Take it and walk out: you gave back ${g(bounty)} chasing further ${spot(c, pos)}.`;
@@ -559,7 +560,7 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
   } else if (enemies.length === 1 && c.opp && enemies[0].participantId === c.opp.participantId) {
     cause = "lost-1v1";
     const gd = (lerp(c, meId, t - 1000, (f) => f.totalGold) ?? 0) - (lerp(c, c.opp.participantId, t - 1000, (f) => f.totalGold) ?? 0);
-    nextTime = gd < -300 ? `You were ${g(-gd)} behind ${c.opp.championName} and lost a 1v1. Behind, don't take even trades: farm under tower and look for ${c.opp.championName}'s cooldowns before you step up.` : `You were ${gd >= 0 ? `${g(gd)} ahead` : "even"} and still lost the 1v1, so this one is mechanics or cooldowns, not position. Watch it and check what they used before you committed.`;
+    nextTime = gd < -300 ? `You were ${g(-gd)} behind ${champName(c.opp.championName)} and lost a 1v1. Behind, don't take even trades: farm under tower and look for ${champName(c.opp.championName)}'s cooldowns before you step up.` : `You were ${gd >= 0 ? `${g(gd)} ahead` : "even"} and still lost the 1v1, so this one is mechanics or cooldowns, not position. Watch it and check what they used before you committed.`;
   } else {
     cause = alliesNear.length === 0 ? "caught-alone" : "lost-fight";
     nextTime = alliesNear.length === 0
@@ -582,20 +583,20 @@ function deathLeak(c: Ctx, d: TimelineEvent): Leak {
         t < LANE_END
           ? `step back behind your wave toward your tower`
           : nearestAlly
-            ? `walk toward ${nearestAlly.p.champion} (${spot(c, nearestAlly.q!).replace(/^in /, "")})`
+            ? `walk toward ${champName(nearestAlly.p.champion)} (${spot(c, nearestAlly.q!).replace(/^in /, "")})`
             : `walk back toward your tower`;
       let tip: string;
       vision = ls && t - ls.t <= 45_000 ? "seen" : "unseen";
       if (ls && t - ls.t <= 45_000) {
         const secs = Math.round((t - ls.t) / 1000);
         const walk = Math.round(dist(ls, pos) / 380);
-        evidence.push(`${key.championName} showed on your minimap at ${fmtTime(ls.t)} ${spot(c, ls)}, ${secs}s before you died.`);
-        tip = `You had the information: ${key.championName} showed on your minimap at ${fmtTime(ls.t)} ${spot(c, ls)}, about ${walk}s of walking from you. That was the moment to ${safeMove}. ${secs > walk ? `You stayed ${secs - walk}s longer than that clock allowed.` : "There was no time to finish anything first."}`;
+        evidence.push(`${champName(key.championName)} showed on your minimap at ${fmtTime(ls.t)} ${spot(c, ls)}, ${secs}s before you died.`);
+        tip = `You had the information: ${champName(key.championName)} showed on your minimap at ${fmtTime(ls.t)} ${spot(c, ls)}, about ${walk}s of walking from you. That was the moment to ${safeMove}. ${secs > walk ? `You stayed ${secs - walk}s longer than that clock allowed.` : "There was no time to finish anything first."}`;
       } else {
         const since = ls ? Math.round((t - ls.t) / 1000) : null;
-        evidence.push(ls ? `${key.championName} was last on your minimap at ${fmtTime(ls.t)}, ${since}s before.` : `${key.championName} wasn't on your minimap at all in the 2½ minutes before.`);
-        if (truth) evidence.push(`With fog off, 20s before you died ${key.championName} was ${spot(c, truth)}.`);
-        tip = `You couldn't see ${key.championName} coming (${ls ? `last shown ${since}s earlier` : "not shown for over 2 minutes"}${missing.length > 1 ? `, ${missing.length} enemies off your minimap` : ""}). Reacting to the gank itself wasn't possible; the mistake was standing where an unseen jungler could reach you. With nobody accounted for, ${safeMove} until someone shows, or ward ${truth ? spot(c, truth).replace(/^in /, "") : "the river"} first.`;
+        evidence.push(ls ? `${champName(key.championName)} was last on your minimap at ${fmtTime(ls.t)}, ${since}s before.` : `${champName(key.championName)} wasn't on your minimap at all in the 2½ minutes before.`);
+        if (truth) evidence.push(`With fog off, 20s before you died ${champName(key.championName)} was ${spot(c, truth)}.`);
+        tip = `You couldn't see ${champName(key.championName)} coming (${ls ? `last shown ${since}s earlier` : "not shown for over 2 minutes"}${missing.length > 1 ? `, ${missing.length} enemies off your minimap` : ""}). Reacting to the gank itself wasn't possible; the mistake was standing where an unseen jungler could reach you. With nobody accounted for, ${safeMove} until someone shows, or ward ${truth ? spot(c, truth).replace(/^in /, "") : "the river"} first.`;
       }
       nextTime = enemies.length >= 3 ? `${tip} ${nextTime}` : tip;
     }

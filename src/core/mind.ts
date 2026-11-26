@@ -2,6 +2,7 @@ import { benchmarkFor } from "./benchmarks";
 import type { IssueId } from "./coach";
 import { AllGameData, champKey, enemyJungler, findMe, isPlayer, itemGold, laneOpponent, LivePlayer } from "./live";
 import type { GameReport, Position } from "./types";
+import { champName } from "./names";
 
 /**
  * The mental game: one goal you pick before the game, live challenges that track it while
@@ -532,13 +533,13 @@ export class LiveTracker {
         if (!opp) return s("pending", 0, "", "Lane opponent unknown");
         const diff = this.csDiffAt14 ?? me.scores.creepScore - opp.scores.creepScore;
         const done = this.csDiffAt14 !== null;
-        return s(done ? (diff >= 0 ? "passed" : "failed") : diff >= 0 ? "on-track" : "at-risk", 0.5 + diff / 40, `${diff >= 0 ? "+" : ""}${diff} CS`, `vs ${opp.championName}${done ? " at 14:00" : ""}`);
+        return s(done ? (diff >= 0 ? "passed" : "failed") : diff >= 0 ? "on-track" : "at-risk", 0.5 + diff / 40, `${diff >= 0 ? "+" : ""}${diff} CS`, `vs ${champName(opp.championName)}${done ? " at 14:00" : ""}`);
       }
       case "item_lead": {
         if (!opp) return s("pending", 0, "", "Lane opponent unknown");
         const diff = this.itemDiffAt15 ?? itemGold(me) - itemGold(opp);
         const done = this.itemDiffAt15 !== null;
-        return s(done ? (diff >= 0 ? "passed" : "failed") : diff >= -300 ? "on-track" : "at-risk", 0.5 + diff / 3000, `${diff >= 0 ? "+" : "−"}${fmtG(Math.abs(diff))}`, `Items vs ${opp.championName}${done ? " at 15:00" : ""}`);
+        return s(done ? (diff >= 0 ? "passed" : "failed") : diff >= -300 ? "on-track" : "at-risk", 0.5 + diff / 3000, `${diff >= 0 ? "+" : "−"}${fmtG(Math.abs(diff))}`, `Items vs ${champName(opp.championName)}${done ? " at 15:00" : ""}`);
       }
       case "kill_participation": {
         const kp = this.teamKills ? Math.round(((me.scores.kills + me.scores.assists) / this.teamKills) * 100) : 0;
@@ -665,7 +666,7 @@ export function deathLesson(d: DeathRec, defs: Record<ChallengeId, ChallengeDef>
   if (d.jungler && d.t < 840) return { cause: "Their jungler", fix: "When you lose sight of their jungler for 30s, stand behind your wave." };
   if (d.gold >= 1300) return { cause: `Held ${fmtG(d.gold)}`, fix: "That gold never fought. Back on the next crash, not the one after." };
   if (d.helpers >= 2) return { cause: `${d.helpers + 1} of them`, fix: "Count the enemies you can see before you commit. 2+ missing means don't." };
-  return { cause: d.killerChamp ? `${d.killerChamp}` : "Killed", fix: defs[skill].rule };
+  return { cause: d.killerChamp ? `${champName(d.killerChamp)}` : "Killed", fix: defs[skill].rule };
 }
 
 // ---------------------------------------------------------------- debrief

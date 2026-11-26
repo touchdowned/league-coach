@@ -20,6 +20,7 @@ import { ChampIcon } from "../charts";
 import { useProgress } from "../progress";
 import { Rift, toView } from "../rift";
 import { Button, Kbd, Spinner } from "../ui";
+import { champName } from "../../core/names";
 
 type Phase = "intro" | "lead" | "decide" | "reveal" | "playout" | "debrief";
 type Source = "replay" | "map";
@@ -372,7 +373,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
         <div className="wt-rail-head">
           <ChampIcon name={me} size={40} />
           <div>
-            <strong>{me}{r.metrics.opponentChampion ? <span className="muted"> vs {r.metrics.opponentChampion}</span> : null}</strong>
+            <strong>{me}{r.metrics.opponentChampion ? <span className="muted"> vs {champName(r.metrics.opponentChampion)}</span> : null}</strong>
             <small className={r.metrics.win ? "win" : "loss"}>{r.metrics.win ? "Victory" : "Defeat"} · {r.metrics.kills}/{r.metrics.deaths}/{r.metrics.assists}</small>
           </div>
           <button className="wt-x" onClick={onExit} title="Close (Esc)"><X size={16} /></button>

@@ -16,6 +16,7 @@ import { useProgress } from "../progress";
 import { Button, Empty, Kbd, ProgressBar, Spinner } from "../ui";
 import { buildChapters } from "../../core/walkthrough";
 import { Walkthrough } from "./Walkthrough";
+import { champName } from "../../core/names";
 
 export function ReviewView({
   games,
@@ -62,7 +63,7 @@ export function ReviewView({
             <button key={m.matchId} className={`game-item ${m.win ? "w" : "l"} ${current.metrics.matchId === m.matchId ? "on" : ""}`} onClick={() => { setSelected(m.matchId); setAutoplay(true); setStartKind(undefined); }}>
               <ChampIcon name={m.champion} size={34} />
               <span className="gi-main">
-                <strong>{m.champion}</strong>
+                <strong>{champName(m.champion)}</strong>
                 <small>
                   {ROLE_LABEL[m.role]} · {m.kills}/{m.deaths}/{m.assists}
                 </small>
@@ -371,7 +372,7 @@ function ReviewPlayer({
         <ChampIcon name={m.champion} size={52} />
         <div className="rh-main">
           <h1>
-            {m.champion} {m.opponentChampion && <span className="muted">vs {m.opponentChampion}</span>}
+            {champName(m.champion)} {m.opponentChampion && <span className="muted">vs {champName(m.opponentChampion)}</span>}
           </h1>
           <p className="muted">
             <span className={m.win ? "win" : "loss"}>{m.win ? "Victory" : "Defeat"}</span> · {ROLE_LABEL[m.role]} · {Math.round(m.durationMin)} min · {m.kills}/{m.deaths}/{m.assists} · {new Date(m.gameCreation).toLocaleDateString()}
@@ -459,7 +460,7 @@ function ReviewPlayer({
                   {media.kind === "rift" ? (
                     junglerDrill ? (
                       <>
-                        <strong>Where's {enemyJungler!.champion}?</strong> The jungler is hidden, like on your minimap. {frozen ? "Click where you think they are." : "Watch the lead-up; it freezes 4 seconds before you die."} <Kbd>R</Kbd> skips.
+                        <strong>Where's {champName(enemyJungler!.champion)}?</strong> The jungler is hidden, like on your minimap. {frozen ? "Click where you think they are." : "Watch the lead-up; it freezes 4 seconds before you die."} <Kbd>R</Kbd> skips.
                       </>
                     ) : (
                       <>
@@ -840,7 +841,7 @@ function Summary({ r, reviewed, next, onNext, onPuzzles, onRestart }: { r: GameR
       <div className="summary-actions">
         {next ? (
           <Button variant="primary" size="lg" onClick={() => onNext(next.metrics.matchId)}>
-            Next: {next.metrics.champion} {count > 0 ? `in ${count}s` : ""}
+            Next: {champName(next.metrics.champion)} {count > 0 ? `in ${count}s` : ""}
           </Button>
         ) : (
           <Button variant="primary" size="lg" onClick={onPuzzles}>

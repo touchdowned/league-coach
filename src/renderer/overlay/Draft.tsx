@@ -4,6 +4,7 @@ import type { ChallengeId } from "../../core/mind";
 import { ROLE_LABEL } from "../../core/benchmarks";
 import { coach, DraftInfo, DraftOption } from "../api";
 import { ChampIcon } from "../charts";
+import { champName } from "../../core/names";
 
 const INTENTIONS = ["Play for the long game", "Next wave over last fight", "Mute early, stay on my screen", "Trust my reads", "Calm hands, slow breaths"];
 const pct = (x: number | null) => (x === null ? "—" : `${Math.round(x * 100)}%`);
@@ -52,7 +53,7 @@ export function DraftCard({ info, onClose, floating, onLocked }: { info: DraftIn
             <strong>{info.championName ?? "Pick your champion"}</strong>
             <small className="muted">
               {info.role ? ROLE_LABEL[info.role] : "Role unknown"}
-              {info.enemyName ? ` vs ${info.enemyName}` : ""}
+              {info.enemyName ? ` vs ${champName(info.enemyName)}` : ""}
             </small>
           </div>
         </div>
@@ -73,10 +74,10 @@ export function DraftCard({ info, onClose, floating, onLocked }: { info: DraftIn
 
       {info.read && info.read.games > 0 && (
         <div className="draft-read">
-          <Stat label={`On ${info.championName}`} value={pct(info.read.winRate)} sub={`${info.read.games} games`} />
+          <Stat label={`On ${champName(info.championName)}`} value={pct(info.read.winRate)} sub={`${info.read.games} games`} />
           <Stat label="CS @10" value={info.read.cs10 ?? "—"} />
           <Stat label="Deaths <14" value={info.read.deathsPre14?.toFixed(1) ?? "—"} />
-          {info.enemyName && <Stat label={`vs ${info.enemyName}`} value={info.read.vsGames ? pct(info.read.vsWinRate) : "New"} sub={info.read.vsGames ? `${info.read.vsGold15! >= 0 ? "+" : ""}${info.read.vsGold15}g @15` : "no games yet"} />}
+          {info.enemyName && <Stat label={`vs ${champName(info.enemyName)}`} value={info.read.vsGames ? pct(info.read.vsWinRate) : "New"} sub={info.read.vsGames ? `${info.read.vsGold15! >= 0 ? "+" : ""}${info.read.vsGold15}g @15` : "no games yet"} />}
         </div>
       )}
 

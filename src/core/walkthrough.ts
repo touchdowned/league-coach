@@ -16,6 +16,7 @@ import { describeSpot, dist, positionAt, type Track } from "./track";
 import type { GameReport } from "./types";
 import { hasVision, lastSeen, truthAt, visibleAt } from "./vision";
 import { laneOf, pointOnLane, waveAt, type Lane, type WaveRead } from "./waves";
+import { champName } from "./names";
 
 export type Pt = { x: number; y: number };
 
@@ -156,9 +157,9 @@ function sight(g: G, t: number): { seen: string[]; truth: string[]; missing: Tra
   seen.push(visible.length ? `On your minimap: ${visible.map((p) => p.champion).join(", ")}.` : "No enemies on your minimap.");
   for (const p of missing) {
     const ls = lastSeen(g.r.waves, p.id, t, 180_000);
-    seen.push(ls ? `${p.champion}: last seen ${Math.round((t - ls.t) / SEC)}s ago ${spot(g, ls)}.` : `${p.champion}: not seen for 3+ minutes.`);
+    seen.push(ls ? `${champName(p.champion)}: last seen ${Math.round((t - ls.t) / SEC)}s ago ${spot(g, ls)}.` : `${champName(p.champion)}: not seen for 3+ minutes.`);
     const tr = truthAt(g.r.waves, p.id, t);
-    if (tr) truth.push(`${p.champion} was ${spot(g, tr)} (${(dist(tr, pos(g, g.meId, t) ?? tr) / 1000).toFixed(1)}k units from you).`);
+    if (tr) truth.push(`${champName(p.champion)} was ${spot(g, tr)} (${(dist(tr, pos(g, g.meId, t) ?? tr) / 1000).toFixed(1)}k units from you).`);
   }
   return { seen, truth, missing };
 }
@@ -267,10 +268,10 @@ function deathChapter(g: G, l: Leak): Chapter {
     question = `You just got ${victim ?? "the kill"}. What now?`;
     choices = [
       { label: "Keep chasing the next one", good: false, why: `That's what happened: ${killerNames.join(" and ") || "they"} turned on you ${Math.round((t - root) / SEC)}s later.` },
-      { label: "Walk out and reset", good: true, why: `The kill is already the profit. Walk ${ally ? `to ${ally.champion}` : "toward your tower"}, then back or take a plate with the tempo.` },
+      { label: "Walk out and reset", good: true, why: `The kill is already the profit. Walk ${ally ? `to ${champName(ally.champion)}` : "toward your tower"}, then back or take a plate with the tempo.` },
       { label: "Hit the closest tower", good: true, why: "Fine if no one else on their team is showing nearby. Turning a kill into a plate is the classic trade." },
     ];
-    better = { text: `Take the kill and walk ${ally ? `toward ${ally.champion}` : "out"}: the shutdown you gave back was worth more than anything left in that fight.`, from, to, label: "walk out" };
+    better = { text: `Take the kill and walk ${ally ? `toward ${champName(ally.champion)}` : "out"}: the shutdown you gave back was worth more than anything left in that fight.`, from, to, label: "walk out" };
     beats.push({ t: root, kind: "decision", caption: `Kill secured. Everything after this is a decision.`, follow: g.me, marks: [{ kind: "path", from, to, tone: "better", label: "walk out" }] });
   } else if (jg && seenRecently && ls) {
     root = ls.t;
@@ -278,18 +279,18 @@ function deathChapter(g: G, l: Leak): Chapter {
     const w = myWave(g, root);
     const to = t < LANE_END ? safeLaneSpot(g, from, w) : (nearestAlly(g, root, from)?.at ?? towardBase(g, from, 2500));
     const walk = Math.round(dist(ls, at) / 380);
-    headline = `${jg.champion} showed ${bare(spot(g, ls))} ${Math.round((t - ls.t) / SEC)}s before. That was the cue to step back.`;
-    question = `${jg.champion} just showed on your minimap. What do you do?`;
+    headline = `${champName(jg.champion)} showed ${bare(spot(g, ls))} ${Math.round((t - ls.t) / SEC)}s before. That was the cue to step back.`;
+    question = `${champName(jg.champion)} just showed on your minimap. What do you do?`;
     choices = [
-      { label: "Finish the wave first", good: false, why: `${jg.champion} was ~${walk}s away. You stayed ${Math.max(0, Math.round((t - ls.t) / SEC) - walk)}s past that clock.` },
+      { label: "Finish the wave first", good: false, why: `${champName(jg.champion)} was ~${walk}s away. You stayed ${Math.max(0, Math.round((t - ls.t) / SEC) - walk)}s past that clock.` },
       { label: t < LANE_END ? "Step back behind your wave" : "Group with your team", good: true, why: `Start a ${walk}s clock the moment they show. When it runs out, be somewhere a gank can't reach.` },
       { label: "Look for a trade", good: false, why: `Trading with a jungler ${walk}s away is fighting 1v2 by the time the trade ends.` },
     ];
-    better = { text: `${jg.champion} was ${walk}s of walking away. Back off toward ${t < LANE_END ? "your tower" : "your team"} as soon as they show, and come back when they appear somewhere else.`, from, to, label: "safe spot" };
+    better = { text: `${champName(jg.champion)} was ${walk}s of walking away. Back off toward ${t < LANE_END ? "your tower" : "your team"} as soon as they show, and come back when they appear somewhere else.`, from, to, label: "safe spot" };
     beats.push({
       t: root,
       kind: "decision",
-      caption: `${jg.champion} shows on your minimap ${bare(spot(g, ls))}.`,
+      caption: `${champName(jg.champion)} shows on your minimap ${bare(spot(g, ls))}.`,
       follow: g.me,
       marks: [{ kind: "ring", at: ls, tone: "danger", label: jg.champion }, { kind: "path", from: ls, to: at, tone: "enemy", label: `~${walk}s` }],
     });
@@ -346,13 +347,13 @@ function deathChapter(g: G, l: Leak): Chapter {
           ]
         : [
             { label: "Keep going", good: false, why: `That's what happened. ${n >= 2 ? `${n} of them were waiting.` : "It got you killed."}` },
-            { label: ally ? `Walk toward ${ally.champion}` : "Turn back", good: true, why: `With ${missing || "enemies"} unaccounted for, only go where your team or a ward covers you.` },
+            { label: ally ? `Walk toward ${champName(ally.champion)}` : "Turn back", good: true, why: `With ${missing || "enemies"} unaccounted for, only go where your team or a ward covers you.` },
             { label: "Ward first, then go", good: true, why: "A ward on the way in would have shown the collapse coming." },
           ];
     better = {
       text:
         cause === "collapsed-on"
-          ? `${n} came to you, so the rest of the map was open. Walk toward ${ally ? ally.champion : "your team"} and ping your team to take something on the other side.`
+          ? `${n} came to you, so the rest of the map was open. Walk toward ${ally ? champName(ally.champion) : "your team"} and ping your team to take something on the other side.`
           : `Stay on your side until ${missing ? `the ${missing} missing enemies show` : "you know where they are"}, or go with a teammate.`,
       from,
       to,
@@ -371,7 +372,7 @@ function deathChapter(g: G, l: Leak): Chapter {
   if (jg && g.vision && root < t - 6 * SEC) {
     const shownAt = firstShown(g, jg.id, root, t);
     if (shownAt && shownAt.t > root + 2 * SEC && shownAt.t < t - SEC)
-      beats.push({ t: shownAt.t, kind: "cue", caption: `${jg.champion} appears ${bare(spot(g, shownAt))}. Too late now.`, follow: g.me, marks: [{ kind: "ring", at: shownAt, tone: "danger", label: jg.champion }] });
+      beats.push({ t: shownAt.t, kind: "cue", caption: `${champName(jg.champion)} appears ${bare(spot(g, shownAt))}. Too late now.`, follow: g.me, marks: [{ kind: "ring", at: shownAt, tone: "danger", label: jg.champion }] });
   }
   beats.push({ t: Math.max(0, root - LEAD), kind: "setup", caption: setupLine(g, root), follow: g.me, marks: [] });
   const s = sight(g, root);
