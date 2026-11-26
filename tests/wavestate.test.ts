@@ -47,6 +47,28 @@ describe("lane reads", () => {
   });
 });
 
+describe("tower reads under the icon", () => {
+  it("counts a single read of attackers in tower range as the wave at the tower", () => {
+    // Red's wave hits the blue tower: under its icon it shows for one frame in eight.
+    const ts = Array.from({ length: 8 }, (_, k) => 10_000 + k * 500);
+    const s = ts.map((t, k) => at(t, [], k === 3 ? [blueTower + 600] : []));
+    const series = laneSeries(track(s), "MIDDLE", 100, geo);
+    expect(series.some((r) => r.zone === "my tower")).toBe(true);
+  });
+
+  it("walks the winning wave on as soon as the losing wave is gone", () => {
+    // Red beats blue's wave 2200 units in front of the blue tower (blue's last read at 11.5 s, red's
+    // at 16.5 s), then goes unread under a portrait. Red must reach the tower (2200 / 325 = 7 s),
+    // not stay where the fight was.
+    const fight = blueTower + 2200;
+    const ts = Array.from({ length: 50 }, (_, k) => 10_000 + k * 500);
+    const s = ts.map((t) => (t < 12_000 ? at(t, wave(fight - 200, 4, 1), wave(fight, 4, -1)) : t < 17_000 ? at(t, [], wave(fight, 3, -1)) : at(t, [], [])));
+    const champs: ChampSample[] = ts.map((t) => ({ t, fog: "off", at: [{ id: 1, ...pointOnLane("MIDDLE", fight / L) }] }));
+    const series = laneSeries({ ...track(s), champs }, "MIDDLE", 100, geo);
+    expect(series.filter((r) => r.t >= 24_000).some((r) => r.zone === "my tower")).toBe(true);
+  });
+});
+
 describe("wave events", () => {
   it("reads a fast push, the crash and the bounce", () => {
     const samples: WaveSample[] = [];

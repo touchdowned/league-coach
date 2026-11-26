@@ -57,4 +57,28 @@ describe("ward positions", () => {
     const stays: WaveSample[] = ts.map((t) => ({ t, lanes, wards: t >= 61_000 ? [{ team: 100 as const, x: 6900, y: 4100 }] : [] }));
     expect(placeWards(stays, champs, ev, () => 100, 120_000).placed.map((p) => p.t)).toEqual([60_700]);
   });
+
+  it("matches a control ward to a steady eye icon and a trinket to a star", () => {
+    // A star appears at (6900, 4100) at 61 s and an eye at (7400, 4300) at 61.5 s; a one-frame
+    // eye at (7000, 3900) at 62 s is noise (a minion clump that fit the eye once).
+    const ts = Array.from({ length: 30 }, (_, k) => 60_000 + k * 500);
+    const samples: WaveSample[] = ts.map((t) => ({
+      t,
+      lanes,
+      wards: [
+        ...(t >= 61_000 ? [{ team: 100 as const, x: 6900, y: 4100, kind: "stealth" as const }] : []),
+        ...(t >= 61_500 ? [{ team: 100 as const, x: 7400, y: 4300, kind: "control" as const }] : []),
+        ...(t === 62_000 ? [{ team: 100 as const, x: 7000, y: 3900, kind: "control" as const }] : []),
+      ],
+    }));
+    const champs: ChampSample[] = ts.map((t) => ({ t, fog: "off" as const, at: [{ id: 4, x: 7100, y: 4000 }] }));
+    const ev: TimelineEvent[] = [
+      { type: "WARD_PLACED", timestamp: 60_700, creatorId: 4, wardType: "YELLOW_TRINKET" },
+      { type: "WARD_PLACED", timestamp: 61_200, creatorId: 4, wardType: "CONTROL_WARD" },
+    ];
+    expect(placeWards(samples, champs, ev, () => 100, 120_000).placed).toEqual([
+      { t: 60_700, creatorId: 4, wardType: "YELLOW_TRINKET", x: 6900, y: 4100, icon: "stealth" },
+      { t: 61_200, creatorId: 4, wardType: "CONTROL_WARD", x: 7400, y: 4300, icon: "control" },
+    ]);
+  });
 });

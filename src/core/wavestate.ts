@@ -145,8 +145,13 @@ function rawRead(s: WaveSample, lane: Lane, teamId: number, geo: LaneGeometry): 
 
 function derive(r: Raw, leadMine: number | null, leadTheirs: number | null, mine: number, theirs: number, underTheirTower: number, underMyTower: number): LaneRead {
   const contact = leadMine !== null && leadTheirs !== null && leadTheirs - leadMine <= CONTACT;
-  const atMine = leadTheirs !== null && leadTheirs <= r.myTower + TOWER_RANGE;
-  const atTheirs = leadMine !== null && leadMine >= r.theirTower - TOWER_RANGE;
+  // At a tower: the steadied lead is in its range, or any attacker was read in its range within
+  // the SMOOTH_MS window. The tower's icon hides minions within about 450 of its 900 range, so a
+  // wave hitting it shows for single frames at the icon's edge and the median of the leads
+  // around it votes those reads out (NA1_5686039660: 4 plates fell with attackers read in range
+  // for 1-4 frames each and none kept by the median).
+  const atMine = (leadTheirs !== null && leadTheirs <= r.myTower + TOWER_RANGE) || underMyTower > 0;
+  const atTheirs = (leadMine !== null && leadMine >= r.theirTower - TOWER_RANGE) || underTheirTower > 0;
   // The front is where minions are fighting: between the leads in contact, at the lead that
   // has reached a tower, or at the only wave in the lane. Two waves still walking toward
   // each other have no front yet.
@@ -316,7 +321,14 @@ function follow(raws: Raw[], sm: (number | null)[], st: (number | null)[], portr
       const near = other !== null && Math.abs(other.at - (w?.at ?? read ?? Infinity)) <= CONTACT + 300;
       // Where it should be by now.
       let expect = w ? w.at : null;
-      const free = w !== null && r.t - w.fought >= FREE_MS;
+      // A wave stands still only while an enemy wave is in front of it: once the other side's
+      // lead is gone from within CONTACT (it died, or only a fresh wave far back is read), the
+      // winner walks on at once (NA1_5686039660 top, 11:02-11:16: red beat blue's wave at 9618,
+      // was held there as "fighting" until dropped, and took the plate with no wave on record).
+      // The other wave also counts as gone when it stopped being read well before this one did:
+      // a wave still read after its opponent vanished outlived it.
+      const otherLost = other !== null && w !== null && w.t - other.t > 2 * SMOOTH_MS;
+      const free = w !== null && (r.t - w.fought >= FREE_MS || other === null || otherLost || Math.abs(other.at - w.at) > CONTACT + 300);
       if (w && free && ahead(stop, w.from) > 0) expect = w.from + dir * Math.min(Math.abs(stop - w.from), ((r.t - w.t) / 1000) * MINION_SPEED);
       if (read !== null && (expect === null || ahead(read, expect) >= -GROUP)) {
         // Read (at or beyond where it should be): follow the read.

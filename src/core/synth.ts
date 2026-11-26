@@ -241,7 +241,7 @@ function fightFinding(c: Ctx, f: Fight, k: number): Finding | null {
   const W = champName(worst.champion);
   const death = f.died !== null ? c.trips.find((v) => v.kind === "death" && Math.abs(v.start - f.died!) <= 2000) : undefined;
   const unspent = goldModel(c.timeline, c.items).at(c.id, f.t0);
-  const proof = [`Fight began at ${fmtTime(f.t0)}${f.at ? ` ${c.where(f.at)}` : ""}: ${f.opponents.length} of them in it (${f.opponents.map((o) => champName(o.champion)).join(", ")}), by ${f.kind === "kill" ? "the kill's damage and assist lists" : "who stood within 1200 units when your health dropped"}; on your side you${f.allies.length ? ` and ${f.allies.length} more (${f.allies.map((a) => champName(c.match.info.participants.find((p) => p.participantId === a)?.championName ?? "")).join(", ")})` : " alone"}.`];
+  const proof = [`Fight began at ${fmtTime(f.t0)}${f.at ? ` ${c.where(f.at)}` : ""}: ${f.opponents.length} of them in it (${f.opponents.map((o) => champName(o.champion)).join(", ")}), by ${f.kind === "kill" ? "the kill's damage and assist lists" : "who stood within 1200 units when your health dropped"}; on your side you${f.allies.length ? ` and ${f.allies.length} more in those lists or within 1200 units of you (${f.allies.map((a) => champName(c.match.info.participants.find((p) => p.participantId === a)?.championName ?? "")).join(", ")})` : " alone"}.`];
   for (const o of f.opponents) {
     const bits = [`level ${o.level} to your ${f.me.level}`];
     if (o.breakpoint !== null) {
