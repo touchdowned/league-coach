@@ -90,6 +90,8 @@ function lossLine(l: WaveLoss, lane: string): string {
   return `${plural(l.minions, "enemy minion")} died in ${lane} while you were out of XP range${waves.length ? `: ${waves.join(", ")}` : ""}.`;
 }
 /** Hand counts on frame dumps of two scans came out 0 to 3 minions under the ledger's, per trip. */
+/** Epic monsters the enemy took while the player was dead or walking back from it. */
+const alsoLost = (v: Trip | undefined) => (v?.objectives.length ? ` ${v.objectives.map((o) => `${OBJ_NAME[o.type]} fell to them at ${fmtTime(o.taken!)}`).join(" and ")} while you were out.` : "");
 const lossCost = (l: WaveLoss) => `${n1(l.waves)} waves (counted to within about 2 minions): ${l.xp} XP and up to ${l.gold} gold in last hits`;
 
 interface Ctx extends SynthInput {
@@ -184,9 +186,10 @@ function exposureFinding(c: Ctx, x: Exposure, k: number): Finding | null {
     gold = x.goldGiven + (death?.loss?.gold ?? 0);
     xp = death?.loss?.xp ?? 0;
     minions = death?.loss?.minions ?? 0;
-    cost = `You died at ${fmtTime(x.died)}: ${x.goldGiven} gold to them${death?.loss ? `, and ${lossCost(death.loss)} while dead and walking back (${s(death.until - death.start)} s)` : ""}.`;
+    cost = `You died at ${fmtTime(x.died)}: ${x.goldGiven} gold to them${death?.loss ? `, and ${lossCost(death.loss)} while dead and walking back (${s(death.until - death.start)} s)` : ""}.${alsoLost(death)}`;
   } else {
-    cost = `No death, but ${hpLost > 0 ? `${Math.round(hpLost)}% of your health gone by ${fmtTime(x.t1 + 10 * SEC)}` : "0% health lost"}${x.flashUsed ? " and Flash used (300 s cooldown)" : ""}; ${J} arrived ${x.arrived !== null ? `at ${fmtTime(x.arrived)}` : `within ${units(x.closest ?? 0)}`}.`;
+    const hp = x.hpStart === null || x.hpLow === null ? "your health was not read in this scan" : `${Math.round(hpLost)}% of your health gone by ${fmtTime(x.t1 + 10 * SEC)}`;
+    cost = `No death within 20 s; ${hp}${x.flashUsed ? "; Flash used (300 s cooldown)" : ""}. ${J} ${x.arrived !== null ? `was on you at ${fmtTime(x.arrived)}` : `came within ${units(x.closest ?? 0)}`}.`;
   }
   // The spot the jungler came through 5 s before reaching the player: a ward there shows the gank coming.
   const jPath = pathOf(c.track, jg.participantId);
@@ -231,12 +234,14 @@ function fightFinding(c: Ctx, f: Fight, k: number): Finding | null {
   const hpLost = f.hpStart !== null && f.hpEnd !== null ? f.hpStart - f.hpEnd : 0;
   // A fight at a deficit that went fine isn't a finding.
   if (f.died === null && hpLost < 40) return null;
-  const worst = [...f.opponents].sort((a, b) => score(b) - score(a))[0];
+  // The one who got the kill, else the one furthest ahead.
+  const killer = f.died !== null ? c.events.find((e) => e.type === "CHAMPION_KILL" && e.victimId === c.id && e.timestamp === f.died)?.killerId : undefined;
+  const worst = f.opponents.find((o) => o.id === killer && (o.breakpoint !== null || o.itemGoldLead >= ITEM_GAP || o.legendaryLead >= 1)) ?? [...f.opponents].sort((a, b) => score(b) - score(a))[0];
   if (!worst) return null;
   const W = champName(worst.champion);
   const death = f.died !== null ? c.trips.find((v) => v.kind === "death" && Math.abs(v.start - f.died!) <= 2000) : undefined;
   const unspent = goldModel(c.timeline, c.items).at(c.id, f.t0);
-  const proof = [`Fight began at ${fmtTime(f.t0)}${f.at ? ` ${c.where(f.at)}` : ""}: ${f.opponents.length} of them (${f.opponents.map((o) => champName(o.champion)).join(", ")}) against ${f.allies.length + 1} of you.`];
+  const proof = [`Fight began at ${fmtTime(f.t0)}${f.at ? ` ${c.where(f.at)}` : ""}: ${f.opponents.length} of them dealt or took damage in it (${f.opponents.map((o) => champName(o.champion)).join(", ")}) against ${f.allies.length + 1} of you.`];
   for (const o of f.opponents) {
     const bits = [`level ${o.level} to your ${f.me.level}`];
     if (o.breakpoint !== null) {
@@ -256,7 +261,7 @@ function fightFinding(c: Ctx, f: Fight, k: number): Finding | null {
     gold = f.goldGiven + (death?.loss?.gold ?? 0) - f.goldTaken;
     xp = death?.loss?.xp ?? 0;
     minions = death?.loss?.minions ?? 0;
-    cost = `You died at ${fmtTime(f.died)}: ${f.goldGiven} gold to them${f.goldTaken ? ` against ${f.goldTaken} you took` : ""}${death?.loss ? `, and ${lossCost(death.loss)} while dead and walking back` : ""}.`;
+    cost = `You died at ${fmtTime(f.died)}: ${f.goldGiven} gold to them${f.goldTaken ? ` against ${f.goldTaken} you took` : ""}${death?.loss ? `, and ${lossCost(death.loss)} while dead and walking back` : ""}.${alsoLost(death)}`;
   } else cost = `${Math.round(hpLost)}% of your health gone by ${fmtTime(f.t1)} for ${f.killed.length} kills.`;
   // When the gap closed: the player's own level-up, or the next shop stop.
   const parts: string[] = [];
@@ -265,13 +270,50 @@ function fightFinding(c: Ctx, f: Fight, k: number): Finding | null {
     parts.push(mine !== null ? `You reached level ${worst.breakpoint} at ${fmtTime(mine)}, ${s(mine - f.t0)} s after this fight began: before ${fmtTime(mine)}, give ${W} the ${f.at ? units(Math.max(600, forwardOf(f.at, c.me.teamId))) : "600 units"} you were standing past the middle and take the trade after it.` : `You never reached level ${worst.breakpoint} in the scanned part of the game; ${W} had it for this whole fight.`);
   } else if (worst.level - f.me.level >= 2) parts.push(`${W} was level ${worst.level} to your ${f.me.level}: ${worst.level - f.me.level} ability ranks you didn't have. ${(() => { const m = levelTime(c.events, c.id, worst.level); return m !== null ? `You reached level ${worst.level} at ${fmtTime(m)}, ${s(m - f.t0)} s later` : `You did not reach level ${worst.level} in the scanned part of the game`; })()}.`);
   if (worst.legendaryLead >= 1 || worst.itemGoldLead >= ITEM_GAP) {
-    const next = c.trips.find((v) => v.arrive > f.t0 && v.kind !== "death");
-    const last = [...c.trips].reverse().find((v) => v.leave !== null && v.leave <= f.t0);
+    const buys = c.events.filter((e) => e.type === "ITEM_PURCHASED" && e.participantId === c.id).map((e) => e.timestamp);
+    const last = [...buys].reverse().find((t) => t <= f.t0);
+    const next = buys.find((t) => t > f.t1);
+    const dead = next !== undefined && c.trips.some((v) => v.kind === "death" && next >= v.start && next <= v.arrive + 2000);
+    let line = `${W} had ${worst.itemGoldLead} gold more in items`;
+    if (unspent >= ITEM_GAP) line += `, and about ${Math.round(unspent / 25) * 25} of that gap was unspent gold on you: your last purchase was at ${last !== undefined ? fmtTime(last) : "0:00"}, ${s(f.t0 - (last ?? 0))} s before this fight`;
+    if (next !== undefined) line += `. Your next purchase was at ${fmtTime(next)}${dead ? ", from the death screen" : ""}: the same gold spent ${s(next - f.t0)} s sooner, before this fight instead of after it, closes ${Math.min(worst.itemGoldLead, Math.round(unspent / 25) * 25)} of the ${worst.itemGoldLead}`;
+    parts.push(line + ".");
+  }
+  if (f.flags.includes("outnumbered")) {
+    // When the numbers turned: the first moment in the 20 s before with more enemies than allies within 2500 units.
+    const mePath = pathOf(c.track, c.id);
+    const others = c.match.info.participants.filter((p) => p.participantId !== c.id).map((p) => ({ enemy: p.teamId !== c.me.teamId, path: pathOf(c.track, p.participantId) }));
+    let turned: number | null = null;
+    let nearestAlly: number | null = null;
+    for (const p of mePath) {
+      if (p.t < f.t0 - 20 * SEC) continue;
+      if (p.t > f.t0) break;
+      let en = 0;
+      let al = 1;
+      let ally = Infinity;
+      for (const o of others) {
+        let q = null as (typeof o.path)[number] | null;
+        for (const x of o.path) {
+          if (x.t > p.t + 1000) break;
+          if (x.t >= p.t - 1000) q = x;
+        }
+        if (!q) continue;
+        const d = Math.hypot(q.x - p.x, q.y - p.y);
+        if (o.enemy && d <= 2500) en++;
+        if (!o.enemy && d <= 2500) al++;
+        if (!o.enemy) ally = Math.min(ally, d);
+      }
+      if (turned === null && en > al) {
+        turned = p.t;
+        nearestAlly = Number.isFinite(ally) ? ally : null;
+      }
+    }
     parts.push(
-      `${W} had ${worst.itemGoldLead} gold more in items${unspent >= ITEM_GAP ? `, and ${Math.round(unspent / 25) * 25} of that gap was sitting unspent in your pocket: your last shop stop ended at ${last?.leave != null ? fmtTime(last.leave) : "0:00"}` : ""}${next ? `; your next one was at ${fmtTime(next.arrive)}, ${s(next.arrive - f.t0)} s later. Fight after it, not before` : ""}.`,
+      turned !== null
+        ? `${f.opponents.length} of them took part against ${f.allies.length + 1} of you. The count within 2500 units of you turned against you at ${fmtTime(turned)}, ${s(f.t0 - turned)} s before the first hit${nearestAlly !== null ? `, with your nearest ally ${units(nearestAlly)} away` : ""}: ${fmtTime(turned)} is when to start walking back, not ${fmtTime(f.died ?? f.t1)}.`
+        : `${f.opponents.length} of them took part against ${f.allies.length + 1} of you, and the ${f.opponents.length - f.allies.length - 1} extra were not within 2500 units of you on the fog-off map until ${fmtTime(f.t0)}: they came from out of sight.`,
     );
   }
-  if (f.flags.includes("outnumbered")) parts.push(`It was ${f.opponents.length} against ${f.allies.length + 1} within 1600 units when it began; the nearest other ally was not in range.`);
   if (!parts.length) return null;
   return {
     id: `fight-${k}`,
@@ -298,7 +340,7 @@ const score = (o: Matchup) => (o.breakpoint !== null ? 1000 : 0) + Math.max(0, o
 function objectiveFinding(c: Ctx, o: ObjectiveSync, k: number): Finding | null {
   if (o.taken === null || o.by === c.me.teamId || (!o.away && !o.unspent)) return null;
   const name = OBJ_NAME[o.type];
-  const trip = c.trips.find((v) => v.kind !== "death" && ((o.spawn >= v.start && o.spawn <= v.until) || (o.taken! >= v.start && o.taken! <= v.until)));
+  const trip = c.trips.find((v) => v.kind !== "death" && o.taken! >= v.start && o.taken! <= v.until);
   const recalls = c.trips.filter((v) => v.kind === "recall" && v.back !== null).map((v) => v.back! - v.start).sort((a, b) => a - b);
   const typical = recalls.length ? recalls[recalls.length >> 1] : 40 * SEC;
   const proof = [`${name} came up at ${fmtTime(o.spawn)} and the enemy took it at ${fmtTime(o.taken)}.`];
@@ -343,7 +385,7 @@ function deathFinding(c: Ctx, v: Trip, k: number): Finding | null {
       lossLine(v.loss, lane),
       ...(v.state ? [`At the kill: ${v.state.theirs} enemy minions against your ${v.state.mine} at the front.`] : []),
     ],
-    cost: `${bounty} gold to them, plus ${lossCost(v.loss)}.`,
+    cost: `${bounty} gold to them, plus ${lossCost(v.loss)}.${alsoLost(v)}`,
     gold: bounty + v.loss.gold,
     xp: v.loss.xp,
     minions: v.loss.minions,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FOUNTAINS } from "../src/core/minimap";
 import { objectiveWindows, waveSpawns, waveGold, waveXp } from "../src/core/rules";
-import { baseVisits, checkBaseVisits, checkWaveSchedule, countRatio, freshWaves, laneLedger, lostBetween, trips, type Fix } from "../src/core/tempo";
+import { baseVisits, deathsOf, checkBaseVisits, checkWaveSchedule, countRatio, freshWaves, laneLedger, lostBetween, trips, type Fix } from "../src/core/tempo";
 import type { MatchDto, TimelineDto, TimelineEvent } from "../src/core/types";
 import { laneLength, pointOnLane, type ChampSample, type WaveSample, type WaveTrack } from "../src/core/waves";
 
@@ -155,5 +155,20 @@ describe("base visits the scan can't see", () => {
     const v = baseVisits(1, path, 100, [{ t: 200_000, at: lane }]);
     expect(v.map((x) => x.kind)).toEqual(["death"]);
     expect(v[0].start).toBe(200_000);
+  });
+
+  it("reads the respawn from the health bar coming back, and drops what was read while dead", () => {
+    const ev = [{ type: "CHAMPION_KILL", timestamp: 200_000, victimId: 1, killerId: 6, position: lane }] as unknown as TimelineEvent[];
+    const hp = (t: number, v: number | null) => ({ t, hp: [v, null, null, null, null, null, null, null, null, null], res: [] });
+    // Bar empty from the death, unread for a while, full again at 3:42. A junk read above 2% two seconds after the death doesn't count.
+    const hud = [hp(199_000, 30), hp(201_000, 0), hp(202_000, 40), hp(210_000, null), hp(221_000, 0), hp(222_000, 100), hp(223_000, 100)];
+    const d = deathsOf(ev, 1, { samples: [], champs: [], hud } as unknown as WaveTrack);
+    expect(d).toHaveLength(1);
+    expect(d[0].respawn).toBe(222_000);
+    // Reads in lane at 3:26 to 3:30 (the corpse, or a portrait fragment) must not make this a recall from lane.
+    const path = [...fixes([[60_000, 199_500, lane], [206_000, 210_000, lane], [226_000, 228_000, out], [240_000, 260_000, lane]])];
+    const v = baseVisits(1, path, 100, d);
+    expect(v.map((x) => x.kind)).toEqual(["death"]);
+    expect(v[0].arrive).toBe(222_000);
   });
 });

@@ -48,6 +48,13 @@ export interface Fix extends Pt {
   inferred?: boolean;
 }
 
+export interface Death {
+  t: number;
+  at: Pt | null;
+  /** When they respawned, if the scan saw it (HP bar back above 0, or Live Client's isDead clearing). */
+  respawn?: number | null;
+}
+
 /** One champion's fog-off positions over the scan, in time order. */
 export function pathOf(track: WaveTrack, id: number): Fix[] {
   const out: Fix[] = [];
@@ -82,34 +89,40 @@ export interface BaseVisit {
  * Every base visit of one champion. `deaths` are that champion's death times; `baronKills`
  * the times their team took Baron (the buff halves the recall channel).
  */
-export function baseVisits(id: number, rawPath: Fix[], teamId: number, deaths: { t: number; at: Pt | null }[], baronKills: number[] = []): BaseVisit[] {
+export function baseVisits(id: number, rawPath: Fix[], teamId: number, deaths: Death[], baronKills: number[] = []): BaseVisit[] {
   const f = fountainOf(teamId);
   const inBase = (p: Pt) => dist(p, f) <= f.r;
-  // A dead champion has no icon: reads in the first seconds after a death (the shortest
-  // death timer is 6 s), and filled-in ones until the respawn, are another ring misnamed.
-  const path = rawPath.filter((p) => !deaths.some((d) => p.t > d.t + 1000 && (p.t < d.t + 6000 || (p.inferred && p.t < d.t + 60_000 && !inBase(p)))));
   // Into the fountain, a walk only has to reach its edge.
   const walkable = (a: Fix, b: Fix) => (inBase(b) ? Math.max(0, dist(a, f) - f.r) : dist(a, b)) <= WALK_SLACK + ((b.t - a.t) / 1000) * WALK_SPEED;
   const out: BaseVisit[] = [];
-  // Respawns first. A dead champion has no icon, so the first read after a death is after
-  // the respawn: in the fountain, or already walking out of it.
+  // Respawns first. A dead champion has no icon, so any read between the death and the
+  // respawn is another ring misnamed (seen on two scans: reads in lane 6 s after a death).
+  // The respawn moment comes from the HP bar or Live Client (see deathsOf); without either,
+  // it is the first real read back at the fountain.
+  const dead: [number, number][] = [];
   for (const d of deaths) {
-    const k = path.findIndex((p) => p.t >= d.t + 6000);
-    if (k < 0 || path[k].t - d.t > MAX_RESPAWN_MS + 60_000) continue;
-    const p = path[k];
+    let k: number;
     let arrive: number;
-    let leave: number | null;
-    if (inBase(p)) {
-      let j = k;
-      while (j + 1 < path.length && inBase(path[j + 1])) j++;
-      arrive = p.t;
-      leave = j + 1 < path.length ? path[j].t : null;
+    if (d.respawn != null) {
+      arrive = d.respawn;
+      k = rawPath.findIndex((p) => p.t >= arrive - 500);
     } else {
-      leave = Math.max(d.t + 6000, p.t - (Math.max(0, dist(p, f) - f.r / 2) / RETURN_SPEED) * 1000);
-      arrive = Math.max(d.t + 6000, leave - 2000);
+      k = rawPath.findIndex((p) => p.t >= d.t + 6000 && !p.inferred && dist(p, f) <= NEAR_BASE);
+      if (k < 0 || rawPath[k].t - d.t > MAX_RESPAWN_MS) continue;
+      arrive = inBase(rawPath[k]) ? rawPath[k].t : Math.max(d.t + 6000, rawPath[k].t - (Math.max(0, dist(rawPath[k], f) - f.r / 2) / RETURN_SPEED) * 1000 - 2000);
     }
-    out.push({ id, kind: "death", start: d.t, arrive, since: d.t, leave, from: d.at ?? (k > 0 ? { x: path[k - 1].x, y: path[k - 1].y } : null), channelSeen: false, teleportedOut: false });
+    let leave: number | null = null;
+    if (k >= 0) {
+      let j = k;
+      if (inBase(rawPath[k])) {
+        while (j + 1 < rawPath.length && inBase(rawPath[j + 1])) j++;
+        leave = j + 1 < rawPath.length ? Math.max(arrive, rawPath[j].t) : null;
+      } else leave = Math.max(arrive, rawPath[k].t - (Math.max(0, dist(rawPath[k], f) - f.r / 2) / RETURN_SPEED) * 1000);
+    }
+    dead.push([d.t + 1000, arrive - 500]);
+    out.push({ id, kind: "death", start: d.t, arrive, since: d.t, leave, from: d.at ?? null, channelSeen: false, teleportedOut: false });
   }
+  const path = rawPath.filter((p) => !dead.some(([a, b]) => p.t > a && p.t < b));
   const respawning = (t: number) => out.some((v) => v.kind === "death" && t >= v.start && t <= (v.leave ?? Infinity) + MERGE_MS);
   for (let i = 1; i < path.length; i++) {
     const prev = path[i - 1];
@@ -299,7 +312,7 @@ export type TempoFlag =
   | "missed_cannon"
   /** The enemy wave was the bigger one and on your side when you left: it walked into your tower. */
   | "left_wave_pushing_in"
-  /** You were in base or on the way back when an epic monster spawned or was taken. */
+  /** You were in base or on the way back when the enemy took an epic monster. */
   | "away_at_objective";
 
 export interface Trip extends BaseVisit {
@@ -313,7 +326,7 @@ export interface Trip extends BaseVisit {
   /** The lane as it stood when the player left. */
   state: LaneRead | null;
   loss: WaveLoss | null;
-  /** Epic monsters that spawned or were taken during the trip. */
+  /** Epic monsters the enemy took during the trip. */
   objectives: ObjectiveWindow[];
   flags: TempoFlag[];
 }
@@ -349,8 +362,46 @@ export interface TempoInput {
 
 const eventsOf = (tl: TimelineDto) => tl.info.frames.flatMap((f) => f.events ?? []);
 
-function deathsOf(events: TimelineEvent[], id: number) {
-  return events.filter((e) => e.type === "CHAMPION_KILL" && e.victimId === id).map((e) => ({ t: e.timestamp, at: e.position ?? null }));
+/**
+ * A champion's deaths with the moment each respawned. The HP bar reads 0 while dead and
+ * full at the respawn (checked 36 of 36 on a real scan); Live Client's isDead is the second
+ * source. Null when the scan has neither around that death.
+ */
+export function deathsOf(events: TimelineEvent[], id: number, track?: WaveTrack, champion?: string): Death[] {
+  const hud = track?.hud ?? [];
+  const key = champion ? champion.toLowerCase().replace(/[^a-z0-9]/g, "") : null;
+  const live = key ? [...(track?.live ?? [])].sort((a, b) => a.t - b.t) : [];
+  const kills = events.filter((e) => e.type === "CHAMPION_KILL" && e.victimId === id).sort((a, b) => a.timestamp - b.timestamp);
+  return kills.map((e, k) => {
+    const next = kills[k + 1]?.timestamp ?? Infinity;
+    let respawn: number | null = null;
+    let sawDead = false;
+    for (const h of hud) {
+      if (h.t < e.timestamp + 1000) continue;
+      if (h.t > Math.min(next, e.timestamp + MAX_RESPAWN_MS)) break;
+      const v = h.hp[id - 1];
+      if (v === null || v === undefined) continue;
+      if (v <= 2) sawDead = true;
+      else if (sawDead && h.t >= e.timestamp + 5000) {
+        respawn = h.t;
+        break;
+      }
+    }
+    if (respawn === null) {
+      let wasDead = false;
+      for (const poll of live) {
+        if (poll.t < e.timestamp || poll.t > Math.min(next, e.timestamp + MAX_RESPAWN_MS)) continue;
+        const pl = poll.players.find((x) => x.championName.toLowerCase().replace(/[^a-z0-9]/g, "") === key);
+        if (!pl) continue;
+        if (pl.isDead) wasDead = true;
+        else if (wasDead) {
+          respawn = poll.t;
+          break;
+        }
+      }
+    }
+    return { t: e.timestamp, at: e.position ?? null, respawn };
+  });
 }
 
 /** Every base visit of the player with what it cost in their lane. */
@@ -362,7 +413,7 @@ export function trips({ track, match, timeline, id }: TempoInput): Trip[] {
   const events = eventsOf(timeline);
   const path = pathOf(track, id);
   const barons = events.filter((e) => e.type === "ELITE_MONSTER_KILL" && e.monsterType === "BARON_NASHOR" && e.killerTeamId === teamId).map((e) => e.timestamp);
-  const visits = baseVisits(id, path, teamId, deathsOf(events, id), barons);
+  const visits = baseVisits(id, path, teamId, deathsOf(events, id, track, me.championName), barons);
   const lane = laneOf(me.teamPosition);
   const geo = laneGeometry(events);
   const series = lane ? laneSeries(track, lane, teamId, geo) : [];
@@ -406,7 +457,8 @@ export function trips({ track, match, timeline, id }: TempoInput): Trip[] {
     until = Math.min(until, nextStart);
     const state = lane ? readAt(series, away) : null;
     const loss = ledger ? lostBetween(ledger, away, until) : null;
-    const objs = objectives.filter((o) => (o.spawn >= v.start && o.spawn <= until) || (o.taken !== null && o.taken >= v.start && o.taken <= until));
+    // Being in base when one spawns costs nothing by itself; being away when it is taken does.
+    const objs = objectives.filter((o) => o.taken !== null && o.by !== teamId && o.taken >= v.start && o.taken <= until);
     const flags: TempoFlag[] = [];
     if (loss && loss.waves > BAD_BACK_WAVES) flags.push("lost_waves");
     if (loss?.cannonWaves.length) flags.push("missed_cannon");
@@ -425,7 +477,7 @@ export interface ObjectiveSync extends ObjectiveWindow {
   gold: number | null;
   /** How far the player was from the pit when it was taken (units); null without a read. */
   distanceAtTake: number | null;
-  /** In base, recalling or walking back when it spawned or when it was taken. */
+  /** In base, recalling or walking back (not dead) when it was taken. */
   away: boolean;
   /** Went into it with WORTH_A_BACK or more unspent and no base visit in the SYNC_MS before the spawn. */
   unspent: boolean;
@@ -447,7 +499,7 @@ export function objectiveSync(input: TempoInput, ts: Trip[] = trips(input)): Obj
       for (const p of path) if (!best || Math.abs(p.t - o.taken) < Math.abs(best.t - o.taken)) best = p;
       if (best && Math.abs(best.t - o.taken) <= 3000) distanceAtTake = Math.round(dist(best, PITS[o.type]));
     }
-    const away = ts.some((v) => v.kind !== "death" && ((o.spawn >= v.start && o.spawn <= v.until) || (o.taken !== null && o.taken >= v.start && o.taken <= v.until)));
+    const away = ts.some((v) => v.kind !== "death" && o.taken !== null && o.taken >= v.start && o.taken <= v.until);
     const unspent = gold !== null && gold >= WORTH_A_BACK && (lastBase === null || o.spawn - lastBase > SYNC_MS);
     return { ...o, lastBase, gold, distanceAtTake, away, unspent };
   });
@@ -469,7 +521,7 @@ export function checkBaseVisits(track: WaveTrack, match: MatchDto, timeline: Tim
   const missed: { id: number; champion: string; t: number }[] = [];
   for (const p of match.info.participants) {
     const path = pathOf(track, p.participantId);
-    const deaths = deathsOf(events, p.participantId);
+    const deaths = deathsOf(events, p.participantId, track, p.championName);
     const barons = events.filter((e) => e.type === "ELITE_MONSTER_KILL" && e.monsterType === "BARON_NASHOR" && e.killerTeamId === p.teamId).map((e) => e.timestamp);
     const visits = baseVisits(p.participantId, path, p.teamId, deaths, barons);
     const buys = events.filter((e) => e.type === "ITEM_PURCHASED" && e.participantId === p.participantId).map((e) => e.timestamp).sort((a, b) => a - b);

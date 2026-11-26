@@ -70,6 +70,9 @@ export interface TimelineEvent {
   laneType?: string;
   buildingType?: string;
   towerType?: string;
+  /** CHAMPION_KILL: every source of damage the victim took, and dealt, in the fight. */
+  victimDamageReceived?: { participantId?: number; name?: string }[];
+  victimDamageDealt?: { participantId?: number; name?: string }[];
 }
 
 export interface TimelineDto {
