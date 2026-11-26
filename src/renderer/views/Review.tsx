@@ -16,6 +16,7 @@ import { useProgress } from "../progress";
 import { Button, Empty, Kbd, ProgressBar, Spinner } from "../ui";
 import { buildChapters } from "../../core/walkthrough";
 import { Walkthrough } from "./Walkthrough";
+import { Findings } from "./Findings";
 import { champName } from "../../core/names";
 
 export function ReviewView({
@@ -380,6 +381,22 @@ function ReviewPlayer({
         </div>
         <span className="moments-big"><b>{momentCount(r)}</b><small>moments</small></span>
       </header>
+
+      {!!r.findings?.length && (
+        <Findings
+          findings={r.findings}
+          replayOpen={replay?.kind === "open"}
+          onNeedReplay={async () => {
+            const off = coach().onStageProgress((l) => setOpening(l));
+            setOpening("Opening the replay");
+            const res = await coach().stageOpen(m.matchId);
+            off();
+            setOpening(null);
+            if (!res.ok) toast.error("Couldn't open the replay", { description: res.error });
+            return res.ok;
+          }}
+        />
+      )}
 
       {moments.length === 0 ? (
         <div className="hero quiet">

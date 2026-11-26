@@ -179,4 +179,6 @@ export interface GameReport {
   /** Every crash-plus-item-gold moment in laning, taken or passed (replay read only). */
   recallWindows?: import("./engine").RecallWindow[];
   waves?: import("./waves").WaveTrack;
+  /** Module 3: timestamped findings with proof, cost and fix (needs a replay read with champion positions). */
+  findings?: import("./synth").Finding[];
 }

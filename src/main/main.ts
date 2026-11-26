@@ -10,7 +10,7 @@ import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
 import { openReplay, scanReplay, trackChampions } from "./scan";
 import { champKey, checkAllies, checkCs, checkFogOff, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
-import { checkGold, itemTable } from "../core/gold";
+import { checkGold, itemTable, type ItemTable } from "../core/gold";
 import { checkWards, placeWards } from "../core/wards";
 import { checkHud } from "../core/hud";
 import { growBench, readBench } from "./bench";
@@ -199,7 +199,7 @@ async function runSync(): Promise<GameReport[]> {
     if (!SR_QUEUES.includes(match.info.queueId) || match.info.gameDuration < 600) continue; // skip ARAM, remakes
     const timeline = await riot.getTimeline(ids[i]);
     const waves = await store.readJson<WaveTrack | null>(wavesFile(ids[i]), null);
-    out.push(buildReport(match, timeline, puuid, waves ?? undefined));
+    out.push(buildReport(match, timeline, puuid, waves ?? undefined, waves ? await itemsFor(match.info.gameVersion) : undefined));
   }
   send("sync:progress", { done: ids.length, total: ids.length, label: "Done" });
   reports = out.sort((a, b) => b.metrics.gameCreation - a.metrics.gameCreation);
@@ -259,7 +259,7 @@ async function readReplay(matchId: string): Promise<GameReport> {
   const waves = await scanReplay(await league(), matchId, (p) => send("scan:progress", p), () => scanCancelled, players, me);
   if (waves.samples.length < 20) throw new Error("Couldn't read enough of the minimap. Keep the replay visible on your main monitor while it reads.");
   await store.writeJson(wavesFile(matchId), waves);
-  const report = buildReport(match, await riot.getTimeline(matchId), puuid, waves);
+  const report = buildReport(match, await riot.getTimeline(matchId), puuid, waves, await itemsFor(match.info.gameVersion));
   reports = reports.map((r) => (r.metrics.matchId === matchId ? report : r));
   await store.writeReports(reports);
   focusWindow();
@@ -315,10 +315,7 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
   }
   const wallSec = Math.round((Date.now() - t0) / 1000);
   // Item prices and recipes for the gold estimate, from the Data Dragon version of this patch.
-  const versions = (await (await net.fetch("https://ddragon.leagueoflegends.com/api/versions.json")).json()) as string[];
-  const patch = match.info.gameVersion.split(".").slice(0, 2).join(".");
-  const ddv = versions.find((v) => v.startsWith(patch + ".")) ?? versions[0];
-  const items = itemTable(await (await net.fetch(`https://ddragon.leagueoflegends.com/cdn/${ddv}/data/en_US/item.json`)).json());
+  const items = (await itemsFor(match.info.gameVersion))!;
   // Only judge what was actually read: a pass that stopped early shouldn't fail on frames it never saw.
   const until = Math.min(untilSec * 1000, waves.scanInfo?.lastFrame || untilSec * 1000);
   const events = timeline.info.frames.flatMap((f) => f.events ?? []);
@@ -379,12 +376,38 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     positionErrors: checks[0].detail,
     missedBuys: checks[2].detail,
     csDetail: checks[4].detail,
-    itemsVersion: ddv,
+    itemsVersion: match.info.gameVersion.split(".").slice(0, 2).join("."),
     unplacedWards: checks[6].detail,
   };
   await fs.mkdir(outDir, { recursive: true });
   await fs.writeFile(path.join(outDir, `verify-${matchId}.json`), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
+}
+
+/**
+ * Item prices and recipes from the Data Dragon version of a game's patch, kept on disk so a
+ * review works offline after the first time. Undefined only when it was never fetched and
+ * the network is down.
+ */
+const itemTables = new Map<string, ItemTable>();
+async function itemsFor(gameVersion: string): Promise<ItemTable | undefined> {
+  const patch = gameVersion.split(".").slice(0, 2).join(".");
+  const hit = itemTables.get(patch);
+  if (hit) return hit;
+  const file = `items-${patch}.json`;
+  let table = await store.readJson<ItemTable | null>(file, null);
+  if (!table) {
+    try {
+      const versions = (await (await net.fetch("https://ddragon.leagueoflegends.com/api/versions.json")).json()) as string[];
+      const ddv = versions.find((v) => v.startsWith(patch + ".")) ?? versions[0];
+      table = itemTable(await (await net.fetch(`https://ddragon.leagueoflegends.com/cdn/${ddv}/data/en_US/item.json`)).json());
+      await store.writeJson(file, table);
+    } catch {
+      return undefined;
+    }
+  }
+  itemTables.set(patch, table);
+  return table;
 }
 
 function handle<T>(channel: string, fn: (...args: any[]) => Promise<T> | T) {

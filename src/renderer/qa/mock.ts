@@ -12,6 +12,23 @@ import type { CoachApi, DraftInfo, DraftOption, LivePayload, Settings } from "..
 const CHAMPS = ["Garen", "LeeSin", "Ahri", "Jinx", "Thresh", "Darius", "Viego", "Zed", "Caitlyn", "Lulu"];
 const MINE = ["Ahri", "Ahri", "Syndra", "Ahri", "Orianna", "Syndra", "Ahri", "Ahri", "Orianna", "Ahri", "Syndra", "Ahri"];
 
+const SAMPLE_FINDINGS: NonNullable<GameReport["findings"]> = [
+  {
+    id: "recall-2", kind: "recall", t: 387_000, time: "6:27", title: "Recall at 6:27 gave up cannon wave 12",
+    proof: ["Recall began at 6:27 in the bottom river by dragon; in the fountain 6:35 to 6:38.", "Last in XP range of the mid wave at 6:14, back in range at 6:50: 36 s away.", "When you left: 5 enemy minions against your 4 at the front, 2250 units from your tower.", "11.5 enemy minions died in mid while you were out of XP range: 1.5 of wave 11 (spawned 5:30), 7 of wave 12 (spawned 6:00), 3 of wave 13 (spawned 6:30).", "Wave 12 was a cannon wave: alive when you left, dead when you got back."],
+    cost: "1.8 waves: 563 XP and up to 232 gold in last hits (over the 1.5-wave line).", gold: 232, xp: 563, minions: 11.5,
+    fix: "Start this recall 21 s later, leaving the wave at 6:35. The same 36 s trip then loses 4.5 minions instead of 11.5: 331 XP and 139 gold kept. That means killing the 5 enemy minions at the front first; they died at your tower without you.",
+    jump: { t: 368_000, follow: "Azir" }, score: 570,
+  },
+  {
+    id: "exposure-1", kind: "exposure", t: 585_000, time: "9:45", title: "9:45: past the middle with Lillia unseen for 38 s, dead at 9:57", deathAt: 597_000,
+    proof: ["From 9:45 to 9:56 you stood up to 1450 units past the middle of the map (deepest at 9:52, in mid lane).", "Lillia was last on your team's minimap at 9:07 in their top-side jungle, 38 s before: far enough back to have walked to you (5200 units at 500 units a second).", "With fog off: Lillia was 2900 units from you at 9:49, in the top river by baron, and on you at 9:55.", "Allied wards standing within 3000 units of you: 0."],
+    cost: "You died at 9:57: 300 gold to them, and 1.6 waves: 474 XP and up to 184 gold in last hits while dead and walking back (53 s).", gold: 484, xp: 474, minions: 10,
+    fix: "From 9:45, when Lillia could first have reached you unseen, stand 1450 units further back (at or behind the middle line) until Lillia shows. Lillia came through the top river by baron at 9:49: a ward there placed before 9:39 shows the gank 6 s before it lands.",
+    jump: { t: 580_000, follow: "Azir" }, score: 768,
+  },
+];
+
 function games(): GameReport[] {
   const out: GameReport[] = [];
   for (let i = 0; i < 12; i++) {
@@ -39,6 +56,8 @@ function games(): GameReport[] {
     });
     g.match.info.gameCreation = Date.now() - (i + 1) * 3.6e6 * 5;
     out.push(buildReport(g.match, g.timeline, ME));
+    // The preview has no replay read, so the first game carries sample findings to show the panel.
+    if (out.length === 1) out[0].findings = SAMPLE_FINDINGS;
   }
   return out;
 }

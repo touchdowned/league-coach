@@ -16,6 +16,7 @@ import type {
   TimelineEvent,
 } from "./types";
 import { champName } from "./names";
+import { synthesize } from "./synth";
 
 const MIN = 60_000;
 const LANE_PHASE_END = 14 * MIN;
@@ -269,7 +270,7 @@ export function findMistakes(match: MatchDto, timeline: TimelineDto, puuid: stri
   return out.sort((a, b) => b.severity - a.severity || a.timeMs - b.timeMs);
 }
 
-export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: string, waves?: import("./waves").WaveTrack): GameReport {
+export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: string, waves?: import("./waves").WaveTrack, items?: import("./gold").ItemTable): GameReport {
   const m = computeMetrics(match, timeline, puuid);
   const bench = benchmarkFor(m.role);
   const all = findMistakes(match, timeline, puuid);
@@ -301,6 +302,9 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
   const kills = allEvents(timeline).filter((e) => e.type === "CHAMPION_KILL" && e.position);
   const toMap = (e: TimelineEvent) => ({ timeMs: e.timestamp, x: e.position!.x, y: e.position!.y });
 
+  // Module 3 findings need champion positions from a replay read and the patch's item prices.
+  const findings = waves?.champs?.length && items ? synthesize({ track: waves, match, timeline, id: me.participantId, items }).findings : undefined;
+
   return {
     metrics: m,
     teamId: me.teamId,
@@ -310,7 +314,8 @@ export function buildReport(match: MatchDto, timeline: TimelineDto, puuid: strin
     killsAt: kills.filter((e) => e.killerId === me.participantId).map(toMap),
     mistakes,
     strengths,
-    focus: pickFocus(m, all),
+    focus: findings?.length ? `${findings[0].time}: ${findings[0].fix}` : pickFocus(m, all),
+    findings,
     grade: grade(m, all),
     track,
     leaks: readGame(match, timeline, track, me, opp, waves), lane: laneStats(match, timeline, me.participantId) ?? undefined, wavesRead: !!waves?.samples.length, recallWindows: waves?.samples.length ? recallWindows(match, timeline, track, me, waves) : undefined, waves: waves?.samples.length ? waves : undefined,
