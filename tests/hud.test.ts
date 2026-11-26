@@ -77,3 +77,17 @@ describe("replay HUD bars", () => {
     expect(r.detail).toEqual([{ kind: "death", id: 1, t: 50_500, hp: 30 }]);
   });
 });
+
+describe("Flash reads", () => {
+  it("wants a Flash that goes down to come back after its cooldown", async () => {
+    const { checkFlash } = await import("../src/core/hud");
+    const at = (t: number, v: boolean | null) => ({ t, hp: [], res: [], flash: [v, null, null, null, null, null, null, null, null, null] });
+    const ok = [at(0, true), at(10_000, false), at(200_000, false), at(305_000, true)];
+    expect(checkFlash(ok).measured).toMatch(/100% \(1\/1\)/);
+    // Back up after 60 s: not a Flash cooldown.
+    const bad = [at(0, true), at(10_000, false), at(70_000, true)];
+    expect(checkFlash(bad).pass).toBe(false);
+    // A one-read blip doesn't count either way.
+    expect(checkFlash([at(0, true), at(1000, false), at(1500, true)]).n).toBe(0);
+  });
+});

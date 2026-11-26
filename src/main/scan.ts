@@ -381,7 +381,7 @@ export async function scanReplay(
     const hud: HudSample[] = [];
     const reader = (fog: ChampSample["fog"]): OnFrame => async (frame, t, strips) => {
       // HP and resource bars of all ten players, read with everything visible.
-      if (fog === "off" && strips) hud.push(readHudStrips(t, strips.blue, strips.red, strips.screen));
+      if (fog === "off" && strips) hud.push(readHudStrips(t, strips.blue, strips.red, strips.screen, flashSlots()));
       // Minimap scale differs from the background's? (recorder at another resolution)
       const okBg = frame.w === bg.w && frame.h === bg.h;
       const rings = findRings(frame, okBg ? bg : undefined, MIN_COVER ? { minCover: MIN_COVER } : {});
@@ -414,6 +414,21 @@ export async function scanReplay(
     // team sees them: on NA1_5686076870 Udyr's CS disagreed in 446 of 1272 polls taken under
     // the Blue view, against 0 under All.
     const live: LivePoll[] = [];
+    // Which summoner slot holds Flash, per participant (id - 1), from the first Live Client poll that lists spells.
+    let slots: (0 | 1 | null)[] | undefined;
+    const flashSlots = () => {
+      if (slots) return slots;
+      const p = live.find((x) => x.players.some((q) => q.spells));
+      if (!p) return undefined;
+      const out: (0 | 1 | null)[] = new Array(10).fill(null);
+      for (const pl of players) {
+        const lp = p.players.find((q) => champKey(q.championName) === champKey(pl.champion));
+        const i = lp?.spells?.findIndex((n) => /flash/i.test(n)) ?? -1;
+        if (pl.id >= 1 && pl.id <= 10) out[pl.id - 1] = i === 0 || i === 1 ? i : null;
+      }
+      slots = out;
+      return slots;
+    };
     let polling = false;
     let pollLoop: Promise<void> = Promise.resolve();
     const startPolling = () => {

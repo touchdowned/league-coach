@@ -347,8 +347,8 @@ function readAt(series: LaneRead[], t: number): LaneRead | null {
 /** Where enemy minions are dying: their lead minion (the front, in contact), else the only wave there is. */
 /**
  * The lane as the minimap showed it when the player left: from the frame reads alone (LaneRead.seen)
- * in the STATE_MS before `t`, the latest frame with a minion read. Null when nothing was read, or
- * when a champion portrait covers the front at that moment (minions under it can't be counted:
+ * in the STATE_MS before `t`: the latest of two frames that agree (each count within 1, front within
+ * STATE_AGREE), with no champion portrait on either side's lead cluster or the front. Null otherwise (minions under it can't be counted:
  * checked on 14 trip starts in two games, followed and windowed leads put waves at the wrong
  * tower in 6). Never a followed lead.
  */
@@ -356,32 +356,57 @@ const STATE_MS = 3000;
 /** A champion portrait's radius on the minimap in game units (12.5 px of 247 on a 14300-unit map), plus a dot. */
 const STATE_COVER = 800;
 function observedState(series: LaneRead[], t: number, lane: Lane, teamId: number, track: WaveTrack): LaneRead | null {
-  let pick: LaneRead | null = null;
+  const L = laneLength(lane);
+  const at = (u: number) => pointOnLane(lane, (teamId === 200 ? L - u : u) / L);
+  const portraitsAt = (time: number) => {
+    let read: { t: number; at: { x: number; y: number }[] } | null = null;
+    for (const c of track.champs ?? []) if (c.fog === "off" && Math.abs(c.t - time) <= 1000 && (!read || Math.abs(c.t - time) < Math.abs(read.t - time))) read = c;
+    return read?.at ?? [];
+  };
+  const covered = (time: number, u: number | null) => u !== null && portraitsAt(time).some((a) => { const p = at(u); return Math.hypot(a.x - p.x, a.y - p.y) <= STATE_COVER; });
+  // Each frame's read: counts, leads and front from that frame alone.
+  const reads: { r: LaneRead; mine: number; theirs: number; front: number | null }[] = [];
   for (const r of series) {
     if (r.t > t) break;
     if (r.t < t - STATE_MS || !r.seen) continue;
-    if (r.seen.leadMine !== null || r.seen.leadTheirs !== null) pick = r;
+    const s = r.seen;
+    if (s.leadMine === null && s.leadTheirs === null) continue;
+    // A portrait on either side's lead cluster hides part of that wave: this frame can't be counted.
+    if (covered(r.t, s.leadMine) || covered(r.t, s.leadTheirs)) continue;
+    const contact = s.leadMine !== null && s.leadTheirs !== null && s.leadTheirs - s.leadMine <= CONTACT;
+    const front = contact ? (s.leadMine! + s.leadTheirs!) / 2 : s.leadMine === null ? s.leadTheirs : s.leadTheirs === null ? s.leadMine : null;
+    if (front !== null && covered(r.t, front)) continue;
+    reads.push({ r, mine: s.mine, theirs: s.theirs, front });
   }
-  if (!pick?.seen) return null;
-  const s = pick.seen;
+  // Two frames that agree (counts within 1, front within STATE_AGREE), the latest pair.
+  let pick: (typeof reads)[number] | null = null;
+  for (let i = reads.length - 1; i > 0 && !pick; i--)
+    for (let j = i - 1; j >= 0; j--) {
+      const a = reads[i];
+      const b = reads[j];
+      const fronts = (a.front === null) === (b.front === null) && (a.front === null || Math.abs(a.front - b.front!) <= STATE_AGREE);
+      if (fronts && Math.abs(a.mine - b.mine) <= 1 && Math.abs(a.theirs - b.theirs) <= 1) {
+        pick = a;
+        break;
+      }
+    }
+  if (!pick) return null;
+  const s = pick.r.seen!;
+  const front = pick.front;
   const contact = s.leadMine !== null && s.leadTheirs !== null && s.leadTheirs - s.leadMine <= CONTACT;
-  const front = contact ? (s.leadMine! + s.leadTheirs!) / 2 : s.leadMine === null ? s.leadTheirs : s.leadTheirs === null ? s.leadMine : null;
-  if (front === null) return { ...pick, contact, front: null, zone: null, mine: s.mine, theirs: s.theirs, leadMine: s.leadMine, leadTheirs: s.leadTheirs, toMyTower: null, toTheirTower: null, inferred: undefined };
-  // A portrait on the front hides the minions there.
-  const L = laneLength(lane);
-  const p = pointOnLane(lane, (teamId === 200 ? L - front : front) / L);
-  let read: { t: number; at: { x: number; y: number }[] } | null = null;
-  for (const c of track.champs ?? []) if (c.fog === "off" && Math.abs(c.t - pick.t) <= 1000 && (!read || Math.abs(c.t - pick.t) < Math.abs(read.t - pick.t))) read = c;
-  if (read?.at.some((a) => Math.hypot(a.x - p.x, a.y - p.y) <= STATE_COVER)) return null;
+  if (front === null) return { ...pick.r, contact, front: null, zone: null, mine: s.mine, theirs: s.theirs, leadMine: s.leadMine, leadTheirs: s.leadTheirs, toMyTower: null, toTheirTower: null, inferred: undefined };
   const toMyTower = front - s.myTower;
   const toTheirTower = s.theirTower - front;
-  const atMine = s.leadTheirs !== null && s.leadTheirs <= s.myTower + TOWER_RANGE_UNITS;
-  const atTheirs = s.leadMine !== null && s.leadMine >= s.theirTower - TOWER_RANGE_UNITS;
+  // Tower zones from the front itself, never from a single dot.
+  const atMine = s.leadTheirs !== null && toMyTower <= TOWER_RANGE_UNITS;
+  const atTheirs = s.leadMine !== null && toTheirTower <= TOWER_RANGE_UNITS;
   const mid = (s.myTower + s.theirTower) / 2;
   const band = (s.theirTower - s.myTower) * 0.08;
   const zone: LaneRead["zone"] = atMine ? "my tower" : atTheirs ? "their tower" : front < mid - band ? "my side" : front > mid + band ? "their side" : "middle";
-  return { ...pick, contact, front, zone, mine: s.mine, theirs: s.theirs, leadMine: s.leadMine, leadTheirs: s.leadTheirs, toMyTower, toTheirTower, inferred: undefined };
+  return { ...pick.r, contact, front, zone, mine: s.mine, theirs: s.theirs, leadMine: s.leadMine, leadTheirs: s.leadTheirs, toMyTower, toTheirTower, inferred: undefined };
 }
+/** Two frames agree on where the front is within this (a wave walks 325 units a second; frames are 0.5 s apart). */
+const STATE_AGREE = 300;
 /** Turret range plus the target's size, as in wavestate. */
 const TOWER_RANGE_UNITS = 900;
 
