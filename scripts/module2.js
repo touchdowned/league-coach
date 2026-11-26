@@ -24,7 +24,7 @@ const fmt = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) 
 const q = (xs, p) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * p))] : null);
 
 const report = { match: id, me: { champion: me.championName, teamId: me.teamId, role: me.teamPosition }, scan: wavesName, samples: waves.samples.length };
-report.check = ws.checkWaveStates(waves, events, until);
+report.check = ws.checkWaveStates(waves, events, until, (id) => match.info.participants.find((p) => p.participantId === id)?.teamId ?? 0);
 const lanes = {};
 for (const lane of ["TOP", "MIDDLE", "BOTTOM"]) {
   const s = ws.laneSeries(waves, lane, me.teamId, geo);
@@ -41,7 +41,7 @@ for (const lane of ["TOP", "MIDDLE", "BOTTOM"]) {
     allMine: { p50: q(s.map((r) => r.mineAll), 0.5), p90: q(s.map((r) => r.mineAll), 0.9), max: q(s.map((r) => r.mineAll), 1) },
     leadGap: { p10: q(gaps, 0.1), p50: q(gaps, 0.5), p90: q(gaps, 0.9) },
     frontSpeedAbs: { p50: Math.round(q(speeds.map(Math.abs), 0.5)), p90: Math.round(q(speeds.map(Math.abs), 0.9)), p99: Math.round(q(speeds.map(Math.abs), 0.99)) },
-    events: ws.waveEvents(s, lane).map((e) => `${fmt(e.t0)}-${fmt(e.t1)} ${e.kind} (${e.side}) size ${e.size} vs ${e.against}, at ${Math.round(e.at)}, value ${e.value}`),
+    events: ws.waveEvents(s, lane, ws.towerFalls(events, lane, me.teamId)).map((e) => `${fmt(e.t0)}-${fmt(e.t1)} ${e.kind} (${e.side}) size ${e.size} vs ${e.against}, at ${Math.round(e.at)}, value ${e.value}`),
   };
 }
 report.lanes = lanes;

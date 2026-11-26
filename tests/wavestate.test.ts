@@ -154,14 +154,28 @@ describe("wave events", () => {
   });
 });
 
+describe("crash evidence", () => {
+  it("needs two reads in tower range, or one read after the wave came in from close", () => {
+    const ts = Array.from({ length: 20 }, (_, k) => 10_000 + k * 500);
+    const inRange = redTower - 600;
+    const crashes = (s: WaveSample[]) => waveEvents(laneSeries(track(s), "MIDDLE", 100, geo), "MIDDLE").filter((e) => e.kind === "crash");
+    // One frame with a blue dot in range, nothing before it: not a crash.
+    expect(crashes(ts.map((t, k) => at(t, k === 6 ? [inRange] : [], [])))).toHaveLength(0);
+    // Two frames in range: a crash.
+    expect(crashes(ts.map((t, k) => at(t, k === 6 || k === 10 ? [inRange] : [], [])))).toHaveLength(1);
+    // One frame in range after the wave was read 1200 short of the tower: a crash.
+    expect(crashes(ts.map((t, k) => at(t, k < 3 ? wave(redTower - 1200, 4, 1) : k === 8 ? [inRange] : [], [])))).toHaveLength(1);
+  });
+});
+
 describe("wave state check", () => {
   it("wants the attackers' wave under the tower before a plate falls", () => {
     const plate = (t: number): TimelineEvent => ({ type: "TURRET_PLATE_DESTROYED", timestamp: t, laneType: "MID_LANE", teamId: 200 });
     const samples = Array.from({ length: 240 }, (_, k) => at(k * 500, k >= 100 && k < 130 ? wave(redTower - 200, 4, 1) : wave(mid, 4, 1), wave(mid + 300, 4, -1)));
     const r = checkWaveStates(track(samples), [plate(62_000), plate(110_000)], 900_000);
     expect(r.measured).toMatch(/50% \(1\/2\)/);
-    expect(r.detail).toHaveLength(1);
-    expect(r.detail[0]).toMatchObject({ t: 110_000, lane: "MIDDLE", teamId: 200, type: "plate" });
+    expect(r.detail.missed).toHaveLength(1);
+    expect(r.detail.missed[0]).toMatchObject({ t: 110_000, lane: "MIDDLE", teamId: 200, type: "plate" });
   });
 
   it("follows a free-walking wave that goes unread to the tower, and stops when the defenders walk through", () => {
@@ -174,7 +188,9 @@ describe("wave state check", () => {
     for (let k = 0; k < 30; k++, t += 500) samples.push(at(t, [], []));
     for (let k = 0; k < 20; k++, t += 500) samples.push(at(t, [], wave(redTower - 1500 - k * 162, 6, -1)));
     const series = laneSeries(track(samples), "MIDDLE", 100, geo);
-    const crash = waveEvents(series, "MIDDLE").filter((e) => e.kind === "crash" && e.side === "mine");
+    // Followed only (no read in tower range): an event only because the timeline shows a plate fall.
+    expect(waveEvents(series, "MIDDLE").filter((e) => e.kind === "crash" && e.side === "mine")).toHaveLength(0);
+    const crash = waveEvents(series, "MIDDLE", { my: [], their: [lost + 4000] }).filter((e) => e.kind === "crash" && e.side === "mine");
     expect(crash).toHaveLength(1);
     expect(crash[0].size).toBe(6);
     // It gets there about (1500 - 900) / 325 s after the last read.

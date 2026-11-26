@@ -21,7 +21,7 @@ import { FOUNTAINS } from "./minimap";
 import { BARON_BUFF_MS, EMPOWERED_RECALL_MS, PITS, RECALL_MS, XP_RANGE, objectiveWindows, waveGold, waveSize, waveSpawns, waveXp, type ObjectiveWindow, type WaveSpawn } from "./rules";
 import type { MatchDto, TimelineDto, TimelineEvent } from "./types";
 import { LANES, laneLength, laneOf, pointOnLane, type Lane, type WaveTrack } from "./waves";
-import { laneGeometry, laneSeries, type LaneRead } from "./wavestate";
+import { CONTACT, laneGeometry, laneSeries, type LaneRead } from "./wavestate";
 
 type Pt = { x: number; y: number };
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -345,6 +345,46 @@ function readAt(series: LaneRead[], t: number): LaneRead | null {
 }
 
 /** Where enemy minions are dying: their lead minion (the front, in contact), else the only wave there is. */
+/**
+ * The lane as the minimap showed it when the player left: from the frame reads alone (LaneRead.seen)
+ * in the STATE_MS before `t`, the latest frame with a minion read. Null when nothing was read, or
+ * when a champion portrait covers the front at that moment (minions under it can't be counted:
+ * checked on 14 trip starts in two games, followed and windowed leads put waves at the wrong
+ * tower in 6). Never a followed lead.
+ */
+const STATE_MS = 3000;
+/** A champion portrait's radius on the minimap in game units (12.5 px of 247 on a 14300-unit map), plus a dot. */
+const STATE_COVER = 800;
+function observedState(series: LaneRead[], t: number, lane: Lane, teamId: number, track: WaveTrack): LaneRead | null {
+  let pick: LaneRead | null = null;
+  for (const r of series) {
+    if (r.t > t) break;
+    if (r.t < t - STATE_MS || !r.seen) continue;
+    if (r.seen.leadMine !== null || r.seen.leadTheirs !== null) pick = r;
+  }
+  if (!pick?.seen) return null;
+  const s = pick.seen;
+  const contact = s.leadMine !== null && s.leadTheirs !== null && s.leadTheirs - s.leadMine <= CONTACT;
+  const front = contact ? (s.leadMine! + s.leadTheirs!) / 2 : s.leadMine === null ? s.leadTheirs : s.leadTheirs === null ? s.leadMine : null;
+  if (front === null) return { ...pick, contact, front: null, zone: null, mine: s.mine, theirs: s.theirs, leadMine: s.leadMine, leadTheirs: s.leadTheirs, toMyTower: null, toTheirTower: null, inferred: undefined };
+  // A portrait on the front hides the minions there.
+  const L = laneLength(lane);
+  const p = pointOnLane(lane, (teamId === 200 ? L - front : front) / L);
+  let read: { t: number; at: { x: number; y: number }[] } | null = null;
+  for (const c of track.champs ?? []) if (c.fog === "off" && Math.abs(c.t - pick.t) <= 1000 && (!read || Math.abs(c.t - pick.t) < Math.abs(read.t - pick.t))) read = c;
+  if (read?.at.some((a) => Math.hypot(a.x - p.x, a.y - p.y) <= STATE_COVER)) return null;
+  const toMyTower = front - s.myTower;
+  const toTheirTower = s.theirTower - front;
+  const atMine = s.leadTheirs !== null && s.leadTheirs <= s.myTower + TOWER_RANGE_UNITS;
+  const atTheirs = s.leadMine !== null && s.leadMine >= s.theirTower - TOWER_RANGE_UNITS;
+  const mid = (s.myTower + s.theirTower) / 2;
+  const band = (s.theirTower - s.myTower) * 0.08;
+  const zone: LaneRead["zone"] = atMine ? "my tower" : atTheirs ? "their tower" : front < mid - band ? "my side" : front > mid + band ? "their side" : "middle";
+  return { ...pick, contact, front, zone, mine: s.mine, theirs: s.theirs, leadMine: s.leadMine, leadTheirs: s.leadTheirs, toMyTower, toTheirTower, inferred: undefined };
+}
+/** Turret range plus the target's size, as in wavestate. */
+const TOWER_RANGE_UNITS = 900;
+
 function frontPoint(r: LaneRead | null, lane: Lane, teamId: number): Pt | null {
   const at = r ? (r.leadTheirs ?? r.front ?? r.leadMine) : null;
   if (at === null) return null;
@@ -455,7 +495,7 @@ export function trips({ track, match, timeline, id }: TempoInput): Trip[] {
     }
     // The next trip counts its own time.
     until = Math.min(until, nextStart);
-    const state = lane ? readAt(series, away) : null;
+    const state = lane ? observedState(series, away, lane, teamId, track) : null;
     const loss = ledger ? lostBetween(ledger, away, until) : null;
     // Being in base when one spawns costs nothing by itself; being away when it is taken does.
     const objs = objectives.filter((o) => o.taken !== null && o.by !== teamId && o.taken >= v.start && o.taken <= until);

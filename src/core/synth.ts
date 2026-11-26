@@ -129,7 +129,7 @@ function recallFinding(c: Ctx, v: Trip, k: number): Finding | null {
   let fix: string;
   if (saved >= 3) {
     const d = s(best.at - v.away);
-    const crash = c.waveEvents.find((e) => e.kind === "crash" && !e.inferred && e.side === "mine" && e.lane === v.lane && Math.abs(e.t0 - best.at) <= 8 * SEC);
+    const crash = c.waveEvents.find((e) => e.kind === "crash" && e.reliable && !e.inferred && e.side === "mine" && e.lane === v.lane && Math.abs(e.t0 - best.at) <= 8 * SEC);
     const when = d < 0 ? `${-d} s earlier, leaving the wave at ${fmtTime(best.at)}` : `${d} s later, leaving the wave at ${fmtTime(best.at)}`;
     fix = `Start this recall ${when}${crash ? `, as your ${crash.size}-minion wave reached their tower at ${fmtTime(crash.t0)}` : ""}. The same ${s(gone)} s trip then loses ${plural(best.loss.minions, "minion")} instead of ${n1(v.loss.minions)}: ${v.loss.xp - best.loss.xp} XP and ${v.loss.gold - best.loss.gold} gold kept.`;
     if (d > 0 && v.state && v.state.theirs > 0) fix += ` That means killing the ${v.state.theirs} enemy minions at the front first; they died at your tower without you.`;
@@ -426,7 +426,7 @@ export function synthesize(input: SynthInput): { findings: Finding[]; rejected: 
     me,
     events,
     trips: ts,
-    waveEvents: laneOf(me.teamPosition) ? allWaveEvents(input.track, me.teamId, laneGeometry(events)) : [],
+    waveEvents: laneOf(me.teamPosition) ? allWaveEvents(input.track, me.teamId, laneGeometry(events), events) : [],
     name: (pid) => champName(input.match.info.participants.find((p) => p.participantId === pid)?.championName),
     where: (p) => describeSpot(p, me.teamId),
   };
