@@ -9,9 +9,10 @@
  *  - each side's lead minion and its "contact group": the minions within GROUP of the lead
  *    (one wave is about 600 units long; two stacked about 1200);
  *  - the waves are in contact when the leads are within CONTACT of each other;
- *  - the front is the midpoint of the leads in contact, else the lead that has walked past;
- *  - the zone: under a tower when the front is within TOWER_RANGE of the outermost standing
- *    tower of that lane (towers fall: BUILDING_KILL moves the line back).
+ *  - the front is the midpoint of the leads in contact, else the lead that has reached a
+ *    tower, else the only wave in the lane; two waves still walking at each other have none;
+ *  - the zone: under a tower when the attackers' lead minion is within TOWER_RANGE of the
+ *    outermost standing tower of that lane (towers fall: BUILDING_KILL moves the line back).
  *
  * Over time (`waveEvents`): crash, bounce, freeze, slow push, fast push, each with the
  * numbers behind it. The thresholds are named constants with what they stand for; the ones
@@ -42,6 +43,10 @@ const STACK_LEAD = 3;
 const STACK_MS = 12_000;
 /** After a crash, the wave "bounces" if the front is back on the crasher's side of the middle within this long. */
 const BOUNCE_MS = 50_000;
+/** Reads are steadied over this long either side (see laneSeries). */
+const SMOOTH_MS = 1500;
+/** A wiped wave has to stay gone this long to count (a wave doesn't come back). */
+const WIPE_HOLD_MS = 3000;
 
 export interface LaneRead {
   t: number;
@@ -61,6 +66,9 @@ export interface LaneRead {
   /** Distance from the front to my outermost tower and to theirs (negative: past it). */
   toMyTower: number | null;
   toTheirTower: number | null;
+  /** My minions within turret range of their outermost tower (or past it), and theirs at mine. */
+  underTheirTower: number;
+  underMyTower: number;
 }
 
 // Lane turrets per team, outermost first (game units), taken from the structure list.
@@ -97,48 +105,121 @@ export function laneGeometry(events: TimelineEvent[]): LaneGeometry {
   };
 }
 
-/** One lane at one sample, from `teamId`'s side. */
-export function laneRead(s: WaveSample, lane: Lane, teamId: number, geo: LaneGeometry): LaneRead {
+interface Raw {
+  t: number;
+  /** Minions past their own base, units from my inhibitor. */
+  own: number[];
+  opp: number[];
+  mineAll: number;
+  theirsAll: number;
+  myTower: number;
+  theirTower: number;
+}
+
+function rawRead(s: WaveSample, lane: Lane, teamId: number, geo: LaneGeometry): Raw {
   const L = laneLength(lane);
   const flip = teamId === 200;
   const u = (p: number) => (flip ? 1 - p : p) * L;
-  const own = (flip ? s.lanes[lane].r : s.lanes[lane].b).map(u);
-  const opp = (flip ? s.lanes[lane].b : s.lanes[lane].r).map(u);
-  const leadMine = own.length ? Math.max(...own) : null;
-  const leadTheirs = opp.length ? Math.min(...opp) : null;
-  const mine = leadMine === null ? 0 : own.filter((x) => x >= leadMine - GROUP).length;
-  const theirs = leadTheirs === null ? 0 : opp.filter((x) => x <= leadTheirs + GROUP).length;
-  const contact = leadMine !== null && leadTheirs !== null && leadTheirs - leadMine <= CONTACT;
-  let front: number | null = null;
-  if (leadMine !== null && leadTheirs !== null) front = contact ? (leadMine + leadTheirs) / 2 : null;
-  // Not in contact: the fight is wherever the wave nearer a tower is (it is about to hit it,
-  // or the other wave hasn't arrived). With both walking toward each other, the midpoint.
-  if (front === null && (leadMine !== null || leadTheirs !== null)) front = leadMine !== null && leadTheirs !== null ? (leadMine + leadTheirs) / 2 : (leadMine ?? leadTheirs)!;
+  const ownAll = (flip ? s.lanes[lane].r : s.lanes[lane].b).map(u);
+  const oppAll = (flip ? s.lanes[lane].b : s.lanes[lane].r).map(u);
   const me = (teamId === 200 ? 200 : 100) as 100 | 200;
   const them = (me === 100 ? 200 : 100) as 100 | 200;
   const myT = geo.towerAt(lane, me, s.t);
   const theirT = geo.towerAt(lane, them, s.t);
-  const myTower = myT === null ? 0 : u(myT);
-  const theirTower = theirT === null ? L : u(theirT);
-  const toMyTower = front === null ? null : front - myTower;
-  const toTheirTower = front === null ? null : theirTower - front;
-  let zone: LaneRead["zone"] = null;
-  if (front !== null) {
-    // Under a tower only counts with the attacking side's minions actually there.
-    if (toMyTower! <= TOWER_RANGE && opp.length) zone = "my tower";
-    else if (toTheirTower! <= TOWER_RANGE && own.length) zone = "their tower";
-    else {
-      const mid = (myTower + theirTower) / 2;
-      const band = (theirTower - myTower) * 0.08;
-      zone = front < mid - band ? "my side" : front > mid + band ? "their side" : "middle";
-    }
-  }
-  return { t: s.t, mineAll: own.length, theirsAll: opp.length, mine, theirs, leadMine, leadTheirs, contact, front, zone, toMyTower, toTheirTower };
+  // A wave still inside its own base (projectLane snaps those to the lane's end) hasn't
+  // entered the lane: it counts as alive but can't be a lead or a front.
+  return { t: s.t, own: ownAll.filter((x) => x > 1), opp: oppAll.filter((x) => x < L - 1), mineAll: ownAll.length, theirsAll: oppAll.length, myTower: myT === null ? 0 : u(myT), theirTower: theirT === null ? L : u(theirT) };
 }
 
-/** Every read of a lane in [from, to]. */
+function derive(r: Raw, leadMine: number | null, leadTheirs: number | null, mine: number, theirs: number, underTheirTower: number, underMyTower: number): LaneRead {
+  const contact = leadMine !== null && leadTheirs !== null && leadTheirs - leadMine <= CONTACT;
+  const atMine = leadTheirs !== null && leadTheirs <= r.myTower + TOWER_RANGE;
+  const atTheirs = leadMine !== null && leadMine >= r.theirTower - TOWER_RANGE;
+  // The front is where minions are fighting: between the leads in contact, at the lead that
+  // has reached a tower, or at the only wave in the lane. Two waves still walking toward
+  // each other have no front yet.
+  let front: number | null = null;
+  if (contact) front = (leadMine! + leadTheirs!) / 2;
+  else if (atMine) front = leadTheirs;
+  else if (atTheirs) front = leadMine;
+  else if (leadMine === null || leadTheirs === null) front = leadMine ?? leadTheirs;
+  let zone: LaneRead["zone"] = null;
+  if (atMine) zone = "my tower";
+  else if (atTheirs) zone = "their tower";
+  else if (front !== null) {
+    const mid = (r.myTower + r.theirTower) / 2;
+    const band = (r.theirTower - r.myTower) * 0.08;
+    zone = front < mid - band ? "my side" : front > mid + band ? "their side" : "middle";
+  }
+  return {
+    t: r.t,
+    mineAll: r.mineAll,
+    theirsAll: r.theirsAll,
+    mine,
+    theirs,
+    leadMine,
+    leadTheirs,
+    contact,
+    front,
+    zone,
+    toMyTower: front === null ? null : front - r.myTower,
+    toTheirTower: front === null ? null : r.theirTower - front,
+    underTheirTower,
+    underMyTower,
+  };
+}
+
+const groupMine = (r: Raw, lead: number | null) => (lead === null ? 0 : r.own.filter((x) => x >= lead - GROUP && x <= lead + CONTACT).length);
+const groupTheirs = (r: Raw, lead: number | null) => (lead === null ? 0 : r.opp.filter((x) => x <= lead + GROUP && x >= lead - CONTACT).length);
+const underTheirs = (r: Raw) => r.own.filter((x) => x >= r.theirTower - TOWER_RANGE).length;
+const underMine = (r: Raw) => r.opp.filter((x) => x <= r.myTower + TOWER_RANGE).length;
+
+/** One lane at one sample, from `teamId`'s side (no smoothing: see laneSeries). */
+export function laneRead(s: WaveSample, lane: Lane, teamId: number, geo: LaneGeometry): LaneRead {
+  const r = rawRead(s, lane, teamId, geo);
+  const leadMine = r.own.length ? Math.max(...r.own) : null;
+  const leadTheirs = r.opp.length ? Math.min(...r.opp) : null;
+  return derive(r, leadMine, leadTheirs, groupMine(r, leadMine), groupTheirs(r, leadTheirs), underTheirs(r), underMine(r));
+}
+
+/**
+ * Every read of a lane in [from, to], steadied over SMOOTH_MS either side. A minion dot
+ * touching another, or under a champion portrait or an ability circle, goes unread for a
+ * frame or two (checked against frame dumps of two scans: a 5 v 5 at mid read as 5 v 0 for
+ * one second). So each lead is the median of the leads read around that moment, and each
+ * count the most read around it: dots get hidden, they don't get invented.
+ */
 export function laneSeries(track: WaveTrack, lane: Lane, teamId: number, geo: LaneGeometry, from = 0, to = Infinity): LaneRead[] {
-  return track.samples.filter((s) => s.t >= from && s.t <= to).map((s) => laneRead(s, lane, teamId, geo));
+  const raws = track.samples.filter((s) => s.t >= from && s.t <= to).map((s) => rawRead(s, lane, teamId, geo));
+  const n = raws.length;
+  const lm = raws.map((r) => (r.own.length ? Math.max(...r.own) : null));
+  const lt = raws.map((r) => (r.opp.length ? Math.min(...r.opp) : null));
+  const median = (xs: (number | null)[]) => {
+    const v = xs.filter((x): x is number => x !== null).sort((a, b) => a - b);
+    // Gone only when most of the reads around say so.
+    return v.length * 2 < xs.length || !v.length ? null : v[v.length >> 1];
+  };
+  const out: LaneRead[] = [];
+  let lo = 0;
+  let hi = 0;
+  for (let i = 0; i < n; i++) {
+    while (raws[i].t - raws[lo].t > SMOOTH_MS) lo++;
+    while (hi + 1 < n && raws[hi + 1].t - raws[i].t <= SMOOTH_MS) hi++;
+    const leadMine = median(lm.slice(lo, hi + 1));
+    const leadTheirs = median(lt.slice(lo, hi + 1));
+    let mine = 0;
+    let theirs = 0;
+    let ut = 0;
+    let um = 0;
+    for (let k = lo; k <= hi; k++) {
+      mine = Math.max(mine, groupMine(raws[k], leadMine));
+      theirs = Math.max(theirs, groupTheirs(raws[k], leadTheirs));
+      ut = Math.max(ut, underTheirs(raws[k]));
+      um = Math.max(um, underMine(raws[k]));
+    }
+    out.push(derive(raws[i], leadMine, leadTheirs, mine, theirs, ut, um));
+  }
+  return out;
 }
 
 /** The read nearest t (within 3 s), or null. */
@@ -228,10 +309,10 @@ export function waveEvents(series: LaneRead[], lane: Lane): WaveEvent[] {
       }
       const run = series.slice(i, last + 1);
       if (series[last].t - series[i].t >= 2000) {
-        const under = (r: LaneRead) => (side === "mine" ? r.mine : r.theirs);
+        const under = (r: LaneRead) => (side === "mine" ? r.underTheirTower : r.underMyTower);
         const size = Math.max(...run.map(under));
         const peak = run.find((r) => under(r) === size)!;
-        out.push({ kind: "crash", lane, side, t0: series[i].t, t1: series[last].t, size, against: side === "mine" ? peak.theirs : peak.mine, at: peak.front ?? 0, value: (series[last].t - series[i].t) / 1000 });
+        out.push({ kind: "crash", lane, side, t0: series[i].t, t1: series[last].t, size, against: side === "mine" ? peak.theirs : peak.mine, at: (side === "mine" ? peak.leadMine : peak.leadTheirs) ?? 0, value: (series[last].t - series[i].t) / 1000 });
         // Bounce: back across the middle, toward the crasher, with the defender's group larger.
         for (let k = last + 1; k < n && series[k].t - series[last].t <= BOUNCE_MS; k++) {
           const r = series[k];
@@ -327,8 +408,15 @@ export function waveEvents(series: LaneRead[], lane: Lane): WaveEvent[] {
       while (k < n && series[k].t - series[i].t <= 12_000 && series[k].contact) k++;
       if (k >= n || series[k].t - series[i].t > 12_000 || own(series[k]) < 1) continue;
       // The other side's lead must have fallen back by a group's length or vanished: wiped, not walked past.
-      const lostLead = side === "mine" ? series[k].leadTheirs === null || series[k].leadTheirs! - (series[i].leadTheirs ?? 0) > GROUP : series[k].leadMine === null || (series[i].leadMine ?? 0) - series[k].leadMine! > GROUP;
-      if (!lostLead) continue;
+      const gone = (q: number) => (side === "mine" ? series[q].leadTheirs === null || series[q].leadTheirs! - (series[i].leadTheirs ?? 0) > GROUP : series[q].leadMine === null || (series[i].leadMine ?? 0) - series[q].leadMine! > GROUP);
+      // And stayed gone: a count that reads 0 for a second and comes back was dots merging.
+      let held = 0;
+      let lostLead = true;
+      for (let q = k; q < n && series[q].t - series[k].t <= WIPE_HOLD_MS; q++) {
+        if (!gone(q)) lostLead = false;
+        held = series[q].t - series[k].t;
+      }
+      if (!lostLead || held < WIPE_HOLD_MS - 1000) continue;
       out.push({ kind: "fast push", lane, side, t0: series[i].t, t1: series[k].t, size: own(series[k]), against: other(series[i]), at: series[k].front ?? 0, value: (series[k].t - series[i].t) / 1000 });
     }
   }

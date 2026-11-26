@@ -4,6 +4,7 @@
 const fs = require("fs");
 const path = require("path");
 const ws = require("../dist/core/wavestate.js");
+const tempo = require("../dist/core/tempo.js");
 
 const arg = (k) => (process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : undefined);
 const dir = path.resolve(arg("--dir") || ".");
@@ -44,5 +45,36 @@ for (const lane of ["TOP", "MIDDLE", "BOTTOM"]) {
   };
 }
 report.lanes = lanes;
+// Only the player's own lane in full; the others as counts.
+const myLane = { TOP: "TOP", MIDDLE: "MIDDLE", BOTTOM: "BOTTOM", UTILITY: "BOTTOM" }[me.teamPosition];
+for (const lane of Object.keys(lanes)) {
+  const kinds = {};
+  for (const e of lanes[lane].events) kinds[e.split(" ")[1]] = (kinds[e.split(" ")[1]] || 0) + 1;
+  lanes[lane].eventCounts = kinds;
+  if (lane !== myLane && !arg("--all")) delete lanes[lane].events;
+}
+
+// Tempo: schedule, ledger and base visits against ground truth, then the player's trips.
+report.readRatio = tempo.countRatio(waves);
+report.checks = [report.check, tempo.checkWaveSchedule(waves, until), tempo.checkLedger(waves, match, timeline, until), tempo.checkBaseVisits(waves, match, timeline, until)];
+const input = { track: waves, match, timeline, id: me.participantId };
+const trips = tempo.trips(input);
+report.trips = trips.map((v) => ({
+  kind: v.kind,
+  start: fmt(v.start),
+  arrive: fmt(v.arrive),
+  leave: v.leave === null ? null : fmt(v.leave),
+  away: fmt(v.away),
+  back: v.back === null ? null : fmt(v.back),
+  until: fmt(v.until),
+  from: v.from && { x: Math.round(v.from.x), y: Math.round(v.from.y) },
+  channelSeen: v.channelSeen,
+  teleportedOut: v.teleportedOut,
+  state: v.state && { zone: v.state.zone, mine: v.state.mine, theirs: v.state.theirs, front: v.state.front === null ? null : Math.round(v.state.front) },
+  loss: v.loss && { minions: v.loss.minions, waves: v.loss.waves, xp: v.loss.xp, gold: v.loss.gold, cannonWaves: v.loss.cannonWaves, byWave: v.loss.byWave.map((w) => `wave ${w.wave} (${fmt(w.spawnedAt)}): ${w.minions}`) },
+  objectives: v.objectives.map((o) => `${o.type} up ${fmt(o.spawn)}${o.taken === null ? "" : `, taken ${fmt(o.taken)} by ${o.by}`}`),
+  flags: v.flags,
+}));
+report.objectives = tempo.objectiveSync(input, trips).map((o) => ({ type: o.type, spawn: fmt(o.spawn), taken: o.taken === null ? null : fmt(o.taken), by: o.by, lastBase: o.lastBase === null ? null : fmt(o.lastBase), gold: o.gold, distanceAtTake: o.distanceAtTake, away: o.away, unspent: o.unspent }));
 if (arg("--json")) fs.writeFileSync(arg("--json"), JSON.stringify(report, null, 2));
 console.log(JSON.stringify(report, null, 2));

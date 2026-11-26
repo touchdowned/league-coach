@@ -102,7 +102,33 @@ describe("wave events", () => {
     expect(Math.round(frontSpeed(series, 40)!)).toBe(60);
     const push = waveEvents(series, "MIDDLE").filter((e) => e.kind === "slow push");
     expect(push).toHaveLength(1);
-    expect(push[0]).toMatchObject({ side: "mine", size: 9, against: 4, value: 60 });
+    expect(push[0]).toMatchObject({ side: "mine", size: 9, against: 4 });
+    expect(Math.abs(push[0].value - 60)).toBeLessThan(5);
+  });
+
+  it("doesn't call a crash when one side's only read minions are a fresh wave in its base", () => {
+    // Red's fight group goes unread (dots touching blue's); red's new wave is still in the red base.
+    const samples = Array.from({ length: 30 }, (_, k) => ({
+      t: k * 500,
+      lanes: { TOP: { b: [], r: [] }, MIDDLE: { b: wave(mid, 4, 1).map((u) => u / L), r: [1, 1, 1] }, BOTTOM: { b: [], r: [] } },
+    }));
+    for (const team of [100, 200]) {
+      const series = laneSeries(track(samples), "MIDDLE", team, geo);
+      expect(series.every((r) => r.zone !== "my tower" && r.zone !== "their tower")).toBe(true);
+      expect(waveEvents(series, "MIDDLE").filter((e) => e.kind === "crash")).toHaveLength(0);
+    }
+    expect(laneSeries(track(samples), "MIDDLE", 200, geo)[5].mineAll).toBe(3);
+  });
+
+  it("gives two waves walking at each other no front, and a one-second blank no fast push", () => {
+    const apart = laneRead(at(0, wave(blueTower + 500, 6, 1), wave(redTower - 500, 6, -1)), "MIDDLE", 100, geo);
+    expect(apart.contact).toBe(false);
+    expect(apart.front).toBeNull();
+    expect(apart.zone).toBeNull();
+    // 5 v 5 in contact; blue's dots go unread for two frames, then come back.
+    const samples = Array.from({ length: 40 }, (_, k) => at(k * 500, k < 6 ? wave(mid - 2000 + k * 160, 5, 1) : k === 10 || k === 11 ? [] : wave(mid - 200, 5, 1), k < 6 ? wave(mid + 2000 - k * 160, 5, -1) : wave(mid + 200, 5, -1)));
+    const ev = waveEvents(laneSeries(track(samples), "MIDDLE", 100, geo), "MIDDLE");
+    expect(ev.filter((e) => e.kind === "fast push")).toHaveLength(0);
   });
 });
 
