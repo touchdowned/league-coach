@@ -124,6 +124,12 @@ export class RiotClient {
   }
 }
 
+/** The participant with this Riot ID (case-insensitive), from the match itself: no API call. */
+export function participantByRiotId<P extends { riotIdGameName?: string; riotIdTagline?: string }>(participants: P[], gameName: string, tagLine: string): P | undefined {
+  const same = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+  return participants.find((p) => same(p.riotIdGameName, gameName) && same(p.riotIdTagline, tagLine));
+}
+
 /** Accepts "Name#TAG" or "Name #TAG". */
 export function parseRiotId(input: string): { gameName: string; tagLine: string } {
   const [name, tag] = input.split("#").map((s) => s.trim());

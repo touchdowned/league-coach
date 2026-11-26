@@ -199,6 +199,8 @@ export interface LivePayload {
   nudges?: boolean;
   intention?: string;
   rules: { skill: string; mental: string; skillId: ChallengeId; mentalId: ChallengeId } | null;
+  /** The one focus from the read replays (core/focus.ts), if there is one yet. */
+  replayFocus?: { title: string; rule: string } | null;
   preview?: boolean;
 }
 

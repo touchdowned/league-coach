@@ -4,7 +4,7 @@ import path from "path";
 import { pathToFileURL } from "url";
 import { buildReport } from "../core/analysis";
 import { applyEvent, EMPTY_PROGRESS, ProgressEvent, ProgressState } from "../core/progress";
-import { parseRiotId, RiotApiError, RiotClient, SR_QUEUES } from "../core/riot";
+import { parseRiotId, participantByRiotId, RiotApiError, RiotClient, SR_QUEUES } from "../core/riot";
 import type { GameReport, MatchDto } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
@@ -17,7 +17,7 @@ import { growBench, readBench } from "./bench";
 import { champPosAt, type ChampSample, type WaveTrack } from "../core/waves";
 import { cameraLookingAt } from "../core/camera";
 import { JsonStore, Settings } from "./store";
-import { ReadQueue, type PendingRead } from "../core/autoread";
+import { ReadQueue, WATCH_PHASE, type PendingRead } from "../core/autoread";
 import { computeFocus, FOCUS_DEFS, type Focus, type FocusState } from "../core/focus";
 import { listVods, matchVod } from "./vod";
 import { startAutoUpdates } from "./updater";
@@ -405,15 +405,21 @@ async function recordClips(matchId: string, moments: number[]): Promise<Record<s
 /** Plays this game's replay, reads minions off the minimap, and re-reads the game with them. */
 async function readReplay(matchId: string, focus = true): Promise<GameReport> {
   const s = await store.readSettings();
-  if (!s.apiKey) throw new Error("Add your Riot API key in Settings first.");
   scanCancelled = false;
   const { gameName, tagLine } = parseRiotId(s.riotId);
   const riot = new RiotClient(s.apiKey.trim(), s.region, store.cache());
-  const puuid = await riot.getPuuid(gameName, tagLine);
+  // Match and timeline come from the cache after a sync, so an expired key doesn't stop a read.
+  // You're found by Riot ID in the match; the key is only needed if that fails.
   const match = await riot.getMatch(matchId);
   const players = match.info.participants.map((p) => ({ id: p.participantId, champion: p.championName, teamId: p.teamId }));
-  const meP = match.info.participants.find((p) => p.puuid === puuid);
-  if (!meP) throw new Error("You're not in this game.");
+  let meP = participantByRiotId(match.info.participants as (MatchDto["info"]["participants"][number] & { riotIdTagline?: string })[], gameName, tagLine);
+  let puuid = meP?.puuid;
+  if (!meP) {
+    if (!s.apiKey) throw new Error("Add your Riot API key in Settings first.");
+    puuid = await riot.getPuuid(gameName, tagLine);
+    meP = match.info.participants.find((p) => p.puuid === puuid);
+  }
+  if (!meP || !puuid) throw new Error("You're not in this game.");
   const me = { id: meP.participantId, champion: meP.championName, teamId: meP.teamId };
   const waves = await scanReplay(await league(), matchId, (p) => send("scan:progress", p), () => scanCancelled, players, me);
   if (waves.samples.length < 20) throw new Error("Couldn't read enough of the minimap. Keep the replay visible on your main monitor while it reads.");
@@ -438,7 +444,9 @@ async function autoReadTick(phase: string | null) {
   }
   if (!readQueue.pending.length) return;
   if (!(await store.readSettings()).autoRead) return;
-  const matchId = readQueue.next(phase, Date.now());
+  // The client reports phase "None" while a replay is open, so the replay itself is asked.
+  const replayOpen = !!(await (await league()).playback());
+  const matchId = readQueue.next(replayOpen ? WATCH_PHASE : phase, Date.now());
   if (matchId) void runAutoRead(matchId);
 }
 
@@ -461,8 +469,12 @@ async function runAutoRead(matchId: string) {
     opened = true;
     outcome = "retry";
     autoStatus(matchId, "reading", "Reading your replay. It closes by itself when it's done.");
+    // League has to be in front while it reads: step aside and say so outside the app.
+    win?.minimize();
+    if (Notification.isSupported()) new Notification({ title: "Reading your replay", body: "League plays it by itself for a few minutes, then closes it. Queue up any time and it stops." }).show();
     const report = await readReplay(matchId, false);
     outcome = "done";
+    await currentFocus().catch(() => undefined);
     send("games:updated", report);
     autoStatus(matchId, "done", report.findings?.length ? `Replay read: ${report.findings.length} moments measured.` : "Replay read.");
   } catch (err) {
@@ -830,9 +842,14 @@ app.whenReady().then(async () => {
       send("postgame:open", matchId);
       focusWindow();
       if (Notification.isSupported() && !win?.isFocused()) {
-        const n = new Notification({ title: "Your review is ready", body: "League Coach opened the review for the game you just played." });
-        n.on("click", focusWindow);
-        n.show();
+        // The focus as of this game (the sync just added it).
+        void currentFocus()
+          .catch(() => ({ focus: lastFocus }))
+          .then(({ focus: f }) => {
+            const n = new Notification({ title: "Your review is ready", body: f ? `Next game, one focus: ${f.title}. ${f.rule}` : "League Coach opened the review for the game you just played." });
+            n.on("click", focusWindow);
+            n.show();
+          });
       }
     },
   });

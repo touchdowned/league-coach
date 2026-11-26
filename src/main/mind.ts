@@ -340,7 +340,8 @@ export class MindService {
   }
 
   private pushView(view: LiveView, s?: Settings) {
-    const payload = { view, hidden: this.hidden, editing: this.editing, pos: s?.overlayPos ?? null, nudges: s?.overlayNudges !== false, intention: this.tracker?.plan?.intention ?? "", rules: this.rulesFor() };
+    const f = this.deps.focus?.() ?? null;
+    const payload = { view, hidden: this.hidden, editing: this.editing, pos: s?.overlayPos ?? null, nudges: s?.overlayNudges !== false, intention: this.tracker?.plan?.intention ?? "", rules: this.rulesFor(), replayFocus: f ? { title: f.title, rule: f.rule } : null };
     if (this.overlay && !this.overlay.isDestroyed()) this.overlay.webContents.send("mind:live", payload);
     this.deps.send("mind:live", payload);
   }

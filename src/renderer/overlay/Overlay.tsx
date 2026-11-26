@@ -74,6 +74,11 @@ function GoalPanel({ p }: { p: LivePayload }) {
           </div>
           {v.champion && <ChampIcon name={v.champion} size={28} />}
         </div>
+        {p.replayFocus && (
+          <div className="ov-obj" title={p.replayFocus.rule}>
+            <b>{p.replayFocus.title}</b> · {p.replayFocus.rule}
+          </div>
+        )}
         <ChallengeRow c={v.skill} icon="skill" />
         <ChallengeRow c={v.mental} icon="mental" />
         {v.nextObjective && v.nextObjective.inSec <= 90 && (
