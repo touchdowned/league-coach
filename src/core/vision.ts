@@ -241,7 +241,16 @@ export function dropJumps(champs: ChampSample[]): number {
  *    reads. Held-out reads on a real replay put this at median 94 units, 90% under 302
  *    for 1-2 s gaps, and median 303, 90% under 742 for ~5 s gaps; longer gaps were
  *    worse, hence the 6 s cap.
+ *  - In the team view only, longer gaps, up to LONG_GAP_MS, when an icon covers the
+ *    straight path in every frame of the gap (stacked under someone the whole time). In the
+ *    fog-off view the same rule moved kill-time positions off (Aurelion Sol 332 -> 591 and
+ *    90 -> 487 units on NA1_5686076870), so fog-off fills keep the 6 s cap. Against fog-off reads of the
+ *    same champion at the same moments (NA1_5686076870, team view): 6-15 s gaps median 308
+ *    units, 90% under 651 (11 points, 8 gaps); 15-30 s median 360, 90% under 473 (5 points,
+ *    2 gaps). Gaps without full cover were 1600-4700 median off and stay unfilled.
  */
+const LONG_GAP_MS = 30_000;
+
 export function fillOcclusions(champs: ChampSample[], ids: number[], aliveAt: (id: number, t: number) => boolean, visibleIn: (id: number, fog: ChampSample["fog"]) => boolean = () => true): number {
   let filled = 0;
   // A covering icon's centre is up to one icon width away (icons are ~24 px, ~1400 units).
@@ -264,16 +273,20 @@ export function fillOcclusions(champs: ChampSample[], ids: number[], aliveAt: (i
         if (B.k - A.k < 2) continue;
         const t0 = ss[A.k].t;
         const t1 = ss[B.k].t;
-        if (t1 - t0 > 6000) continue;
+        if (t1 - t0 > (fog === "team" ? LONG_GAP_MS : 6000)) continue;
         if (Math.hypot(B.x - A.x, B.y - A.y) > 1500 + ((t1 - t0) / 1000) * 500) continue;
+        const pointAt = (s: ChampSample) => {
+          const f = (s.t - t0) / (t1 - t0);
+          return { x: Math.round(A.x + (B.x - A.x) * f), y: Math.round(A.y + (B.y - A.y) * f) };
+        };
+        const covered = (s: ChampSample, p: { x: number; y: number }) => [...s.at, ...(s.unk ?? [])].some((o) => (!("id" in o) || o.id !== id) && Math.hypot(o.x - p.x, o.y - p.y) <= near);
+        // Past 6 s, only when an icon covers the straight path in every frame of the gap.
+        if (t1 - t0 > 6000 && ss.slice(A.k + 1, B.k).some((s) => aliveAt(id, s.t) && !covered(s, pointAt(s)))) continue;
         for (let k = A.k + 1; k < B.k; k++) {
           const s = ss[k];
           if (!aliveAt(id, s.t)) continue;
-          const f = (s.t - t0) / (t1 - t0);
-          const x = Math.round(A.x + (B.x - A.x) * f);
-          const y = Math.round(A.y + (B.y - A.y) * f);
-          const cover = [...s.at, ...(s.unk ?? [])].some((o) => (!("id" in o) || o.id !== id) && Math.hypot(o.x - x, o.y - y) <= near);
-          if (!cover) continue;
+          const { x, y } = pointAt(s);
+          if (!covered(s, { x, y })) continue;
           s.at.push({ id, x, y, inferred: true });
           filled++;
         }

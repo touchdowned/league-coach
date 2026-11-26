@@ -110,8 +110,12 @@ async function dumpFrame(dir: string, name: string, f: Frame, info: unknown) {
   await fsp.writeFile(pathMod.join(dir, `${name}.json`), JSON.stringify(info));
 }
 
-/** A fixed free camera over mid river, so the minimap's camera box never moves. */
-const SCAN_CAMERA = { cameraMode: "fps", cameraAttached: false, ...cameraLookingAt({ x: 7400, y: 7400 }, 2400, 56, 0), fieldOfView: 40 };
+/**
+ * A fixed free camera looking at a point off the map, so the minimap draws no camera box at
+ * all. Parked over mid river, its white box crossed champion icons near the centre (Master
+ * Yi at 3:38 and 11:38 on NA1_5686076870 was in plain view but cut by the box, and unread).
+ */
+const SCAN_CAMERA = { cameraMode: "fps", cameraAttached: false, ...cameraLookingAt({ x: -8000, y: -8000 }, 2400, 56, 0), fieldOfView: 40 };
 
 function imageToFrame(img: Electron.NativeImage): Frame {
   const { width, height } = img.getSize();
@@ -317,8 +321,8 @@ export async function scanReplay(
   const refs = await portraitRefs(players).catch(() => [] as PortraitRef[]);
   try {
     // 2. Find the minimap: capture with it on and off while paused. Your champion is
-    // selected (so team fog is your team's), and the camera is parked over mid river
-    // for the whole pass, so the camera box on the minimap stays put.
+    // selected, and the camera looks at a point off the map for the whole pass, so the
+    // minimap shows no camera box.
     onProgress({ phase: "calibrating", label: "Finding the minimap", done: 0, total: 1 });
     await lc.seek(20, true);
     await lc.setRender({ fogOfWar: false, interfaceMinimap: true, selectionName: me.champion });

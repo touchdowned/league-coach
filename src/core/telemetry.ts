@@ -171,10 +171,12 @@ export function checkPositions(w: WaveTrack, events: TimelineEvent[], until: num
     let covered = 0;
     for (const s of w.champs ?? []) {
       if (s.fog !== "off" || s.t > k.timestamp || s.t < k.timestamp - 2000) continue;
-      frames++;
-      // Another icon on the kill spot: a read of someone else, named or not.
-      const near = (p: { x: number; y: number }) => Math.hypot(p.x - k.position!.x, p.y - k.position!.y) <= COVERED;
-      if (s.at.some((x) => x.id !== k.victimId && !x.inferred && near(x)) || s.unk?.some(near)) covered++;
+      // Another icon on the kill spot: a read of someone else, named or not. A frame with
+      // no read anywhere near the spot says nothing either way and isn't counted.
+      const dist = (p: { x: number; y: number }) => Math.hypot(p.x - k.position!.x, p.y - k.position!.y);
+      const others = [...s.at.filter((x) => x.id !== k.victimId && !x.inferred), ...(s.unk ?? [])];
+      if (others.some((p) => dist(p) <= 3000)) frames++;
+      if (others.some((p) => dist(p) <= COVERED)) covered++;
       const r = s.at.find((x) => x.id === k.victimId);
       if (r && s.t > at) {
         a = r;
@@ -182,8 +184,9 @@ export function checkPositions(w: WaveTrack, events: TimelineEvent[], until: num
       }
     }
     if (a) errs.push({ t: k.timestamp, victim: k.victimId!, err: Math.round(Math.hypot(a.x - k.position!.x, a.y - k.position!.y)) });
-    // Not read, and another icon sat on the spot in every frame: nothing was there to read.
-    else if (frames > 0 && covered === frames) hidden.push({ t: k.timestamp, victim: k.victimId! });
+    // Not read, and another icon sat on the spot in at least 3 of every 4 frames (a read
+    // of the covering icon is itself up to a few hundred units off): nothing was there to read.
+    else if (frames > 0 && covered >= frames * 0.75) hidden.push({ t: k.timestamp, victim: k.victimId! });
     else missing++;
   }
   const e = errs.map((x) => x.err);

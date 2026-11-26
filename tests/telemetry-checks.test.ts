@@ -47,6 +47,16 @@ describe("stream checks", () => {
     const c2 = [0, 1000, 3000].map((t) => ({ t, fog: "team" as const, at: [{ id: 2, x: 9000, y: 1000 }, ...(t !== 1000 ? [{ id: 1, x: 9000, y: 1000 }] : [])] }));
     expect(fillOcclusions(c2, [1, 2], (id, t) => !(id === 1 && t === 1000))).toBe(0);
   });
+
+  it("fills a long gap only when another icon covers the path in every frame", () => {
+    // Ally 1 under ally 2 for 12 s: both ends agree, 2 sits on the path throughout.
+    const ts = Array.from({ length: 13 }, (_, k) => k * 1000);
+    const champs = ts.map((t) => ({ t, fog: "team" as const, at: [{ id: 2, x: 9000 + t / 20, y: 1000 }, ...(t === 0 || t === 12_000 ? [{ id: 1, x: 9000 + t / 20, y: 1050 }] : [])] }));
+    expect(fillOcclusions(champs, [1, 2], () => true)).toBe(11);
+    // Same gap, but ally 2 walks off at 6 s: nothing filled.
+    const off = ts.map((t) => ({ t, fog: "team" as const, at: [{ id: 2, x: t < 6000 ? 9000 : 13_000, y: 1000 }, ...(t === 0 || t === 12_000 ? [{ id: 1, x: 9000, y: 1050 }] : [])] }));
+    expect(fillOcclusions(off, [1, 2], () => true)).toBe(0);
+  });
 });
 
 describe("second look at unmatched rings", () => {
