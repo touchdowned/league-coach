@@ -32,6 +32,10 @@ const WALK_SPEED = 500;
 const WALK_SLACK = 600;
 /** A walk back to base only counts from this close; from further out, a long gap between reads is a recall the scan didn't see the channel of. */
 const WALK_FROM = 4500;
+/** A first read this close to the fountain after an unexplained jump means they came out of it. */
+const NEAR_BASE = 3000;
+/** The longest death timer in a normal game is under 80 s. */
+const MAX_RESPAWN_MS = 80_000;
 /** Base visits closer together than this are one visit (stepping off the platform and back). */
 const MERGE_MS = 5000;
 /** A recalling champion stands still: reads during the channel stay within this of each other. */
@@ -60,8 +64,10 @@ export interface BaseVisit {
   kind: "recall" | "death" | "walk";
   /** recall: when the channel began. death: the kill. walk: the last read before reaching base. */
   start: number;
-  /** First read in the fountain. */
+  /** First read in the fountain (or, with no read there, just after the last read elsewhere). */
   arrive: number;
+  /** The last read anywhere else before it: the visit can't have begun earlier. */
+  since: number;
   /** Last read in the fountain; null when the scan ended there. */
   leave: number | null;
   /** Where the recall was channelled, or where the death happened. */
@@ -76,51 +82,81 @@ export interface BaseVisit {
  * Every base visit of one champion. `deaths` are that champion's death times; `baronKills`
  * the times their team took Baron (the buff halves the recall channel).
  */
-export function baseVisits(id: number, path: Fix[], teamId: number, deaths: { t: number; at: Pt | null }[], baronKills: number[] = []): BaseVisit[] {
+export function baseVisits(id: number, rawPath: Fix[], teamId: number, deaths: { t: number; at: Pt | null }[], baronKills: number[] = []): BaseVisit[] {
   const f = fountainOf(teamId);
   const inBase = (p: Pt) => dist(p, f) <= f.r;
+  // A dead champion has no icon: reads in the first seconds after a death (the shortest
+  // death timer is 6 s), and filled-in ones until the respawn, are another ring misnamed.
+  const path = rawPath.filter((p) => !deaths.some((d) => p.t > d.t + 1000 && (p.t < d.t + 6000 || (p.inferred && p.t < d.t + 60_000 && !inBase(p)))));
+  // Into the fountain, a walk only has to reach its edge.
+  const walkable = (a: Fix, b: Fix) => (inBase(b) ? Math.max(0, dist(a, f) - f.r) : dist(a, b)) <= WALK_SLACK + ((b.t - a.t) / 1000) * WALK_SPEED;
   const out: BaseVisit[] = [];
-  for (let i = 0; i < path.length; i++) {
-    if (!inBase(path[i])) continue;
+  // Respawns first. A dead champion has no icon, so the first read after a death is after
+  // the respawn: in the fountain, or already walking out of it.
+  for (const d of deaths) {
+    const k = path.findIndex((p) => p.t >= d.t + 6000);
+    if (k < 0 || path[k].t - d.t > MAX_RESPAWN_MS + 60_000) continue;
+    const p = path[k];
+    let arrive: number;
+    let leave: number | null;
+    if (inBase(p)) {
+      let j = k;
+      while (j + 1 < path.length && inBase(path[j + 1])) j++;
+      arrive = p.t;
+      leave = j + 1 < path.length ? path[j].t : null;
+    } else {
+      leave = Math.max(d.t + 6000, p.t - (Math.max(0, dist(p, f) - f.r / 2) / RETURN_SPEED) * 1000);
+      arrive = Math.max(d.t + 6000, leave - 2000);
+    }
+    out.push({ id, kind: "death", start: d.t, arrive, since: d.t, leave, from: d.at ?? (k > 0 ? { x: path[k - 1].x, y: path[k - 1].y } : null), channelSeen: false, teleportedOut: false });
+  }
+  const respawning = (t: number) => out.some((v) => v.kind === "death" && t >= v.start && t <= (v.leave ?? Infinity) + MERGE_MS);
+  for (let i = 1; i < path.length; i++) {
+    const prev = path[i - 1];
+    const cur = path[i];
+    // An entry: the first read in the fountain, or (the fountain spot is in the minimap's
+    // corner, where a portrait is cut off and often unread) a read near the fountain that no
+    // walk from the read before explains: they went through the fountain unread.
+    const seen = inBase(cur) && !inBase(prev);
+    const hidden = !inBase(cur) && !inBase(prev) && dist(cur, f) <= NEAR_BASE && dist(prev, f) - f.r > WALK_FROM && !walkable(prev, cur);
+    if (!seen && !hidden) continue;
+    if (respawning(cur.t)) continue;
     let j = i;
-    while (j + 1 < path.length && inBase(path[j + 1])) j++;
-    const first = i;
+    if (seen) while (j + 1 < path.length && inBase(path[j + 1])) j++;
+    const next = seen ? path[j + 1] : cur;
+    const jumped = !walkable(prev, cur);
+    // One read alone that a walk explains isn't a visit (a single misread ring over the fountain).
+    if (seen && j === i && !jumped && dist(prev, f) - f.r > WALK_SLACK) {
+      i = j;
+      continue;
+    }
+    // When they left: the last fountain read, or walked back from the first read outside.
+    const walkedOut = next ? next.t - (Math.max(0, dist(next, f) - f.r / 2) / RETURN_SPEED) * 1000 : null;
+    let leave: number | null = seen ? (j + 1 < path.length ? path[j].t : null) : Math.max(prev.t + 500, walkedOut ?? cur.t);
+    // When they got there: the first fountain read, unless a jump put them there unread just after the last read outside.
+    let arrive = seen ? cur.t : Math.min(prev.t + 500, leave ?? cur.t);
+    if (leave !== null && leave < arrive) leave = arrive;
+    const teleportedOut = seen && !!next && dist(next, f) - f.r > WALK_SLACK + ((next.t - path[j].t) / 1000) * WALK_SPEED;
     i = j;
-    // In base when the scan began: nothing before it to tell how they got there.
-    if (first === 0) continue;
-    // One read alone isn't a visit (a single misread ring over the fountain).
-    if (j === first) continue;
-    const prev = path[first - 1];
-    const arrive = path[first].t;
-    const leave = j + 1 < path.length ? path[j].t : null;
-    const next = path[j + 1];
-    const teleportedOut = !!next && dist(next, f) - f.r > WALK_SLACK + ((next.t - path[j].t) / 1000) * WALK_SPEED;
-    const last = out[out.length - 1];
-    if (last && last.leave !== null && arrive - last.leave <= MERGE_MS) {
+    const last = [...out].reverse().find((v) => v.kind !== "death" || v.arrive <= arrive);
+    if (last && last.kind !== "death" && last.leave !== null && arrive - last.leave <= MERGE_MS && arrive >= last.arrive) {
       last.leave = leave;
       last.teleportedOut = teleportedOut;
       continue;
     }
-    const death = deaths.find((d) => d.t >= prev.t - 5000 && d.t <= arrive);
-    if (death) {
-      out.push({ id, kind: "death", start: death.t, arrive, leave, from: death.at ?? { x: prev.x, y: prev.y }, channelSeen: false, teleportedOut });
-      continue;
-    }
-    const gap = arrive - prev.t;
     const far = dist(prev, f) - f.r;
-    const walkable = far <= WALK_SLACK + (gap / 1000) * WALK_SPEED;
-    if (walkable && far <= WALK_FROM) {
-      out.push({ id, kind: "walk", start: prev.t, arrive, leave, from: { x: prev.x, y: prev.y }, channelSeen: false, teleportedOut });
+    if (!jumped && far <= WALK_FROM) {
+      out.push({ id, kind: "walk", start: prev.t, arrive, since: prev.t, leave, from: { x: prev.x, y: prev.y }, channelSeen: false, teleportedOut });
       continue;
     }
     const channel = baronKills.some((b) => arrive - b >= 0 && arrive - b <= BARON_BUFF_MS + EMPOWERED_RECALL_MS) ? EMPOWERED_RECALL_MS : RECALL_MS;
     // The channel was seen when reads cover it and stay in one place.
     const during: Fix[] = [];
-    for (let k = first - 1; k >= 0 && path[k].t >= arrive - channel - 1500; k--) during.push(path[k]);
+    for (let q = path.indexOf(prev); q >= 0 && path[q].t >= arrive - channel - 1500; q--) during.push(path[q]);
     const channelSeen = during.length >= 3 && during[during.length - 1].t <= arrive - channel + 2000 && during.every((p) => dist(p, prev) <= CHANNEL_DRIFT);
-    out.push({ id, kind: "recall", start: arrive - channel, arrive, leave, from: { x: prev.x, y: prev.y }, channelSeen, teleportedOut });
+    out.push({ id, kind: "recall", start: arrive - channel, arrive, since: prev.t, leave, from: { x: prev.x, y: prev.y }, channelSeen, teleportedOut });
   }
-  return out;
+  return out.sort((a, b) => a.start - b.start);
 }
 
 // ---- Minion ledger ----
@@ -338,7 +374,8 @@ export function trips({ track, match, timeline, id }: TempoInput): Trip[] {
     const fp = lane ? frontPoint(readAt(series, p.t), lane, teamId) : null;
     return !!fp && dist(p, fp) <= XP_RANGE;
   };
-  return visits.map((v) => {
+  return visits.map((v, vi) => {
+    const nextStart = visits[vi + 1]?.start ?? Infinity;
     // Leaving the wave: the last read in XP range in the 20 s before the trip began.
     let away = v.start;
     if (v.kind !== "death") {
@@ -352,7 +389,7 @@ export function trips({ track, match, timeline, id }: TempoInput): Trip[] {
     if (v.leave !== null) {
       for (const p of path) {
         if (p.t <= v.leave) continue;
-        if (p.t > v.leave + 150_000) break;
+        if (p.t > v.leave + 150_000 || p.t >= nextStart) break;
         if (atWave(p)) {
           back = p.t;
           break;
@@ -365,6 +402,8 @@ export function trips({ track, match, timeline, id }: TempoInput): Trip[] {
       const fp = frontPoint(readAt(series, leave), lane, teamId);
       if (fp) until = Math.min(lastT, leave + (dist(f, fp) / RETURN_SPEED) * 1000);
     }
+    // The next trip counts its own time.
+    until = Math.min(until, nextStart);
     const state = lane ? readAt(series, away) : null;
     const loss = ledger ? lostBetween(ledger, away, until) : null;
     const objs = objectives.filter((o) => (o.spawn >= v.start && o.spawn <= until) || (o.taken !== null && o.taken >= v.start && o.taken <= until));
@@ -440,7 +479,7 @@ export function checkBaseVisits(track: WaveTrack, match: MatchDto, timeline: Tim
       // The first visit can't be classified without a read before it, and the scan's last seconds have no "leave".
       if (t < first + 15_000 || t > until - 5000) continue;
       n++;
-      const v = visits.find((x) => t >= (x.kind === "death" ? x.start : x.arrive - 2000) && t <= (x.leave ?? until) + 2000);
+      const v = visits.find((x) => t >= Math.min(x.since, x.arrive - 2000) && t <= (x.leave ?? until) + 2000);
       if (v) {
         ok++;
         byKind[v.kind]++;

@@ -98,8 +98,8 @@ describe("base visits", () => {
       [120_500, 130_000, blueBase], // recall: in lane at 2:00, in the fountain half a second later
       [150_000, 200_000, lane],
       [230_000, 240_000, blueBase], // died at 3:25, respawned
-      [260_000, 300_000, lane],
-      [301_000, 305_000, near],
+      [260_000, 280_000, lane],
+      [301_000, 305_000, near], // 21 s later: time enough to have walked
       [305_500, 312_000, blueBase], // walked in from just outside
       [313_000, 330_000, near],
     ]);
@@ -132,5 +132,28 @@ describe("base visits", () => {
     expect(trip.loss!.cannonWaves).toEqual([3]);
     expect(trip.flags).toEqual(["lost_waves", "missed_cannon"]);
     expect(checkBaseVisits(t, match, timeline, 300_000)).toMatchObject({ pass: true, n: 1 });
+  });
+});
+
+describe("base visits the scan can't see", () => {
+  const lane = pointOnLane("MIDDLE", 0.45);
+  const out = { x: blueBase.x + 1500, y: blueBase.y + 1500 };
+  const fixes = (spec: [number, number, { x: number; y: number }][]): Fix[] => spec.flatMap(([from, to, p]) => Array.from({ length: Math.floor((to - from) / 500) + 1 }, (_, k) => ({ t: from + k * 500, ...p })));
+
+  it("finds a recall with no read in the fountain, from the jump to just outside it", () => {
+    // In lane to 2:00, unread for 6 s (portrait cut off in the minimap corner), then walking out of base.
+    const v = baseVisits(1, fixes([[60_000, 120_000, lane], [126_000, 128_000, out], [140_000, 200_000, lane]]), 100, []);
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ kind: "recall", since: 120_000, arrive: 120_500 });
+    expect(v[0].leave!).toBeGreaterThan(121_000);
+    expect(v[0].leave!).toBeLessThanOrEqual(126_000);
+  });
+
+  it("calls the first time in base after a death the respawn, whatever was read in between", () => {
+    // Dies at 3:20; a stray filled-in read in lane at 3:30; first real read walking out of base at 3:46.
+    const path = [...fixes([[60_000, 199_500, lane]]), { t: 210_000, ...lane, inferred: true }, ...fixes([[226_000, 228_000, out], [240_000, 260_000, lane]])];
+    const v = baseVisits(1, path, 100, [{ t: 200_000, at: lane }]);
+    expect(v.map((x) => x.kind)).toEqual(["death"]);
+    expect(v[0].start).toBe(200_000);
   });
 });

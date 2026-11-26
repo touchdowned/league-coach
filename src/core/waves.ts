@@ -22,7 +22,8 @@ const OUTER_TOWER: Record<Lane, Record<number, Pt>> = {
   MIDDLE: { 100: { x: 5846, y: 6396 }, 200: { x: 8955, y: 8510 } },
   BOTTOM: { 100: { x: 10504, y: 1029 }, 200: { x: 13866, y: 4505 } },
 };
-const MAX_OFF = 1400;
+/** How far off a lane's path a dot can be and still be that lane's minion. A fight spreads a wave about 600 units; 1400 took in jungle plants' vision discs beside mid lane. */
+const MAX_OFF = 1100;
 
 const len = (a: Pt, b: Pt) => Math.hypot(b.x - a.x, b.y - a.y);
 const LENGTH: Record<Lane, number> = Object.fromEntries(LANES.map((l) => [l, PATH[l].slice(1).reduce((s, p, i) => s + len(PATH[l][i], p), 0)])) as Record<Lane, number>;

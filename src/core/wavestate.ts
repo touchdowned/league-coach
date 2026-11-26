@@ -21,7 +21,7 @@
  */
 import { STRUCTURES } from "./minimap";
 import type { TimelineEvent } from "./types";
-import { laneLength, LANES, progressOn, type Lane, type WaveSample, type WaveTrack } from "./waves";
+import { laneLength, LANES, progressOn, projectLane, type Lane, type WaveSample, type WaveTrack } from "./waves";
 
 /** Minions walk at 325 units a second. */
 export const MINION_SPEED = 325;
@@ -49,6 +49,12 @@ const SMOOTH_MS = 1500;
 const WIPE_HOLD_MS = 3000;
 /** A wave last read walking free within this of a tower is followed to it when it goes unread. */
 const RECKON_REACH = 3000;
+/** A champion portrait hides minions within this of its centre along the lane (12.5 px radius on a 247 px minimap is 725 units, plus a dot's own size). */
+const PORTRAIT = 850;
+/** A wave fighting under a portrait is held in place this long without a read. */
+const HIDE_MS = 15_000;
+/** No enemy minion near for this long: the wave is walking, not fighting. */
+const FREE_MS = 4000;
 /** How long a wave that reached a tower unread is taken to last there: a tower alone kills a six-minion wave in about 20 s. */
 const RECKON_HOLD_MS = 20_000;
 
@@ -73,7 +79,7 @@ export interface LaneRead {
   /** My minions within turret range of their outermost tower (or past it), and theirs at mine. */
   underTheirTower: number;
   underMyTower: number;
-  /** A lead here is where an unread wave must have walked to, not a read (see reckon). */
+  /** A lead here is where an unread wave must be (hidden under a portrait, or walked on to a tower), not a read (see follow). */
   inferred?: true;
 }
 
@@ -217,9 +223,19 @@ export function laneSeries(track: WaveTrack, lane: Lane, teamId: number, geo: La
     sm.push(median(lm.slice(lo, hi + 1)));
     st.push(median(lt.slice(lo, hi + 1)));
   }
-  // My wave toward their tower runs up the lane (+1), theirs toward mine down it (-1).
-  const rm = reckon(raws, sm, st, 1);
-  const rt = reckon(raws, st, sm, -1);
+  // Champion portraits over this lane at each sample (units from my inhibitor).
+  const L = laneLength(lane);
+  const portraits = new Map<number, number[]>();
+  for (const c of track.champs ?? []) {
+    if (c.fog !== "off" || c.t < from || c.t > to) continue;
+    const xs: number[] = [];
+    for (const a of c.at) {
+      const pr = projectLane(a);
+      if (pr?.lane === lane) xs.push((teamId === 200 ? 1 - pr.s : pr.s) * L);
+    }
+    portraits.set(c.t, xs);
+  }
+  const { rm, rt } = follow(raws, sm, st, (t) => portraits.get(t) ?? []);
   const out: LaneRead[] = [];
   for (let i = 0; i < n; i++) {
     const leadMine = rm.lead[i];
@@ -250,47 +266,91 @@ export function laneSeries(track: WaveTrack, lane: Lane, teamId: number, geo: La
 }
 
 /**
- * Follows a wave the scan loses on its way to a tower. Minion dots within about 450 units
- * of a tower are under its icon, and a champion portrait (725 units across the radius)
- * hides a whole wave, so the attackers' wave is often unread exactly while it is under the
- * tower (on two scans, 18 of 26 plates fell with no attacking minion read within 900 units).
- * Minions walk at a fixed 325 units a second and only stop to fight. So a wave last read
- * walking free (no enemy minion within CONTACT) within RECKON_REACH of the tower, and then
- * not read, is where that speed puts it: at the tower after distance / 325 seconds, and
- * there for RECKON_HOLD_MS, unless it shows up again or the defenders' wave is read past
- * that point. `dir` +1: leads run up the lane toward theirTower; -1: down toward myTower.
- * Returns the leads with the gaps filled, and the wave's size where filled (else null).
+ * Follows both sides' lead waves through the frames where the scan can't read them.
+ *
+ * Minion dots go unread in two places: within about 450 units of a tower (under its icon)
+ * and under a champion portrait (about 725 units across the radius: a whole wave). Checked
+ * against frame dumps of two scans, both happen all the time: 18 of 26 plates fell with no
+ * attacking minion read within 900 units of the tower, and waves fighting under two laners'
+ * portraits read as 0 for seconds. A wave that stops being read is one of three things, and
+ * which one follows from what minions can do (walk at 325 units a second, or stand and fight):
+ *
+ *  - It was fighting the other wave (the other side's lead within CONTACT) and a portrait
+ *    covers the spot: it is still there, hidden. Held in place for up to HIDE_MS.
+ *  - It was walking free (no enemy minion near for FREE_MS) and either a portrait covers it
+ *    or it is within RECKON_REACH of the tower: it kept walking. It is at the tower after
+ *    distance / 325 seconds and lasts RECKON_HOLD_MS there.
+ *  - Otherwise (unread in the open, or fighting with nothing covering it): it is dead.
+ *
+ * A followed lead is dropped the moment a read shows up at or past where it should be, or
+ * the other side's wave is read beyond it. Returns each side's leads with the gaps filled
+ * and the wave's size where filled (null where the lead is a read).
  */
-function reckon(raws: Raw[], lead: (number | null)[], other: (number | null)[], dir: 1 | -1) {
+function follow(raws: Raw[], sm: (number | null)[], st: (number | null)[], portraitsAt: (t: number) => number[]) {
   const n = raws.length;
-  const out = { lead: [...lead], size: new Array<number | null>(n).fill(null) };
-  let track: { at: number; t: number; size: number } | null = null;
+  const rm = { lead: [...sm], size: new Array<number | null>(n).fill(null) };
+  const rt = { lead: [...st], size: new Array<number | null>(n).fill(null) };
+  interface Wave {
+    at: number;
+    /** Last read. */
+    t: number;
+    size: number;
+    /** Last time an enemy minion was read (or followed) within CONTACT of it. */
+    fought: number;
+    /** Where it was at the last read, to walk from. */
+    from: number;
+  }
+  const state: { 1: Wave | null; [-1]: Wave | null } = { 1: null, [-1]: null };
   for (let i = 0; i < n; i++) {
     const r = raws[i];
-    const tower = dir === 1 ? r.theirTower : r.myTower;
-    const stop = tower - dir * 300;
-    const ahead = (a: number, b: number) => (a - b) * dir; // how far a is past b, toward the tower
-    const predicted = track ? (ahead(stop, track.at) <= 0 ? track.at : track.at + dir * Math.min(Math.abs(stop - track.at), ((r.t - track.t) / 1000) * MINION_SPEED)) : null;
-    const l = lead[i];
-    const o = other[i];
-    // Still read (at or near where it should be, or further on): follow the read.
-    if (l !== null && (predicted === null || ahead(l, predicted) >= -GROUP)) {
-      const free = o === null || Math.abs(o - l) > CONTACT;
-      const size = dir === 1 ? groupMine(r, l) : groupTheirs(r, l);
-      track = free && Math.abs(tower - l) <= RECKON_REACH && ahead(tower, l) > -TOWER_RANGE ? { at: l, t: r.t, size: Math.max(size, track && r.t - track.t <= SMOOTH_MS * 2 ? track.size : 0) } : null;
-      continue;
+    const ports = portraitsAt(r.t);
+    const covered = (x: number) => ports.some((p) => Math.abs(p - x) <= PORTRAIT);
+    const before = { 1: state[1], [-1]: state[-1] };
+    for (const dir of [1, -1] as const) {
+      const w = before[dir];
+      const other = before[dir === 1 ? -1 : 1];
+      const read = dir === 1 ? sm[i] : st[i];
+      const tower = dir === 1 ? r.theirTower : r.myTower;
+      const stop = tower - dir * 300;
+      const ahead = (a: number, b: number) => (a - b) * dir; // how far a is past b, toward the tower
+      const near = other !== null && Math.abs(other.at - (w?.at ?? read ?? Infinity)) <= CONTACT + 300;
+      // Where it should be by now.
+      let expect = w ? w.at : null;
+      const free = w !== null && r.t - w.fought >= FREE_MS;
+      if (w && free && ahead(stop, w.from) > 0) expect = w.from + dir * Math.min(Math.abs(stop - w.from), ((r.t - w.t) / 1000) * MINION_SPEED);
+      if (read !== null && (expect === null || ahead(read, expect) >= -GROUP)) {
+        // Read (at or beyond where it should be): follow the read.
+        const size = dir === 1 ? groupMine(r, read) : groupTheirs(r, read);
+        const keep = w && r.t - w.t <= SMOOTH_MS * 2 && Math.abs(w.at - read) <= GROUP ? w : null;
+        state[dir] = { at: read, t: r.t, from: read, size: Math.max(size, keep ? keep.size : 0), fought: near ? r.t : (keep?.fought ?? (other === null ? -Infinity : r.t - FREE_MS / 2)) };
+        continue;
+      }
+      if (!w || expect === null) {
+        state[dir] = null;
+        continue;
+      }
+      const gone = r.t - w.t;
+      let alive: boolean;
+      if (!free) alive = near && (covered(w.at) || (other !== null && covered(other.at))) && gone <= HIDE_MS;
+      else {
+        const walk = (Math.abs(stop - w.from) / MINION_SPEED) * 1000;
+        alive = (covered(expect) || Math.abs(tower - expect) <= RECKON_REACH) && ahead(stop, w.from) > -TOWER_RANGE && gone <= walk + RECKON_HOLD_MS;
+      }
+      // The other side's wave read beyond it: it is gone.
+      const passed = dir === 1 ? st[i] !== null && st[i]! < expect - CONTACT : sm[i] !== null && sm[i]! > expect + CONTACT;
+      if (!alive || passed) {
+        state[dir] = null;
+        // The read that wasn't accepted (a wave further back) is what is there now.
+        if (read !== null) state[dir] = { at: read, t: r.t, from: read, size: dir === 1 ? groupMine(r, read) : groupTheirs(r, read), fought: -Infinity };
+        continue;
+      }
+      state[dir] = { ...w, at: expect, fought: near ? r.t : w.fought };
+      const o = dir === 1 ? rm : rt;
+      o.lead[i] = expect;
+      o.size[i] = w.size;
     }
-    if (!track || predicted === null) continue;
-    const walk = (Math.abs(stop - track.at) / MINION_SPEED) * 1000;
-    // Gone for good: past its time at the tower, or the defenders' wave is read beyond it.
-    if (r.t - track.t > walk + RECKON_HOLD_MS || (o !== null && ahead(o, predicted) < -CONTACT)) {
-      track = null;
-      continue;
-    }
-    out.lead[i] = predicted;
-    out.size[i] = track.size;
   }
-  return out;
+  return { rm, rt };
 }
 
 /** The read nearest t (within 3 s), or null. */
@@ -339,6 +399,8 @@ export interface WaveEvent {
   at: number;
   /** Freeze: distance from the holder's tower. Push: average front speed. Bounce: seconds from crash to crossing back. */
   value: number;
+  /** Part of it rests on a wave followed while unread (see follow), not on reads. */
+  inferred?: true;
 }
 
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
@@ -383,7 +445,7 @@ export function waveEvents(series: LaneRead[], lane: Lane): WaveEvent[] {
         const under = (r: LaneRead) => (side === "mine" ? r.underTheirTower : r.underMyTower);
         const size = Math.max(...run.map(under));
         const peak = run.find((r) => under(r) === size)!;
-        out.push({ kind: "crash", lane, side, t0: series[i].t, t1: series[last].t, size, against: side === "mine" ? peak.theirs : peak.mine, at: (side === "mine" ? peak.leadMine : peak.leadTheirs) ?? 0, value: (series[last].t - series[i].t) / 1000 });
+        out.push({ kind: "crash", lane, side, t0: series[i].t, t1: series[last].t, size, against: side === "mine" ? peak.theirs : peak.mine, at: (side === "mine" ? peak.leadMine : peak.leadTheirs) ?? 0, value: (series[last].t - series[i].t) / 1000, ...(run.some((r) => r.inferred) ? { inferred: true as const } : {}) });
         // Bounce: back across the middle, toward the crasher, with the defender's group larger.
         for (let k = last + 1; k < n && series[k].t - series[last].t <= BOUNCE_MS; k++) {
           const r = series[k];

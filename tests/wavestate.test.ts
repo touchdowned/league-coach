@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineEvent } from "../src/core/types";
 import { checkWaveStates, frontSpeed, laneGeometry, laneRead, laneSeries, waveEvents } from "../src/core/wavestate";
-import { laneLength, type WaveSample, type WaveTrack } from "../src/core/waves";
+import { laneLength, pointOnLane, type ChampSample, type WaveSample, type WaveTrack } from "../src/core/waves";
 
 const L = laneLength("MIDDLE");
 const geo = laneGeometry([]);
@@ -161,5 +161,27 @@ describe("wave state check", () => {
     // Once red's wave is read well past where blue's would be, blue's is gone.
     expect(series[series.length - 1].zone).not.toBe("their tower");
     expect(series[series.length - 1].inferred).toBeUndefined();
+  });
+
+  it("holds two waves fighting under champion portraits in place instead of walking one to a tower", () => {
+    const samples: WaveSample[] = [];
+    const champs: ChampSample[] = [];
+    const centre = pointOnLane("MIDDLE", mid / L);
+    let t = 0;
+    for (let k = 0; k < 10; k++, t += 500) samples.push(at(t, wave(mid - 200, 5, 1), wave(mid + 200, 5, -1)));
+    // Both laners stand on the fight for 10 s: nothing is read under their portraits.
+    for (let k = 0; k < 20; k++, t += 500) {
+      samples.push(at(t, [], []));
+      champs.push({ t, fog: "off", at: [{ id: 1, x: centre.x, y: centre.y }, { id: 6, x: centre.x + 300, y: centre.y + 300 }] });
+    }
+    for (let k = 0; k < 10; k++, t += 500) samples.push(at(t, wave(mid - 200, 3, 1), wave(mid + 200, 4, -1)));
+    const series = laneSeries({ ...track(samples), champs }, "MIDDLE", 100, geo);
+    expect(series.every((r) => r.contact)).toBe(true);
+    expect(series[20].inferred).toBe(true);
+    expect(series[20].mine).toBe(5);
+    expect(waveEvents(series, "MIDDLE")).toEqual([]);
+    // Without the portraits the same blank means both waves died.
+    const bare = laneSeries(track(samples), "MIDDLE", 100, geo);
+    expect(bare[20].contact).toBe(false);
   });
 });

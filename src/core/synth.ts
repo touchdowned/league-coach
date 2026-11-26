@@ -89,7 +89,8 @@ function lossLine(l: WaveLoss, lane: string): string {
   const waves = l.byWave.filter((w) => w.minions >= 1).map((w) => `${n1(w.minions)} of wave ${w.wave} (spawned ${fmtTime(w.spawnedAt)})`);
   return `${plural(l.minions, "enemy minion")} died in ${lane} while you were out of XP range${waves.length ? `: ${waves.join(", ")}` : ""}.`;
 }
-const lossCost = (l: WaveLoss) => `${n1(l.waves)} waves: ${l.xp} XP and up to ${l.gold} gold in last hits`;
+/** Hand counts on frame dumps of two scans came out 0 to 3 minions under the ledger's, per trip. */
+const lossCost = (l: WaveLoss) => `${n1(l.waves)} waves (counted to within about 2 minions): ${l.xp} XP and up to ${l.gold} gold in last hits`;
 
 interface Ctx extends SynthInput {
   me: MatchDto["info"]["participants"][number];
@@ -126,7 +127,7 @@ function recallFinding(c: Ctx, v: Trip, k: number): Finding | null {
   let fix: string;
   if (saved >= 3) {
     const d = s(best.at - v.away);
-    const crash = c.waveEvents.find((e) => e.kind === "crash" && e.side === "mine" && e.lane === v.lane && Math.abs(e.t0 - best.at) <= 8 * SEC);
+    const crash = c.waveEvents.find((e) => e.kind === "crash" && !e.inferred && e.side === "mine" && e.lane === v.lane && Math.abs(e.t0 - best.at) <= 8 * SEC);
     const when = d < 0 ? `${-d} s earlier, leaving the wave at ${fmtTime(best.at)}` : `${d} s later, leaving the wave at ${fmtTime(best.at)}`;
     fix = `Start this recall ${when}${crash ? `, as your ${crash.size}-minion wave reached their tower at ${fmtTime(crash.t0)}` : ""}. The same ${s(gone)} s trip then loses ${plural(best.loss.minions, "minion")} instead of ${n1(v.loss.minions)}: ${v.loss.xp - best.loss.xp} XP and ${v.loss.gold - best.loss.gold} gold kept.`;
     if (d > 0 && v.state && v.state.theirs > 0) fix += ` That means killing the ${v.state.theirs} enemy minions at the front first; they died at your tower without you.`;
