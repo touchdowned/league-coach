@@ -307,8 +307,10 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     const offMs = 1000 / (waves.scanInfo?.passes?.find((p) => p.fog === "off")?.fps ?? 2);
     const keep = (t: number) => Math.round((t - firstOff) / offMs) % offStep === 0;
     const champs = (JSON.parse(JSON.stringify(waves.champsRaw)) as ChampSample[]).filter((c) => c.fog !== "off" || keep(c.t));
-    const tracking = trackChampions(champs, players, me, waves.live ?? []);
-    waves = { ...waves, champs, samples: waves.samples.filter((s) => keep(s.t)), hud: (waves.hud ?? []).filter((h) => keep(h.t)) };
+    const tracking = trackChampions(champs, players, me, (waves.live ?? []).filter((_, i) => i % offStep === 0));
+    // A pass at 1/N the frame rate runs N times faster in game time, so Live Client gets 1/N the polls per game second.
+    const live = (waves.live ?? []).filter((_, i) => i % offStep === 0);
+    waves = { ...waves, champs, live, samples: waves.samples.filter((s) => keep(s.t)), hud: (waves.hud ?? []).filter((h) => keep(h.t)) };
     console.log(`reprocessed: off step ${offStep}, ${JSON.stringify(tracking)}`);
   }
   const wallSec = Math.round((Date.now() - t0) / 1000);

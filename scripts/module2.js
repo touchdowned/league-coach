@@ -91,6 +91,9 @@ if (itemFile) {
   report.exposures = ex.map((x) => ({ ...x, t0: fmt(x.t0), t1: fmt(x.t1), depthAt: fmt(x.depthAt), closestAt: x.closestAt === null ? null : fmt(x.closestAt), arrived: x.arrived === null ? null : fmt(x.arrived), died: x.died === null ? null : fmt(x.died), unseenFor: Math.round(x.unseenFor / 1000), lastSeen: x.lastSeen && { t: fmt(x.lastSeen.t), x: Math.round(x.lastSeen.x), y: Math.round(x.lastSeen.y) } }));
   report.fights = vuln.fights(vin).map((f) => ({ ...f, t0: fmt(f.t0), t1: fmt(f.t1), died: f.died === null ? null : fmt(f.died), me: { level: f.me.level, itemGold: f.me.itemGold, legendaries: f.me.legendaries }, allies: f.allies.map(name), killed: f.killed.map(name) }));
   report.viewTeam = waves.viewTeam;
+  const out = require("../dist/core/synth.js").synthesize(vin);
+  report.findings = out.findings.map((f) => ({ time: f.time, kind: f.kind, title: f.title, proof: f.proof, cost: f.cost, fix: f.fix, jump: `${fmt(f.jump.t)} on ${f.jump.follow}`, score: Math.round(f.score) }));
+  report.rejected = out.rejected;
 }
 
 // --diag: the reads around each shop stop the base-visit check missed.
