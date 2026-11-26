@@ -16,6 +16,7 @@ import { useProgress } from "../progress";
 import { Button, Empty, Kbd, ProgressBar, Spinner } from "../ui";
 import { buildChapters } from "../../core/walkthrough";
 import { Walkthrough } from "./Walkthrough";
+import { useFocus } from "./FocusCard";
 import { Findings } from "./Findings";
 import { champName } from "../../core/names";
 
@@ -183,6 +184,7 @@ function ReviewPlayer({
   onPuzzles: () => void;
   onGameUpdated?: (r: GameReport) => void;
 }) {
+  const { focus } = useFocus(useMemo(() => [r], [r]));
   const m = r.metrics;
   const moments = useMemo(() => toMoments(r), [r]);
   const chapters = useMemo(() => buildChapters(r), [r]);
@@ -426,6 +428,7 @@ function ReviewPlayer({
 
       {!!r.findings?.length && (
         <Findings
+          focus={focus}
           findings={r.findings}
           matchId={m.matchId}
           replayOpen={replay?.kind === "open"}

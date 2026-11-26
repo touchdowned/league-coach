@@ -109,6 +109,13 @@ export function SettingsView({ value, onSave }: { value: Settings; onSave: (s: S
         </label>
         <label className="inline-action">
           <div>
+            <strong>Read the replay by itself</strong>
+            <small>Once the replay has downloaded and you're not in queue, champ select or a game, the app opens it, reads it (a few minutes, the replay window is on screen meanwhile) and closes it. Queue up and it stops and picks up again later.</small>
+          </div>
+          <input type="checkbox" checked={s.autoRead} disabled={!s.autoReview} onChange={(e) => setS({ ...s, autoRead: e.target.checked })} />
+        </label>
+        <label className="inline-action">
+          <div>
             <strong>Also open the replay in League</strong>
             <small>Launches the replay once it has downloaded, unless you're already back in queue or champ select.</small>
           </div>

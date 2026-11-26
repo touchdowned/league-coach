@@ -72,6 +72,15 @@ export function DraftCard({ info, onClose, floating, onLocked }: { info: DraftIn
         </div>
       </div>
 
+      {info.focus && (
+        <div className="draft-focus">
+          <span className="eyebrow accent">Your one focus this game</span>
+          <b>{info.focus.title}</b>
+          <span>{info.focus.rule}</span>
+          <small>{info.focus.cue}</small>
+        </div>
+      )}
+
       {info.read && info.read.games > 0 && (
         <div className="draft-read">
           <Stat label={`On ${champName(info.championName)}`} value={pct(info.read.winRate)} sub={`${info.read.games} games`} />

@@ -36,6 +36,8 @@ export interface PostGameDeps {
   status(s: PostGameStatus): void;
   /** Bring the app forward on this game's review. */
   openReview(matchId: string): void;
+  /** The game is analyzed: its replay can be read when the client is idle. */
+  queueRead?(matchId: string): void;
   /** Every observed phase (null when the client is closed), for the live overlay and draft card. */
   onPhase?(phase: string | null): void;
   sleep?(ms: number): Promise<void>;
@@ -158,6 +160,7 @@ export class PostGameWatcher {
     }
     this.emit({ stage: "ready", ...gid, matchId: r.metrics.matchId, label: "Your review is ready" });
     this.deps.openReview(r.metrics.matchId);
+    this.deps.queueRead?.(r.metrics.matchId);
   }
 
   /** Downloads the replay as soon as Riot has it. Never blocks the review. */

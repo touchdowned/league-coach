@@ -1249,3 +1249,36 @@ body.overlay-body { user-select: none; }
 .fo-btn { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border-radius: 8px; border: 0; background: var(--surface-3); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; font-variant-numeric: tabular-nums; }
 .fo-btn:disabled { opacity: 0.4; cursor: default; }
 .fo-btn.primary { background: var(--accent); color: var(--accent-ink); }
+
+/* ---- The one focus ---- */
+.focus-card { display: grid; grid-template-columns: 1.5fr 1fr; gap: 36px; margin: 4px 0 20px; padding: 30px 32px; border-radius: 22px; background: radial-gradient(120% 150% at 0% 0%, rgba(240, 181, 74, 0.16), transparent 58%), var(--surface); box-shadow: var(--shadow), 0 0 0 1px rgba(240, 181, 74, 0.26) inset; }
+.focus-card.empty { display: block; }
+.focus-card.empty .btn { margin-top: 14px; }
+.focus-card h2 { font-size: 32px; line-height: 1.12; letter-spacing: -0.028em; margin: 10px 0 14px; text-wrap: balance; }
+.focus-card.empty h2 { font-size: 24px; }
+.focus-rule { font-size: 17px; line-height: 1.5; color: var(--text); margin: 0 0 12px; max-width: 58ch; }
+.focus-cue { font-size: 14px; line-height: 1.5; color: var(--accent); margin: 0; max-width: 58ch; }
+.focus-moved { margin: 16px 0 0; font-size: 13px; color: var(--good); }
+.focus-side { display: flex; flex-direction: column; gap: 16px; padding-left: 28px; border-left: 1px solid var(--hair); }
+.focus-side p { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--text-2); }
+.focus-side .btn { align-self: flex-start; text-align: left; white-space: normal; }
+.focus-dots { display: flex; gap: 7px; margin-top: 8px; }
+.focus-dot { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; box-shadow: 0 0 0 1px var(--hair) inset; color: var(--text-3, var(--text-2)); }
+.focus-dot.held { background: var(--good-soft); color: var(--good); box-shadow: none; }
+.focus-dot.broke { background: var(--bad-soft); color: var(--bad); box-shadow: none; }
+.focus-grade { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; background: var(--accent-soft); box-shadow: 0 0 0 1px rgba(240, 181, 74, 0.22) inset; }
+.focus-grade.held { background: var(--good-soft); box-shadow: none; }
+.focus-grade.broke { background: var(--bad-soft); box-shadow: none; }
+.focus-grade strong { display: block; margin: 3px 0 4px; font-size: 15px; }
+.focus-grade p { margin: 0; font-size: 13px; line-height: 1.45; max-width: 70ch; }
+.focus-grade-jumps { display: flex; flex-wrap: wrap; gap: 6px; flex: none; max-width: 260px; justify-content: flex-end; }
+.more-numbers { margin-top: 8px; }
+.more-numbers > summary { cursor: pointer; list-style: none; padding: 12px 2px; color: var(--text-2); font-size: 13px; font-weight: 600; }
+.more-numbers > summary::-webkit-details-marker { display: none; }
+.more-numbers > summary::before { content: "+ "; color: var(--accent); }
+.more-numbers[open] > summary::before { content: "− "; }
+.more-numbers > * + * { margin-top: 16px; }
+.draft-focus { display: flex; flex-direction: column; gap: 3px; padding: 11px 12px; border-radius: 11px; background: var(--accent-soft); box-shadow: 0 0 0 1px rgba(240, 181, 74, 0.25) inset; font-size: 12px; line-height: 1.45; color: var(--text-2); }
+.draft-focus b { color: var(--text); font-size: 14px; }
+.draft-focus small { color: var(--accent); }
+@media (max-width: 1100px) { .focus-card { grid-template-columns: 1fr; } .focus-side { padding-left: 0; border-left: 0; } }

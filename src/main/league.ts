@@ -1,3 +1,4 @@
+import { execFile } from "child_process";
 import { promises as fs } from "fs";
 import https from "https";
 import path from "path";
@@ -225,6 +226,29 @@ export class LeagueClient {
   }
 
   /** /liveclientdata/allgamedata: answers during replays too, at the replay's current time. */
+  /**
+   * Closes the open replay window. Only ever a replay: the Replay API has to answer (it has no
+   * playback in a live game) and the client must not report a game being played. League has no
+   * route for leaving a replay, so the game process is asked to close, then ended if it is
+   * still up 4 s later. Returns true when a replay was open and is gone.
+   */
+  async closeReplay(): Promise<boolean> {
+    if (process.platform !== "win32") return false;
+    if (!(await this.playback())) return false;
+    const phase = await this.gameflowPhase();
+    if (phase === "InProgress" || phase === "GameStart" || phase === "Reconnect") return false;
+    const kill = (force: boolean) =>
+      new Promise<void>((resolve) => execFile("taskkill", [...(force ? ["/F"] : []), "/IM", "League of Legends.exe"], { windowsHide: true }, () => resolve()));
+    await kill(false);
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (!(await this.playback())) return true;
+    }
+    await kill(true);
+    await new Promise((r) => setTimeout(r, 1000));
+    return !(await this.playback());
+  }
+
   async liveData(): Promise<unknown | null> {
     const r = await request<unknown>("https://127.0.0.1:2999/liveclientdata/allgamedata", { timeoutMs: 1500 }).catch(() => null);
     return r?.status === 200 ? r.data : null;

@@ -2,6 +2,7 @@ import { Crosshair } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { fmtTime } from "../../core/analysis";
+import type { Focus } from "../../core/focus";
 import type { Finding } from "../../core/synth";
 import { coach } from "../api";
 
@@ -11,7 +12,7 @@ const KIND: Record<Finding["kind"], string> = { recall: "Recall", exposure: "Jun
  * Module 3's findings for one game: the moment, the telemetry behind it, what it cost and
  * the fix, each with a button that seeks the open replay to a few seconds before it.
  */
-export function Findings({ findings, matchId, replayOpen, onNeedReplay }: { findings: Finding[]; matchId?: string; replayOpen: boolean; onNeedReplay: () => Promise<boolean> }) {
+export function Findings({ findings, matchId, replayOpen, onNeedReplay, focus }: { findings: Finding[]; matchId?: string; replayOpen: boolean; onNeedReplay: () => Promise<boolean>; focus?: Focus | null }) {
   const [open, setOpen] = useState<string | null>(findings[0]?.id ?? null);
   const [busy, setBusy] = useState<string | null>(null);
   const jump = async (f: Finding) => {
@@ -28,6 +29,9 @@ export function Findings({ findings, matchId, replayOpen, onNeedReplay }: { find
       setBusy(null);
     }
   };
+  // This game against the focus: graded if it was played after the focus was set, else one of the games it came from.
+  const mine = focus ? findings.filter((f) => f.kind === focus.key).sort((a, b) => a.t - b.t) : [];
+  const grade = focus?.graded.find((g) => g.matchId === matchId) ?? null;
   const minions = findings.reduce((a, f) => a + f.minions, 0);
   const gold = findings.reduce((a, f) => a + f.gold, 0);
   const xp = findings.reduce((a, f) => a + f.xp, 0);
@@ -42,6 +46,30 @@ export function Findings({ findings, matchId, replayOpen, onNeedReplay }: { find
           Counted across them: {Math.round(minions)} minions, {xp} XP, {gold} gold. Costliest first.
         </p>
       </header>
+      {focus && (grade || mine.length > 0) && (
+        <div className={`focus-grade ${grade ? (grade.held ? "held" : "broke") : ""}`}>
+          <div>
+            <span className="eyebrow accent">Your focus: {focus.title}</span>
+            <strong>
+              {grade
+                ? grade.held
+                  ? `Held this game: ${grade.count} counted, the pass line is ${focus.target}.`
+                  : `Not held this game: ${grade.count} counted, the pass line is ${focus.target}.`
+                : `${mine.length} of the cases that made this your focus ${mine.length === 1 ? "is" : "are"} in this game.`}
+            </strong>
+            <p className="muted">{focus.rule}</p>
+          </div>
+          {mine.length > 0 && (
+            <div className="focus-grade-jumps">
+              {mine.map((f) => (
+                <button key={f.id} className="finding-jump" onClick={() => (setOpen(f.id), jump(f))} disabled={busy === f.id}>
+                  <Crosshair size={14} /> {f.time}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <ol className="findings-list">
         {findings.map((f) => {
           const on = open === f.id;

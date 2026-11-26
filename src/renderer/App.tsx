@@ -77,6 +77,14 @@ function Shell() {
       openReview(matchId, true);
       toast.success("Your review is ready", { description: "Starting with the moments that cost you the most." });
     });
+    // A replay read in the background: the game's findings and the focus update in place.
+    const offUpdated = coach().onGamesUpdated?.((r) => setGames((gs) => gs && gs.map((g) => (g.metrics.matchId === r.metrics.matchId ? r : g))));
+    const offAuto = coach().onAutoRead?.((a) => {
+      if (a.stage === "reading") toast.loading(a.label, { id: "autoread", duration: 600_000 });
+      else if (a.stage === "done") toast.success(a.label, { id: "autoread", duration: 8000, action: { label: "Open", onClick: () => openReview(a.matchId) } });
+      else if (a.stage === "waiting") toast.message(a.label, { id: "autoread", duration: 6000 });
+      else toast.error("Couldn't read the replay", { id: "autoread", description: a.label, duration: 10_000 });
+    });
     const offDebrief = coach().onMindDebrief((gameId) => {
       setDebriefFor(gameId);
       setTab("mind");
@@ -85,6 +93,8 @@ function Shell() {
       offStatus();
       offOpen();
       offDebrief();
+      offUpdated?.();
+      offAuto?.();
     };
   }, []);
 

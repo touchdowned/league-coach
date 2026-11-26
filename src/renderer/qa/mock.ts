@@ -1,3 +1,4 @@
+import { computeFocus } from "../../core/focus";
 // Preview-only: a fake main process so the renderer can be opened in a plain browser
 // (npm run preview:qa) with believable games, for screenshots and UI checks.
 // Nothing here ships: vite only builds index.html.
@@ -103,7 +104,7 @@ export function installMock() {
   const reports = fresh ? [] : games();
   let settings: Settings = {
     apiKey: "RGAPI-preview", riotId: "Preview#NA1", region: "na1", matchCount: 20, leagueDir: "C:\\Riot Games\\League of Legends",
-    vodDir: "", autoAdvanceSec: 6, autoReview: true, autoLaunchReplay: true, launchAtLogin: false, overlay: true, overlayNudges: true,
+    vodDir: "", autoAdvanceSec: 6, autoReview: true, autoLaunchReplay: true, autoRead: true, launchAtLogin: false, overlay: true, overlayNudges: true,
     overlayPos: null, draftCompanion: true, autoDebrief: true,
   };
   if (fresh) settings = { ...settings, apiKey: "", riotId: "" };
@@ -120,6 +121,7 @@ export function installMock() {
     progressEvent: async (e) => { const r = applyEvent(progress, e); progress = r.state; return r; },
     replayState: async () => ({ ok: true, value: { kind: "client-closed" } }),
     postGameStatus: async () => ({ ok: true, value: undefined }),
+    focusGet: async () => ({ ok: true, value: ((f) => ({ focus: f.focus, moved: null }))(computeFocus(reports, null)) }),
     // ?debrief leaves the newest game waiting for its debrief.
     mindGet: async () => ({ ok: true, value: { ...mind, pending: new URLSearchParams(location.search).has("debrief") && reports[0] ? [reports[0].metrics.matchId.split("_").pop()!] : [] } }),
     mindSaveDebrief: async (db) => { mind = { ...mind, debriefs: [db, ...mind.debriefs] }; return { ok: true, value: { ...mind, pending: [] } }; },

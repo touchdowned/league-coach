@@ -15,6 +15,7 @@ export interface Settings {
   autoAdvanceSec: number;
   autoReview: boolean;
   autoLaunchReplay: boolean;
+  autoRead: boolean;
   launchAtLogin: boolean;
   overlay: boolean;
   overlayNudges: boolean;
@@ -94,6 +95,13 @@ export interface CoachApi {
   /** Plays the replay and reads minions off the minimap, then returns the re-read game. */
   replayRead(matchId: string): Promise<Result<GameReport>>;
   replayReadCancel(): Promise<Result<void>>;
+  /** Closes the open replay window (never a live game). */
+  replayClose(): Promise<Result<boolean>>;
+  /** The one focus worked out from the read replays, and the focus that just stuck (if one did). */
+  focusGet(): Promise<Result<{ focus: import("../core/focus").Focus | null; moved: string | null }>>;
+  /** A game's replay was read in the background. */
+  onGamesUpdated(cb: (r: GameReport) => void): () => void;
+  onAutoRead(cb: (s: { matchId: string; stage: "reading" | "done" | "waiting" | "failed"; label: string }) => void): () => void;
   benchGet(): Promise<Result<import("../core/benchmark").LaneStats[]>>;
   onBenchUpdated(cb: (added: number) => void): () => void;
   onScanProgress(cb: (p: TaskProgress & { phase?: string }) => void): () => void;
@@ -180,6 +188,7 @@ export interface DraftInfo {
   queue: { tone: "good" | "warn" | "bad"; title: string; body: string };
   plan: GamePlan | null;
   lastIntention: string | null;
+  focus?: { title: string; rule: string; cue: string; pass: string; why: string } | null;
 }
 
 export interface LivePayload {

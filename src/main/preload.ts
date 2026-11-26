@@ -58,6 +58,10 @@ contextBridge.exposeInMainWorld("coach", {
   vodPick: call("vod:pick"),
   folderPick: call("folder:pick"),
 
+  replayClose: call("replay:close"),
+  focusGet: call("focus:get"),
+  onGamesUpdated: (cb: Cb<unknown>) => on("games:updated", cb),
+  onAutoRead: (cb: Cb<unknown>) => on("autoread:status", cb),
   postGameStatus: call("postgame:status"),
   onPostGameStatus: (cb: Cb<unknown>) => on("postgame:status", cb),
   onPostGameOpen: (cb: Cb<unknown>) => on("postgame:open", cb),

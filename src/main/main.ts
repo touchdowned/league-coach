@@ -17,6 +17,8 @@ import { growBench, readBench } from "./bench";
 import { champPosAt, type ChampSample, type WaveTrack } from "../core/waves";
 import { cameraLookingAt } from "../core/camera";
 import { JsonStore, Settings } from "./store";
+import { ReadQueue, type PendingRead } from "../core/autoread";
+import { computeFocus, FOCUS_DEFS, type Focus, type FocusState } from "../core/focus";
 import { listVods, matchVod } from "./vod";
 import { startAutoUpdates } from "./updater";
 import { MindService } from "./mind";
@@ -236,6 +238,8 @@ async function closeOverlay(finished: boolean, lost = false) {
   overlay = null;
   overlayMatch = null;
   if (matchId) send("overlay:closed", { matchId, finished, lost });
+  // A walkthrough watched to the end is done with the replay.
+  if (finished && !lost) await lc.closeReplay().catch(() => false);
   focusWindow();
 }
 
@@ -399,7 +403,7 @@ async function recordClips(matchId: string, moments: number[]): Promise<Record<s
 }
 
 /** Plays this game's replay, reads minions off the minimap, and re-reads the game with them. */
-async function readReplay(matchId: string): Promise<GameReport> {
+async function readReplay(matchId: string, focus = true): Promise<GameReport> {
   const s = await store.readSettings();
   if (!s.apiKey) throw new Error("Add your Riot API key in Settings first.");
   scanCancelled = false;
@@ -417,8 +421,70 @@ async function readReplay(matchId: string): Promise<GameReport> {
   const report = buildReport(match, await riot.getTimeline(matchId), puuid, waves, await itemsFor(match.info.gameVersion));
   reports = reports.map((r) => (r.metrics.matchId === matchId ? report : r));
   await store.writeReports(reports);
-  focusWindow();
+  if (focus) focusWindow();
   return report;
+}
+
+// ---- Reading replays by itself, and the one focus that comes out of them ----
+const readQueue = new ReadQueue();
+let autoReading: string | null = null;
+const autoStatus = (matchId: string, stage: "reading" | "done" | "waiting" | "failed", label: string) => send("autoread:status", { matchId, stage, label });
+
+/** Called with every observed client phase. Starts the next waiting read, or calls one off. */
+async function autoReadTick(phase: string | null) {
+  if (readQueue.mustCancel(phase) && autoReading) {
+    scanCancelled = true;
+    return;
+  }
+  if (!readQueue.pending.length) return;
+  if (!(await store.readSettings()).autoRead) return;
+  const matchId = readQueue.next(phase, Date.now());
+  if (matchId) void runAutoRead(matchId);
+}
+
+async function runAutoRead(matchId: string) {
+  let outcome: "done" | "later" | "retry" | "drop" = "later";
+  let opened = false;
+  try {
+    const r = reports.find((x) => x.metrics.matchId === matchId);
+    if (!r) return void (outcome = "drop");
+    if (Array.isArray(r.findings)) return void (outcome = "done");
+    const lc = await league();
+    const st = await lc.state(matchId);
+    // A replay the player opened is theirs: wait for it to close.
+    if (st.kind === "open" || st.kind === "client-closed") return;
+    if (st.kind === "unavailable" || st.kind === "api-disabled") {
+      outcome = "drop";
+      return void autoStatus(matchId, "failed", st.kind === "unavailable" ? st.reason : "Turn on replay control in Settings so replays can be read by themselves.");
+    }
+    autoReading = matchId;
+    opened = true;
+    outcome = "retry";
+    autoStatus(matchId, "reading", "Reading your replay. It closes by itself when it's done.");
+    const report = await readReplay(matchId, false);
+    outcome = "done";
+    send("games:updated", report);
+    autoStatus(matchId, "done", report.findings?.length ? `Replay read: ${report.findings.length} moments measured.` : "Replay read.");
+  } catch (err) {
+    const off = scanCancelled;
+    if (off) outcome = "later";
+    autoStatus(matchId, off ? "waiting" : "failed", off ? "Replay reading paused while you play. It picks up again after." : (err as Error).message);
+  } finally {
+    autoReading = null;
+    if (opened) await (await league()).closeReplay().catch(() => false);
+    readQueue.finish(matchId, outcome, Date.now());
+    await store.writeJson("pending-reads.json", readQueue.pending);
+  }
+}
+
+/** The focus as last computed, for the champ select card. */
+let lastFocus: Focus | null = null;
+async function currentFocus() {
+  const saved = await store.readJson<FocusState | null>("focus.json", null);
+  const res = computeFocus(reports, saved);
+  if (JSON.stringify(res.state) !== JSON.stringify(saved)) await store.writeJson("focus.json", res.state);
+  lastFocus = res.focus;
+  return { focus: res.focus, moved: res.moved ? FOCUS_DEFS[res.moved].title : null };
 }
 
 /**
@@ -752,7 +818,14 @@ app.whenReady().then(async () => {
     matchPublished,
     sync,
     status: (st) => send("postgame:status", st),
-    onPhase: (phase) => void mind?.onPhase(phase).catch(() => undefined),
+    onPhase: (phase) => {
+      void mind?.onPhase(phase).catch(() => undefined);
+      void autoReadTick(phase).catch(() => undefined);
+    },
+    queueRead: (matchId) => {
+      readQueue.add(matchId, Date.now());
+      void store.writeJson("pending-reads.json", readQueue.pending);
+    },
     openReview: (matchId) => {
       send("postgame:open", matchId);
       focusWindow();
@@ -764,6 +837,10 @@ app.whenReady().then(async () => {
     },
   });
   handle("postgame:status", () => watcher?.status);
+  readQueue.pending = (await store.readJson<PendingRead[]>("pending-reads.json", [])).filter((p) => reports.some((r) => r.metrics.matchId === p.matchId && !Array.isArray(r.findings)));
+  handle("focus:get", () => currentFocus());
+  await currentFocus().catch(() => undefined);
+  handle("replay:close", async () => (await league()).closeReplay());
 
   // Mental game: draft card, live overlay, debriefs.
   mind = new MindService({
@@ -771,6 +848,7 @@ app.whenReady().then(async () => {
     league,
     settings: () => store.readSettings(),
     reports: () => reports,
+    focus: () => lastFocus,
     send,
     focusMain: focusWindow,
     preload: path.join(__dirname, "preload.js"),
