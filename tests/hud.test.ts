@@ -44,6 +44,8 @@ describe("replay HUD bars", () => {
       const f = screen(h, [
         { side: 100, slot: 3, hp: 0.5, res: 0.75 },
         { side: 200, slot: 2, hp: 0.25, res: 1 },
+        { side: 100, slot: 4, hp: 0.6, res: 0.4 },
+        { side: 200, slot: 4, hp: 1, res: 1 },
       ]);
       const size = { w: f.w, h: f.h };
       const s = readHudStrips(1000, crop(f, hudStrip(100, size)), crop(f, hudStrip(200, size)), size);
@@ -52,6 +54,10 @@ describe("replay HUD bars", () => {
       expect(Math.abs(s.hp[7]! - 25)).toBeLessThanOrEqual(3);
       expect(s.res[7]).toBe(100);
       expect(s.hp[0]).toBeNull();
+      // The fifth frame on each side is inside the strip too.
+      expect(Math.abs(s.hp[4]! - 60)).toBeLessThanOrEqual(3);
+      expect(Math.abs(s.res[4]! - 40)).toBeLessThanOrEqual(3);
+      expect(s.hp[9]).toBe(100);
     }
   });
 

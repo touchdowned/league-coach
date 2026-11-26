@@ -491,26 +491,10 @@ export async function scanReplay(
       s.unk = s.unk.filter((r) => !(r as { done?: true }).done);
       if (!s.unk.length) delete s.unk;
     }
-    const dropped = dropJumps(champs);
-    // Who's alive when, from Live Client's isDead (polls are sorted by game time).
-    const aliveAt = (id: number, t: number) => {
-      const name = players.find((p) => p.id === id)?.champion;
-      let lo = 0;
-      let hi = live.length - 1;
-      let at = -1;
-      while (lo <= hi) {
-        const m = (lo + hi) >> 1;
-        if (live[m].t <= t) {
-          at = m;
-          lo = m + 1;
-        } else hi = m - 1;
-      }
-      const lp = at >= 0 ? live[at].players.find((x) => champKey(x.championName) === champKey(name ?? "")) : undefined;
-      return lp ? !lp.isDead : true;
-    };
-    const named = nameRings(champs, teamOf, { aliveAt, ids: players.map((p) => p.id), myTeam: me.teamId });
-    // With your team's fog only allies are always on the map, so only they get filled there.
-    const filled = fillOcclusions(champs, players.map((p) => p.id), aliveAt, (id, fog) => fog === "off" || teamOf(id) === me.teamId);
+    // Verify runs keep the reads as they came off the minimap, so the tracking below can be
+    // re-run offline on the same frames (--reuse --reprocess).
+    const champsRaw = debugDir ? (JSON.parse(JSON.stringify(champs)) as ChampSample[]) : undefined;
+    const { dropped, named, filled } = trackChampions(champs, players, me, live);
     samples.sort((a, b) => a.t - b.t);
     onProgress({ phase: "done", label: "Done", done: 1, total: 1 });
     if (debugDir) await dumpFrame(debugDir, "background", bg, { rect: minimap });
@@ -535,7 +519,7 @@ export async function scanReplay(
       views,
     };
     hud.sort((a, b) => a.t - b.t);
-    return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, hud, scanInfo };
+    return { version: 2, source: "replay-minimap", samples, champs, viewTeam, live, hud, scanInfo, ...(champsRaw ? { champsRaw } : {}) };
   } finally {
     await lc.setPaused(true);
     if (original) {
@@ -544,6 +528,35 @@ export async function scanReplay(
       if (original.cameraPosition) await lc.setRender({ cameraPosition: original.cameraPosition, cameraRotation: original.cameraRotation });
     }
   }
+}
+
+/**
+ * Champion tracking after reading: drops impossible jumps, names unnamed rings from each
+ * champion's track, and fills in champions hidden under another icon. Changes `champs` in place.
+ */
+export function trackChampions(champs: ChampSample[], players: ScanPlayer[], me: ScanPlayer, live: LivePoll[]) {
+  const teamOf = (id: number) => players.find((p) => p.id === id)?.teamId ?? 0;
+  const dropped = dropJumps(champs);
+  // Who's alive when, from Live Client's isDead (polls are sorted by game time).
+  const aliveAt = (id: number, t: number) => {
+    const name = players.find((p) => p.id === id)?.champion;
+    let lo = 0;
+    let hi = live.length - 1;
+    let at = -1;
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1;
+      if (live[m].t <= t) {
+        at = m;
+        lo = m + 1;
+      } else hi = m - 1;
+    }
+    const lp = at >= 0 ? live[at].players.find((x) => champKey(x.championName) === champKey(name ?? "")) : undefined;
+    return lp ? !lp.isDead : true;
+  };
+  const named = nameRings(champs, teamOf, { aliveAt, ids: players.map((p) => p.id), myTeam: me.teamId });
+  // With your team's fog only allies are always on the map, so only they get filled there.
+  const filled = fillOcclusions(champs, players.map((p) => p.id), aliveAt, (id, fog) => fog === "off" || teamOf(id) === me.teamId);
+  return { dropped, named, filled };
 }
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;

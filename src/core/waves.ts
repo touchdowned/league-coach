@@ -43,6 +43,11 @@ function along(lane: Lane, p: Pt): { s: number; off: number } {
   return best;
 }
 
+/** A lane's length in game units, inhibitor to inhibitor (what progress 0..1 spans). */
+export const laneLength = (lane: Lane) => LENGTH[lane];
+/** Progress of a map point along a lane (0 blue base .. 1 red base), whatever its distance from the lane. */
+export const progressOn = (lane: Lane, p: Pt) => along(lane, p).s;
+
 /** Which lane a map point is on, and how far along it (0 blue base .. 1 red base). */
 export function projectLane(p: Pt): { lane: Lane; s: number } | null {
   let best: { lane: Lane; s: number; off: number } | null = null;
@@ -102,6 +107,8 @@ export interface WaveTrack {
   samples: WaveSample[];
   /** Champion positions from the replay (version 2). */
   champs?: ChampSample[];
+  /** Verify runs only: the champion reads before tracking (jumps, naming, fills), to re-run it offline. */
+  champsRaw?: ChampSample[];
   /** Whose fog the "team" view showed. Vision reads are only used when it's yours. */
   viewTeam?: number;
   /** Live Client Data polls taken during the pass (only the ones around a change). */

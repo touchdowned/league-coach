@@ -371,6 +371,14 @@ describe("scan cleanup", () => {
     // A recall: moves once and stays. Kept.
     const r: ChampSample[] = [1000, 2000, 3000, 4000].map((t) => ({ t, fog: "off" as const, at: [{ id: 1, x: t < 2500 ? 7000 : 400, y: t < 2500 ? 7000 : 400 }] }));
     expect(dropJumps(r)).toBe(0);
+    // The last read before a death, in the fountain 0.5 s after a read in top lane (NA1_5686039660,
+    // Kayle at 5:01): nothing after confirms it. Dropped.
+    const d: ChampSample[] = [299000, 299500, 300000, 300500, 301000].map((t) => ({ t, fog: "off" as const, at: [{ id: 1, x: t < 301000 ? 1942 : 380, y: t < 301000 ? 13053 : 911 }] }));
+    expect(dropJumps(d)).toBe(1);
+    expect(d[4].at).toEqual([]);
+    // A respawn: the first read after a long gap, far from the last one. Kept.
+    const s: ChampSample[] = [1000, 1500, 20000, 20500].map((t) => ({ t, fog: "off" as const, at: [{ id: 1, x: t < 2000 ? 7000 : 400, y: t < 2000 ? 7000 : 400 }] }));
+    expect(dropJumps(s)).toBe(0);
   });
 
   it("takes the fountains from later frames", () => {

@@ -31,11 +31,16 @@ export interface HudRead {
   res: number | null;
 }
 
-/** The strip of the screen that holds one side's five frames (for cropping before reading). */
+/**
+ * The strip of the screen that holds one side's five frames (for cropping before reading).
+ * It runs to y 650: the fifth frame's resource bar ends at y 632. (It used to stop at 600,
+ * which cut off the fifth frame's bars on both sides: Leona and Sona read 0% on NA1_5686039660,
+ * Leona and Alistar on NA1_5686076870.)
+ */
 export function hudStrip(side: 100 | 200, screen: { w: number; h: number }) {
   const k = screen.h / REF_H;
   const w = Math.ceil(110 * k);
-  return { x: side === 100 ? 0 : screen.w - w, y: Math.floor(140 * k), w, h: Math.min(screen.h, Math.ceil(600 * k)) - Math.floor(140 * k) };
+  return { x: side === 100 ? 0 : screen.w - w, y: Math.floor(140 * k), w, h: Math.min(screen.h, Math.ceil(650 * k)) - Math.floor(140 * k) };
 }
 
 /**

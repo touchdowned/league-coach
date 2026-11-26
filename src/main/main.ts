@@ -8,13 +8,13 @@ import { parseRiotId, RiotClient, SR_QUEUES } from "../core/riot";
 import type { GameReport } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
-import { openReplay, scanReplay } from "./scan";
+import { openReplay, scanReplay, trackChampions } from "./scan";
 import { champKey, checkAllies, checkCs, checkFogOff, checkItems, checkLevels, checkPositions, invChanges } from "../core/telemetry";
 import { checkGold, itemTable } from "../core/gold";
 import { checkWards, placeWards } from "../core/wards";
 import { checkHud } from "../core/hud";
 import { growBench, readBench } from "./bench";
-import type { WaveTrack } from "../core/waves";
+import type { ChampSample, WaveTrack } from "../core/waves";
 import { JsonStore, Settings } from "./store";
 import { listVods, matchVod } from "./vod";
 import { startAutoUpdates } from "./updater";
@@ -297,6 +297,19 @@ async function verifyScan(matchId: string, untilSec: number, outDir: string, reu
     const debugDir = path.join(outDir, `frames-${matchId}`);
     waves = await scanReplay(lc, matchId, (p) => console.log(p.label), () => false, players, me, untilSec, debugDir);
     await store.writeJson(wavesFile(matchId), waves);
+  }
+  // --reuse --offstep N: keep only every Nth fog-off frame (what a 2/N fps pass would have read).
+  // --reuse --reprocess: re-run champion tracking on the stored raw reads (with --offstep, always).
+  const arg = (k: string) => (process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : undefined);
+  const offStep = Number(arg("--offstep") ?? 1);
+  if (reuse && waves.champsRaw && (process.argv.includes("--reprocess") || offStep > 1)) {
+    const firstOff = waves.samples[0]?.t ?? 0;
+    const offMs = 1000 / (waves.scanInfo?.passes?.find((p) => p.fog === "off")?.fps ?? 2);
+    const keep = (t: number) => Math.round((t - firstOff) / offMs) % offStep === 0;
+    const champs = (JSON.parse(JSON.stringify(waves.champsRaw)) as ChampSample[]).filter((c) => c.fog !== "off" || keep(c.t));
+    const tracking = trackChampions(champs, players, me, waves.live ?? []);
+    waves = { ...waves, champs, samples: waves.samples.filter((s) => keep(s.t)), hud: (waves.hud ?? []).filter((h) => keep(h.t)) };
+    console.log(`reprocessed: off step ${offStep}, ${JSON.stringify(tracking)}`);
   }
   const wallSec = Math.round((Date.now() - t0) / 1000);
   // Item prices and recipes for the gold estimate, from the Data Dragon version of this patch.
