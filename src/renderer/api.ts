@@ -1,6 +1,7 @@
 import type { ProgressEvent, ProgressResult, ProgressState } from "../core/progress";
 import type { PostGameStatus } from "../core/postgame";
 import type { GameReport } from "../core/types";
+import type { ChallengeId, Debrief, GamePlan, LiveRecord, LiveView } from "../core/mind";
 
 export type { PostGameStatus };
 
@@ -15,6 +16,11 @@ export interface Settings {
   autoReview: boolean;
   autoLaunchReplay: boolean;
   launchAtLogin: boolean;
+  overlay: boolean;
+  overlayNudges: boolean;
+  overlayPos: { x: number; y: number } | null;
+  draftCompanion: boolean;
+  autoDebrief: boolean;
 }
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -117,6 +123,67 @@ export interface CoachApi {
   postGameStatus(): Promise<Result<PostGameStatus | undefined>>;
   onPostGameStatus(cb: (s: PostGameStatus) => void): () => void;
   onPostGameOpen(cb: (matchId: string) => void): () => void;
+
+  mindGet(): Promise<Result<MindData>>;
+  mindDraftInfo(): Promise<Result<DraftInfo>>;
+  mindLockPlan(p: { skill: ChallengeId; mental: ChallengeId; intention: string; champion?: string; role?: string }): Promise<Result<GamePlan>>;
+  mindNextPlan(): Promise<Result<GamePlan | null>>;
+  mindCloseDraft(): Promise<Result<void>>;
+  mindSaveDebrief(db: Debrief): Promise<Result<MindData>>;
+  mindSkipDebrief(gameId: string): Promise<Result<MindData>>;
+  mindCheckIn(n: number): Promise<Result<void>>;
+  mindPreview(): Promise<Result<void>>;
+  mindEndPreview(): Promise<Result<void>>;
+  mindWindowMode(): Promise<Result<"fullscreen" | "windowed" | "borderless" | "unknown">>;
+  mindSetOverlayPos(pos: { x: number; y: number }): Promise<Result<void>>;
+  onMindDraft(cb: (d: DraftInfo) => void): () => void;
+  onMindLive(cb: (p: LivePayload) => void): () => void;
+  onMindPlan(cb: (p: GamePlan) => void): () => void;
+  onMindDebrief(cb: (gameId: string) => void): () => void;
+}
+
+export interface MindData {
+  plans: GamePlan[];
+  records: LiveRecord[];
+  debriefs: Debrief[];
+  pending: string[];
+}
+
+export interface DraftOption {
+  id: ChallengeId;
+  title: string;
+  rule: string;
+  why: string;
+  pass: string;
+  reason: string;
+}
+
+export interface DraftInfo {
+  phase: "champ-select" | "locked";
+  champion: string | null;
+  championName: string | null;
+  role: string;
+  enemy: string | null;
+  enemyName: string | null;
+  read: { games: number; winRate: number | null; cs10: number | null; deathsPre14: number | null; vsGames: number; vsWinRate: number | null; vsGold15: number | null } | null;
+  skillOptions: DraftOption[];
+  mentalOptions: DraftOption[];
+  recommendedSkill: ChallengeId;
+  recommendedMental: ChallengeId;
+  queue: { tone: "good" | "warn" | "bad"; title: string; body: string };
+  plan: GamePlan | null;
+  lastIntention: string | null;
+}
+
+export interface LivePayload {
+  view: LiveView;
+  hidden?: boolean;
+  editing?: boolean;
+  pos?: { x: number; y: number } | null;
+  nudges?: boolean;
+  intention?: string;
+  rules: { skill: string; mental: string; skillId: ChallengeId; mentalId: ChallengeId } | null;
+  preview?: boolean;
 }
 
 declare global {
