@@ -83,7 +83,16 @@ export function FindingOverlay({ matchId, findingId }: { matchId: string; findin
           </>
         )}
         <footer className="fo-actions">
-          <button className="fo-btn primary" onClick={() => coach().stagePlayback({ paused: !(pb?.paused ?? true) })}>
+          <button
+            className="fo-btn primary"
+            onClick={async () => {
+              const play = pb?.paused ?? true;
+              // Jump frames the champion with a fixed camera (an attached camera doesn't move while
+              // paused). Once it plays, the camera goes back on the champion so they stay in view.
+              if (play) await coach().stageRender({ cameraMode: "top", cameraAttached: true, selectionName: f.jump.follow });
+              await coach().stagePlayback({ paused: !play });
+            }}
+          >
             {pb?.paused === false ? <><Pause size={14} /> Pause</> : <><Play size={14} fill="currentColor" /> Play</>}
           </button>
           <button className="fo-btn" onClick={() => jump(f)} title={`Back to ${fmtTime(f.jump.t)}, paused`}>

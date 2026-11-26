@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import https from "https";
 import path from "path";
+import { cameraLookingAt } from "../core/camera";
 
 /**
  * Talks to the League client on this PC (post-game only):
@@ -235,10 +236,20 @@ export class LeagueClient {
     return s?.gameData?.gameId ? String(s.gameData.gameId) : null;
   }
 
-  /** Lock the camera onto a player by champion name. Best effort: ignored if unsupported. */
-  async follow(championName: string): Promise<void> {
+/**
+   * Select a player by champion name and put the camera on them. Selecting and attaching alone
+   * leaves a paused replay's camera where it was (checked on NA1_5686025956: after a seek to
+   * 3:09 the attached top camera stayed on top lane, Smolder in bot); and the top camera ignores a
+   * cameraPosition. So when the champion's map position `at` is known (from the scan), the
+   * camera switches to the free camera framed on that point, the way the scan frames the map.
+   * Best effort: ignored if unsupported.
+   */
+  async follow(championName: string, at?: { x: number; y: number }): Promise<void> {
     try {
-      await request("https://127.0.0.1:2999/replay/render", { method: "POST", body: { cameraAttached: true, selectionName: championName, interfaceScoreboard: true } });
+      if (at) {
+        await request("https://127.0.0.1:2999/replay/render", { method: "POST", body: { cameraMode: "fps", cameraAttached: false } });
+        await request("https://127.0.0.1:2999/replay/render", { method: "POST", body: { ...cameraLookingAt(at, 2200, 56, 0), selectionName: championName, interfaceScoreboard: true } });
+      } else await request("https://127.0.0.1:2999/replay/render", { method: "POST", body: { cameraAttached: true, selectionName: championName, interfaceScoreboard: true } });
     } catch {
       /* not critical */
     }

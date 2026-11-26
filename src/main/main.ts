@@ -5,7 +5,7 @@ import { pathToFileURL } from "url";
 import { buildReport } from "../core/analysis";
 import { applyEvent, EMPTY_PROGRESS, ProgressEvent, ProgressState } from "../core/progress";
 import { parseRiotId, RiotApiError, RiotClient, SR_QUEUES } from "../core/riot";
-import type { GameReport } from "../core/types";
+import type { GameReport, MatchDto } from "../core/types";
 import { gameIdOf, LeagueClient } from "./league";
 import { PostGameWatcher } from "./postgame";
 import { openReplay, scanReplay, trackChampions } from "./scan";
@@ -540,6 +540,38 @@ app.whenReady().then(async () => {
     if (st.kind === "open" && !sameGame(matchId, st.length)) return { kind: "unavailable", reason: "A different game's replay is open in League. Close it, then open this game's replay from here." } as const;
     return st;
   });
+  // Where a champion stands at the open replay's current time, from that game's scan (the
+  // nearest fog-off read within 3 s); undefined when the game or the champion isn't read.
+  const champAtNow = async (lc: LeagueClient, champ: string): Promise<{ x: number; y: number } | undefined> => {
+    const pb = await lc.playback();
+    if (!pb) return undefined;
+    let id: string | null = null;
+    let best = Infinity;
+    for (const r of reports) {
+      const d = Math.abs(r.metrics.durationMin * 60 - pb.length);
+      if (d <= SAME_GAME_SEC && d < best) {
+        best = d;
+        id = r.metrics.matchId;
+      }
+    }
+    if (!id) return undefined;
+    const waves = await store.readJson<WaveTrack | null>(wavesFile(id), null);
+    const match = (await store.cache().get(`match-${id}`)) as MatchDto | null | undefined;
+    const pid = match?.info.participants.find((p) => champKey(p.championName) === champKey(champ))?.participantId;
+    if (!waves?.champs || !pid) return undefined;
+    const t = pb.time * 1000;
+    let at: { x: number; y: number } | undefined;
+    let dt = 3000;
+    for (const c of waves.champs) {
+      if (c.fog !== "off" || Math.abs(c.t - t) > dt) continue;
+      const a = c.at.find((x) => x.id === pid);
+      if (a) {
+        dt = Math.abs(c.t - t);
+        at = { x: a.x, y: a.y };
+      }
+    }
+    return at;
+  };
   // Which synced game the open replay is, by its length; null when no replay is open or none fits.
   handle("replay:openMatch", async () => {
     const pb = await (await league()).playback();
@@ -554,7 +586,10 @@ app.whenReady().then(async () => {
   handle("replay:download", async (matchId: string) => (await league()).download(matchId));
   handle("replay:watch", async (matchId: string) => (await league()).watch(matchId));
   handle("replay:seek", async (sec: number, paused: boolean) => (await league()).seek(sec, paused));
-  handle("replay:follow", async (champ: string) => (await league()).follow(champ));
+  handle("replay:follow", async (champ: string) => {
+    const lc = await league();
+    return lc.follow(champ, await champAtNow(lc, champ));
+  });
   handle("replay:enableApi", async () => (await league()).enableReplayApi());
   handle("bench:get", () => readBench(store));
 
