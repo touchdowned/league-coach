@@ -79,7 +79,7 @@ interface Def {
 export const FOCUS_DEFS: Record<FocusKey, Def> = {
   recall: {
     title: "Recall on a crash",
-    rule: "Press B only once your wave has reached their tower. If it hasn't, kill the wave in front of you first, or stay for the next one.",
+    rule: "During laning, press B once your wave has reached their tower. If it hasn't, kill the wave in front of you first. The exception: with more of them than of you within 2500 units, or the one in front of you a level breakpoint or 875 gold ahead, there is no wave to push, so back straight away.",
     cue: "Each time your hand goes to B, ask: where is my wave right now?",
     unit: ["recall that loses more than 1.5 waves or a cannon wave", "recalls that lose more than 1.5 waves or a cannon wave"],
   },

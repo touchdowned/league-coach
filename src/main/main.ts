@@ -17,7 +17,7 @@ import { growBench, readBench } from "./bench";
 import { champPosAt, type ChampSample, type WaveTrack } from "../core/waves";
 import { cameraLookingAt } from "../core/camera";
 import { JsonStore, Settings } from "./store";
-import { ReadQueue, WATCH_PHASE, type PendingRead } from "../core/autoread";
+import { ReadQueue, shortRead, WATCH_PHASE, type PendingRead } from "../core/autoread";
 import { computeFocus, FOCUS_DEFS, type Focus, type FocusState } from "../core/focus";
 import { listVods, matchVod } from "./vod";
 import { startAutoUpdates } from "./updater";
@@ -361,7 +361,7 @@ async function offlineReports(gameName: string): Promise<GameReport[]> {
     if (!SR_QUEUES.includes(match.info.queueId) || match.info.gameDuration < 600) continue;
     const me = match.info.participants.find((p) => (p.riotIdGameName ?? "").trim().toLowerCase() === name);
     if (!me) continue;
-    const waves = await store.readJson<WaveTrack | null>(wavesFile(ids[i]), null);
+    const waves = await savedWaves(ids[i]);
     // Item prices come from the per-patch cache; a patch never fetched leaves the item lines out.
     const items = waves ? await itemsFor(match.info.gameVersion).catch(() => undefined) : undefined;
     out.push(buildReport(match, timeline, me.puuid, waves ?? undefined, items));
@@ -400,7 +400,7 @@ async function runSync(): Promise<GameReport[]> {
     const match = await riot.getMatch(ids[i]);
     if (!SR_QUEUES.includes(match.info.queueId) || match.info.gameDuration < 600) continue; // skip ARAM, remakes
     const timeline = await riot.getTimeline(ids[i]);
-    const waves = await store.readJson<WaveTrack | null>(wavesFile(ids[i]), null);
+    const waves = await savedWaves(ids[i]);
     out.push(buildReport(match, timeline, puuid, waves ?? undefined, waves ? await itemsFor(match.info.gameVersion) : undefined));
   }
   send("sync:progress", { done: ids.length, total: ids.length, label: "Done" });
@@ -446,6 +446,12 @@ async function recordClips(matchId: string, moments: number[]): Promise<Record<s
 }
 
 /** Plays this game's replay, reads minions off the minimap, and re-reads the game with them. */
+/** A game's saved replay read. One that stopped early doesn't count: the game shows as unread and is read again. */
+async function savedWaves(id: string): Promise<WaveTrack | null> {
+  const waves = await store.readJson<WaveTrack | null>(wavesFile(id), null);
+  return waves && !shortRead(waves.scanInfo) ? waves : null;
+}
+
 async function readReplay(matchId: string, focus = true): Promise<GameReport> {
   const s = await store.readSettings();
   scanCancelled = false;
@@ -466,6 +472,8 @@ async function readReplay(matchId: string, focus = true): Promise<GameReport> {
   const me = { id: meP.participantId, champion: meP.championName, teamId: meP.teamId };
   const waves = await scanReplay(await league(), matchId, (p) => send("scan:progress", p), () => scanCancelled, players, me);
   if (waves.samples.length < 20) throw new Error("Couldn't read enough of the minimap. Keep the replay visible on your main monitor while it reads.");
+  const short = shortRead(waves.scanInfo);
+  if (short) throw new Error(`The replay read stopped early (${short}), so it wasn't saved. Keep League in front while it reads; it will be tried again.`);
   await store.writeJson(wavesFile(matchId), waves);
   const report = buildReport(match, await riot.getTimeline(matchId), puuid, waves, await itemsFor(match.info.gameVersion));
   reports = reports.map((r) => (r.metrics.matchId === matchId ? report : r));

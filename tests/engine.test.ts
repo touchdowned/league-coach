@@ -33,6 +33,30 @@ describe("replay-reading engine", () => {
     expect(r.cost).toBeGreaterThan(200);
   });
 
+  it("does not blame a recall for the wave when three of them stood in reach", () => {
+    const g = (x: ReturnType<typeof makeGame>) => {
+      for (const f of x.timeline.info.frames) {
+        const m = f.timestamp / 60000;
+        if (m >= 8) f.participantFrames["3"].minionsKilled -= 8;
+        f.participantFrames["3"].position = { x: 7400, y: 7400 };
+        f.participantFrames["8"].minionsKilled = Math.round(7 * m);
+        for (const id of ["6", "7", "8"]) f.participantFrames[id].position = { x: 8000, y: 8000 };
+        for (const id of ["1", "2", "4", "5"]) f.participantFrames[id].position = { x: 1500, y: 1500 };
+      }
+    };
+    const leaks = read([buy(8 * 60000 + 20000), { type: "TURRET_PLATE_DESTROYED", timestamp: 8 * 60000 + 15000, teamId: 100, laneType: "MID_LANE" }], g);
+    const r = leaks.find((l) => l.kind === "recall");
+    // Nothing left to charge: the farm and the plate went because leaving was forced.
+    expect(r).toBeUndefined();
+  });
+
+  it("does not charge a recall after laning for the farm of the walk", () => {
+    const leaks = read([buy(30 * 60000 + 20000)], (x) => {
+      for (const f of x.timeline.info.frames) f.participantFrames["3"].currentGold = 400;
+    });
+    expect(leaks.some((l) => l.kind === "recall")).toBe(false);
+  });
+
   it("does not count a shop after dying as a recall", () => {
     const leaks = read([death(8 * 60000, 3, 8), buy(8 * 60000 + 40000)]);
     expect(leaks.some((l) => l.kind === "recall")).toBe(false);

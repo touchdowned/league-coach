@@ -70,3 +70,18 @@ export class ReadQueue {
     this.idleSince = null;
   }
 }
+
+/** A read has to cover this much of what it set out to read to count. */
+export const MIN_COVERAGE = 0.8;
+
+/**
+ * Why a scan is too short to count as a read of the game, or null when it covers it. A recording
+ * that stops early (League lost the foreground, the recorder gave up) leaves a minute or two of
+ * frames: saved as a read it yields no findings and the game is never read again.
+ */
+export function shortRead(info: { until?: number; lastFrame?: number; passes?: { fog: string; frames: number; expectedFrames?: number }[] } | undefined): string | null {
+  if (!info) return null;
+  if (info.until && info.lastFrame !== undefined && info.lastFrame < info.until * MIN_COVERAGE) return `the read stopped at ${Math.round(info.lastFrame / 1000)} s of ${Math.round(info.until / 1000)} s`;
+  for (const p of info.passes ?? []) if (p.expectedFrames && p.frames < p.expectedFrames * MIN_COVERAGE) return `the ${p.fog === "off" ? "full-map" : "your-view"} pass got ${p.frames} of ${p.expectedFrames} frames`;
+  return null;
+}

@@ -18,11 +18,12 @@ import { fmtTime } from "./analysis";
 import { goldModel, type ItemTable } from "./gold";
 import { champName } from "./names";
 import { RECALL_MS, waveSpawns } from "./rules";
+import { pressureAt, type Pressure } from "./pressure";
 import { BAD_BACK_WAVES, laneLedger, lostBetween, objectiveSync, pathOf, trips, type ObjectiveSync, type Trip, type WaveLoss } from "./tempo";
 import { describeSpot } from "./track";
 import type { MatchDto, TimelineDto, TimelineEvent } from "./types";
 import { exposures, fights, forwardOf, GANK_RANGE, ITEM_GAP, type Exposure, type Fight, type Matchup } from "./vulnerability";
-import { laneLength, laneOf, type WaveTrack } from "./waves";
+import { champPosAt, laneLength, laneOf, projectLane, type WaveTrack } from "./waves";
 import { allWaveEvents, laneGeometry, MINION_SPEED, type WaveEvent } from "./wavestate";
 
 export interface Finding {
@@ -101,13 +102,19 @@ interface Ctx extends SynthInput {
   waveEvents: WaveEvent[];
   name: (pid: number) => string;
   where: (p: { x: number; y: number }) => string;
+  /** Who was in reach of the player at t, from the fog-off reads. */
+  pressure: (t: number) => Pressure | null;
 }
+
+const LANING_END = 14 * 60 * 1000;
 
 // ---- Recalls ----
 
 function recallFinding(c: Ctx, v: Trip, k: number): Finding | null {
   if (v.kind !== "recall" || !v.loss || !v.lane) return null;
   if (!v.flags.includes("lost_waves") && !v.flags.includes("missed_cannon") && !v.flags.includes("left_wave_pushing_in")) return null;
+  // After laning, the lane's minions are only the player's to answer for when they left from that lane.
+  if (v.start >= LANING_END && (!v.from || projectLane(v.from)?.lane !== v.lane)) return null;
   const lane = LANE_NAME[v.lane];
   const enemy = c.me.teamId === 100 ? 200 : 100;
   const ledger = laneLedger(c.track, v.lane, enemy);
@@ -119,6 +126,10 @@ function recallFinding(c: Ctx, v: Trip, k: number): Finding | null {
     if (l.minions < best.loss.minions - 0.01 || (Math.abs(l.minions - best.loss.minions) <= 0.01 && Math.abs(at - v.away) < Math.abs(best.at - v.away))) best = { at, loss: l };
   }
   const saved = v.loss.minions - best.loss.minions;
+  // Outnumbered, or behind the one in reach: there was no wave to push, so the trip's losses are not a
+  // finding unless a clearly earlier start (before they arrived) would have kept them.
+  const pressed = c.pressure(Math.min(v.away, v.start));
+  if (pressed?.blocked && !(saved >= 3 && best.at <= v.away - 10 * SEC && !c.pressure(best.at)?.blocked)) return null;
   const proof = [
     `Recall began at ${fmtTime(v.start)} ${v.from ? c.where(v.from) : ""}${v.channelSeen ? ` (stood still for the ${s(RECALL_MS)} s channel)` : ""}; in the fountain ${fmtTime(v.arrive)}${v.leave !== null ? ` to ${fmtTime(v.leave)}` : ""}.`,
     v.back !== null ? `Last in XP range of the ${lane} wave at ${fmtTime(v.away)}, back in range at ${fmtTime(v.back)}: ${s(gone)} s away.` : `Last in XP range of the ${lane} wave at ${fmtTime(v.away)} and not back within 150 s; cost counted to ${fmtTime(v.until)}, the earliest a walk from the fountain gets there.`,
@@ -126,6 +137,7 @@ function recallFinding(c: Ctx, v: Trip, k: number): Finding | null {
   // The count of minions at the front when leaving is not quoted: against frame dumps on three scans it was wrong
   // whenever laners stood on the wave or the wave walked strung out (Trip.state stays for the engine's own use).
   proof.push(lossLine(v.loss, lane));
+  if (pressed) proof.push(`${fmtTime(Math.min(v.away, v.start))}: ${pressed.line[0].toLowerCase()}${pressed.line.slice(1)}`);
   for (const w of v.loss.cannonWaves) proof.push(`Wave ${w} was a cannon wave: alive when you left, dead when you got back.`);
   let fix: string;
   if (saved >= 3) {
@@ -428,6 +440,16 @@ export function synthesize(input: SynthInput): { findings: Finding[]; rejected: 
     waveEvents: laneOf(me.teamPosition) ? allWaveEvents(input.track, me.teamId, laneGeometry(events), events) : [],
     name: (pid) => champName(input.match.info.participants.find((p) => p.participantId === pid)?.championName),
     where: (p) => describeSpot(p, me.teamId),
+    pressure: (t) =>
+      pressureAt(
+        {
+          players: input.match.info.participants.map((p) => ({ id: p.participantId, champion: p.championName, teamId: p.teamId })),
+          meId: input.id,
+          timeline: input.timeline,
+          pos: (id, at) => champPosAt(input.track.champs ?? [], id, at) ?? null,
+        },
+        t,
+      ),
   };
   const all: (Finding | null)[] = [];
   ts.forEach((v, k) => all.push(recallFinding(c, v, k)));

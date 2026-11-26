@@ -18,6 +18,7 @@ import type { MatchDto, Participant, ParticipantFrame, TimelineDto, TimelineEven
 import { hasVision, lastSeen, truthAt, visibleAt } from "./vision";
 import { laneOf, waveAt, waveSeries, type WaveRead, type WaveTrack } from "./waves";
 import { champName } from "./names";
+import { pressureAt, type Pressure } from "./pressure";
 
 export type LeakKind = "recall" | "farm" | "roam" | "objective" | "death";
 
@@ -40,6 +41,20 @@ export interface Leak {
   deathMs?: number;
   /** For linking the same mistake across games: why, where, when. */
   tags?: LeakTags;
+  /** Recalls: who was in reach when you left, and since when you had the gold. */
+  recall?: RecallContext;
+}
+
+export interface RecallContext {
+  /** Pushing the wave first was not on: outnumbered, or an enemy in reach was a breakpoint or 875 gold ahead. */
+  blocked: boolean;
+  /** The count of champions in reach, in a sentence. */
+  line: string;
+  /** After the laning phase: lane-crash timing doesn't decide this recall. */
+  late: boolean;
+  /** When you first held an item's worth of gold before this recall, and how much. */
+  richAt?: number;
+  richGold?: number;
 }
 
 export interface LeakTags {
@@ -245,6 +260,23 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
     const parts: { label: string; gold: number }[] = [];
     const evidence: string[] = [];
     const tips: string[] = [];
+    const late = t0 >= LANE_END + MIN;
+    const pressure: Pressure | null = pressureAt(
+      {
+        players: c.track.players,
+        meId: c.me.participantId,
+        timeline: c.timeline,
+        // Only positions known to within a few seconds count: a guess between two minute marks doesn't put anyone in reach.
+        pos: (id, t) => {
+          const p = positionAt(c.track, id, t);
+          return p && !p.dead && (id === c.me.participantId || p.certainty >= 0.8) ? p : null;
+        },
+      },
+      leftAt,
+    );
+    const blocked = !!pressure?.blocked;
+    let richAt: number | undefined;
+    let richGold: number | undefined;
 
     // Farm lost around the trip, measured against your lane opponent during laning.
     let lostCs = 0;
@@ -258,10 +290,9 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
         evidence.push(`${champName(c.opp.championName)} took ${lostCs} more CS than you between ${fmtTime(winA)} and ${fmtTime(winB)}.`);
         tips.push(`Shove the wave into ${champName(c.opp.championName)}'s tower before you back, so it crashes while you're gone instead of dying to their tower.`);
       }
-    } else {
-      // After laning: whatever you'd normally farm while walking.
-      lostCs = Math.round((csRate(c, t0) * (walk + 18)) / 60);
     }
+    // After laning every recall costs the walk's worth of farm, whenever it is taken: that is the price of
+    // the trip, not a mistake, so it isn't charged.
     if (lostCs > 0) parts.push({ label: `${lostCs} CS lost around the trip`, gold: lostCs * GOLD_PER_CS });
 
     const lost = lostWhile(c, leftAt, backAt + 15_000);
@@ -287,7 +318,13 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
       const v = Math.round((heldGold / 1000) * (held / 60) * 70);
       parts.push({ label: `${g(heldGold)}+ unspent for ${held}s`, gold: v });
       evidence.push(`You had ${g(heldGold)} at ${fmtTime(firstRich.timestamp)} and didn't back until ${fmtTime(leftAt)}.`);
-      tips.push(`At ${fmtTime(firstRich.timestamp)} you already had ${g(heldGold)}. Recall on the next wave crash after you pass about 1,300g; fighting with gold in your pocket is fighting an item down.`);
+      richAt = firstRich.timestamp;
+      richGold = heldGold;
+      tips.push(
+        firstRich.timestamp < LANE_END
+          ? `At ${fmtTime(firstRich.timestamp)} you already had ${g(heldGold)}. The recall was the next time your wave reached their tower after that, not ${held}s later: every fight in between was taken with ${g(heldGold)} unspent.`
+          : `At ${fmtTime(firstRich.timestamp)} you already had ${g(heldGold)}. The recall was then, ${held}s before you took it: every fight in between was taken with ${g(heldGold)} unspent.`,
+      );
     }
 
     // The wave when you left, read from the replay.
@@ -322,7 +359,18 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
       }
     }
 
-    const small = pocket < 900 && t0 < 25 * MIN;
+    // With more of them in reach than of you, or one of them a breakpoint or an item ahead, there was no
+    // wave to push: leaving was the play. What the wave did after is not charged, and nothing says "shove".
+    // An earlier crash you passed up still counts: that one was on offer.
+    if (pressure) evidence.push(pressure.line);
+    if (blocked) {
+      const hadWindow = tips.some((x) => /your wave was crashing into/.test(x));
+      for (let i = tips.length - 1; i >= 0; i--) if (/^(Shove|Plates only fall|You left with)/.test(tips[i])) tips.splice(i, 1);
+      if (!hadWindow) for (let i = parts.length - 1; i >= 0; i--) if (/CS lost around the trip|minions died to your tower|fell while you were gone/.test(parts[i].label)) parts.splice(i, 1);
+      evidence.push(`Pushing the wave first was not on from there, so the minions and plates lost to this trip are not counted against you.`);
+    }
+
+    const small = !blocked && pocket < 900 && t0 < 25 * MIN;
     if (small) tips.push(`You backed with ${g(pocket)}, which is less than one real item step. If nothing forces you out, stay until about 1,100–1,300g.`);
     const cost = parts.reduce((s, p) => s + p.gold, 0);
     if (cost < 100) continue;
@@ -335,9 +383,10 @@ function recallLeaks(c: Ctx, deaths: TimelineEvent[]): Leak[] {
       title: `Recall at ${fmtTime(leftAt)} cost about ${g(cost)}`,
       doing: `You recalled from ${where.replace(/^in /, "")} with ${g(pocket)} and were back in about ${Math.round(walk + 18)}s.${small ? " That's a small trip for the time it costs." : ""}`,
       evidence,
-      nextTime: tips.join(" ") || `Time recalls to a wave crash: push, back as the wave hits their tower, and arrive with the next wave.`,
+      nextTime: tips.join(" ") || `Nobody in reach had the numbers or the lead to stop you: get the wave to their tower before you press B, so the next one meets you in lane.`,
       focus: from,
       tags: { cause: recallCause(parts), area: areaOf(from, c.me.teamId), phase: phaseOf(leftAt) },
+      recall: { blocked, line: pressure?.line ?? "", late, richAt, richGold },
     });
   }
   return out;
