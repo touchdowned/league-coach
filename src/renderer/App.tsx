@@ -33,7 +33,7 @@ export function App() {
   return (
     <ProgressProvider>
       <Shell />
-      <Toaster position="bottom-right" theme="dark" toastOptions={{ className: "toast" }} />
+      <Toaster position="bottom-right" theme="light" toastOptions={{ className: "toast" }} />
     </ProgressProvider>
   );
 }

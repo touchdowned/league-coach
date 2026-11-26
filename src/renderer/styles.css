@@ -965,6 +965,7 @@ html.overlay-doc, html.overlay-doc body, html.overlay-doc #root { background: tr
 .wt.overlay .wt-rail:hover { max-height: 70vh; overflow-y: auto; }
 .wt.overlay .wt-rail .wt-note { display: none; }
 .wt.overlay .wt-intro { background: radial-gradient(circle at 50% 50%, rgba(5, 6, 8, 0.4), rgba(5, 6, 8, 0.7)); }
+/* =========================================================================
    Mental game: in-game overlay, champ-select card, Mind tab, debrief
    ========================================================================= */
 body.overlay-body, body.overlay-body #root { background: transparent !important; overflow: hidden; }
@@ -1418,3 +1419,15 @@ h1, h2, h3, strong, b { font-weight: 800; }
 /* The post-game pill in the 68px rail foot: icon over a two-line label, the full text on hover. */
 .rail-foot .postgame-pill { flex-direction: column; justify-content: center; gap: 4px; padding: 8px 4px; text-align: center; font-size: 10.5px; line-height: 1.25; }
 .rail-foot .postgame-pill span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; max-width: 100%; }
+
+/* ---- Light theme fixes (third design, continued) ---- */
+/* Chips drawn on the dark puzzle map keep light text (they inherited the light theme's dark text). */
+.rift-clock, .rift-frozen, .rift-verdict { color: #f2f0eb; }
+/* Best role's verdict uses the old focus-card look; the lesson card has no padding of its own. */
+.focus-card.verdict { padding: 18px 22px; }
+/* Lines drawn in white were invisible on the light surfaces. */
+.radar .ring.avg { stroke: rgba(40, 32, 24, 0.28); }
+.chart .zero { stroke: rgba(40, 32, 24, 0.2); }
+/* Nunito runs wider: the champion table's last column (verdict pills) spilled out of its panel. */
+.table th, .table td { padding-left: 10px; padding-right: 10px; }
+.table .pill { white-space: nowrap; }
