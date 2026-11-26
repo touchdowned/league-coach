@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineEvent } from "../src/core/types";
-import { checkWaveStates, frontSpeed, laneGeometry, laneRead, laneSeries, waveEvents } from "../src/core/wavestate";
+import { checkWaveStates, fromCluster, frontSpeed, laneGeometry, laneRead, laneSeries, waveEvents } from "../src/core/wavestate";
 import { laneLength, pointOnLane, type ChampSample, type WaveSample, type WaveTrack } from "../src/core/waves";
 
 const L = laneLength("MIDDLE");
@@ -151,6 +151,19 @@ describe("wave events", () => {
     const samples = Array.from({ length: 40 }, (_, k) => at(k * 500, k < 6 ? wave(mid - 2000 + k * 160, 5, 1) : k === 10 || k === 11 ? [] : wave(mid - 200, 5, 1), k < 6 ? wave(mid + 2000 - k * 160, 5, -1) : wave(mid + 200, 5, -1)));
     const ev = waveEvents(laneSeries(track(samples), "MIDDLE", 100, geo), "MIDDLE");
     expect(ev.filter((e) => e.kind === "fast push")).toHaveLength(0);
+  });
+});
+
+describe("lead cluster", () => {
+  it("drops a stray dot ahead of the wave, keeps the front wave of two, and keeps a lone last minion", () => {
+    // Blue walks toward higher values: a 4-dot wave at 5000-5300 and one dot 1500 ahead.
+    expect(fromCluster([5000, 5100, 5200, 5300, 6800], 1)).toEqual([5000, 5100, 5200, 5300]);
+    // Two stacked waves 900 apart, the one behind bigger (a cannon): the front one leads.
+    expect(Math.max(...fromCluster([4000, 4100, 4200, 4300, 4400, 4500, 4600, 5500, 5600, 5700], 1))).toBe(5700);
+    // The other side walks toward lower values: its stray is the lowest dot.
+    expect(fromCluster([3000, 7000, 7100, 7200], -1)).toEqual([7000, 7100, 7200]);
+    // A side with one dot left in the lane keeps it.
+    expect(fromCluster([6200], 1)).toEqual([6200]);
   });
 });
 

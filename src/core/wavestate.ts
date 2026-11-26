@@ -124,10 +124,40 @@ interface Raw {
   /** Minions past their own base, units from my inhibitor. */
   own: number[];
   opp: number[];
+  /** Every dot of each side in the lane, stragglers included (for tower range). */
+  ownAny: number[];
+  oppAny: number[];
   mineAll: number;
   theirsAll: number;
   myTower: number;
   theirTower: number;
+}
+
+/**
+ * A side's minions from its lead cluster back. Minions of one wave walk and fight within a few
+ * hundred units of each other, so a dot more than CLUSTER_GAP from every other dot of its side is a
+ * straggler, a summon or a misread (on two scans a single dot ahead of the wave became the lead and
+ * put the wave at the wrong tower). The lead cluster is the front-most chain of 2 or more dots each
+ * within CLUSTER_GAP of the next (not the largest: with two waves stacked, a bigger wave behind with
+ * its cannon would drop the real wave in front); a side with one dot in the lane keeps it. Dots
+ * ahead of the lead cluster are dropped; the lead is its front dot. `dir` 1: this side walks toward higher values.
+ */
+const CLUSTER_GAP = 600;
+export function fromCluster(xs: number[], dir: 1 | -1): number[] {
+  if (xs.length <= 1) return xs;
+  const v = [...xs].sort((a, b) => (a - b) * dir); // back to front
+  let best: [number, number] | null = null; // [start, end] indices, inclusive
+  let i = 0;
+  while (i < v.length) {
+    let j = i;
+    while (j + 1 < v.length && Math.abs(v[j + 1] - v[j]) <= CLUSTER_GAP) j++;
+    const size = j - i + 1;
+    if (size >= 2) best = [i, j]; // the front-most cluster of 2 or more
+    i = j + 1;
+  }
+  if (!best) return xs;
+  const front = v[best[1]];
+  return xs.filter((x) => (x - front) * dir <= 0);
 }
 
 function rawRead(s: WaveSample, lane: Lane, teamId: number, geo: LaneGeometry): Raw {
@@ -142,7 +172,7 @@ function rawRead(s: WaveSample, lane: Lane, teamId: number, geo: LaneGeometry): 
   const theirT = geo.towerAt(lane, them, s.t);
   // A wave still inside its own base (projectLane snaps those to the lane's end) hasn't
   // entered the lane: it counts as alive but can't be a lead or a front.
-  return { t: s.t, own: ownAll.filter((x) => x > 1), opp: oppAll.filter((x) => x < L - 1), mineAll: ownAll.length, theirsAll: oppAll.length, myTower: myT === null ? 0 : u(myT), theirTower: theirT === null ? L : u(theirT) };
+  return { t: s.t, own: fromCluster(ownAll.filter((x) => x > 1), 1), opp: fromCluster(oppAll.filter((x) => x < L - 1), -1), ownAny: ownAll.filter((x) => x > 1), oppAny: oppAll.filter((x) => x < L - 1), mineAll: ownAll.length, theirsAll: oppAll.length, myTower: myT === null ? 0 : u(myT), theirTower: theirT === null ? L : u(theirT) };
 }
 
 function derive(r: Raw, leadMine: number | null, leadTheirs: number | null, mine: number, theirs: number, underTheirTower: number, underMyTower: number): LaneRead {
@@ -190,8 +220,11 @@ function derive(r: Raw, leadMine: number | null, leadTheirs: number | null, mine
 
 const groupMine = (r: Raw, lead: number | null) => (lead === null ? 0 : r.own.filter((x) => x >= lead - GROUP && x <= lead + CONTACT).length);
 const groupTheirs = (r: Raw, lead: number | null) => (lead === null ? 0 : r.opp.filter((x) => x <= lead + GROUP && x >= lead - CONTACT).length);
-const underTheirs = (r: Raw) => r.own.filter((x) => x >= r.theirTower - TOWER_RANGE).length;
-const underMine = (r: Raw) => r.opp.filter((x) => x <= r.myTower + TOWER_RANGE).length;
+// In tower range a single dot counts: the tower's icon hides the rest of a wave hitting it, so the
+// visible edge of that wave is often one dot (with the cluster rule here both plate checks fell:
+// 92.3% to 84.6% and 75% to 62.5%).
+const underTheirs = (r: Raw) => r.ownAny.filter((x) => x >= r.theirTower - TOWER_RANGE).length;
+const underMine = (r: Raw) => r.oppAny.filter((x) => x <= r.myTower + TOWER_RANGE).length;
 
 /** One lane at one sample, from `teamId`'s side (no smoothing: see laneSeries). */
 export function laneRead(s: WaveSample, lane: Lane, teamId: number, geo: LaneGeometry): LaneRead {

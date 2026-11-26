@@ -46,6 +46,8 @@ function steadyControls<T extends { t: number; wards?: Icon[] }>(s: T[]): T[] {
 }
 
 const SAME_SPOT = 350;
+/** Trinket and sight ward cast range (600) plus the read's error. */
+const CAST_RANGE = 600;
 const SHOWN_MS = 3000;
 const HIDDEN_MS = 30_000;
 /**
@@ -128,6 +130,24 @@ export function placeWards(samples: WaveSample[], champs: ChampSample[], events:
         if (d > 1200 || (best && d >= best.d)) continue;
         if (x.t > e.timestamp + SHOWN_MS && !hiddenUntil(w, x.t)) continue;
         best = { x: w.x, y: w.y, d, key, t: x.t, kind: w.kind };
+      }
+    }
+    if (!best && e.wardType !== "CONTROL_WARD") {
+      // Placed under a portrait and only seen once everyone walked off: the first new star of
+      // the team within cast range of where the placer stood, any time in the ward's lifetime,
+      // on a spot no ward of this team holds.
+      for (const x of s) {
+        if (x.t < e.timestamp || x.t > e.timestamp + (LIFETIME[e.wardType ?? ""] ?? HIDDEN_MS)) continue;
+        for (const w of x.wards!) {
+          if (w.team !== team || !fits(w, e.wardType) || Math.hypot(w.x - at.x, w.y - at.y) > CAST_RANGE) continue;
+          if (before.some((b) => Math.hypot(b.x - w.x, b.y - w.y) < SAME_SPOT)) continue;
+          const key = `${Math.round(w.x / SAME_SPOT)}:${Math.round(w.y / SAME_SPOT)}:${team}`;
+          const prev = used.get(key);
+          if (prev && stillThere(prev, e.timestamp)) continue;
+          best = { x: w.x, y: w.y, d: Math.hypot(w.x - at.x, w.y - at.y), key, t: x.t, kind: w.kind };
+          break;
+        }
+        if (best) break;
       }
     }
     if (!best) {

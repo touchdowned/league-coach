@@ -36,9 +36,13 @@ describe("ward positions", () => {
     }));
     const ev: TimelineEvent[] = [{ type: "WARD_PLACED", timestamp: 61_700, creatorId: 4, wardType: "YELLOW_TRINKET" }];
     expect(placeWards(samples, champs, ev, () => 100, 120_000).placed).toEqual([{ t: 61_700, creatorId: 4, wardType: "YELLOW_TRINKET", x: 6900, y: 4100 }]);
-    // Same icon, but the placer left the spot at +3 s: it was in the open and isn't theirs.
+    // Same icon, but the placer left the spot at +3 s. Still theirs: a new star of their team within
+    // cast range (600) of where they stood, inside the trinket's lifetime, that no other event claims.
     const away = champs.map((c) => ({ ...c, at: [{ id: 4, x: c.t < 65_000 ? 7100 : 11_000, y: 4000 }] }));
-    expect(placeWards(samples, away, ev, () => 100, 120_000).placed).toEqual([]);
+    expect(placeWards(samples, away, ev, () => 100, 120_000).placed).toEqual([{ t: 61_700, creatorId: 4, wardType: "YELLOW_TRINKET", x: 6900, y: 4100 }]);
+    // Beyond cast range of where they stood: not theirs.
+    const far = samples.map((x) => ({ ...x, wards: x.wards!.map((w) => ({ ...w, x: 7900 })) }));
+    expect(placeWards(far, away, ev, () => 100, 120_000).placed).toEqual([]);
   });
 
   it("lets a new ward take a spot once the earlier ward there is gone", () => {
