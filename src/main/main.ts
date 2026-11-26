@@ -84,6 +84,8 @@ let overlayRender: Record<string, unknown> | null = null;
 let overlayRects: { x: number; y: number; w: number; h: number }[] = [];
 let overlayHit: ReturnType<typeof setInterval> | null = null;
 let overlayModalOn = false;
+/** Whether the overlay takes the mouse now, as last set by the cursor poll; null makes the poll set it again. */
+let overlayTaking: boolean | null = null;
 let overlayKeys: string[] = [];
 /** A question is waiting: the overlay takes the whole mouse, and these keys from anywhere. */
 function setOverlayModal(on: boolean, keys: string[]) {
@@ -135,7 +137,7 @@ async function openOverlay(matchId: string, route = `overlay/${encodeURIComponen
   // is polled: with the League window active under an ignored window, no mouse-enter arrives.
   overlayRects = [];
   setOverlayModal(false, []);
-  let taking = false;
+  overlayTaking = false;
   if (overlayHit) clearInterval(overlayHit);
   overlayHit = setInterval(() => {
     if (!overlay || overlay.isDestroyed()) return;
@@ -143,8 +145,8 @@ async function openOverlay(matchId: string, route = `overlay/${encodeURIComponen
     const b = overlay.getBounds();
     const [x, y] = [c.x - b.x, c.y - b.y];
     const want = overlayModalOn || overlayRects.some((r) => x >= r.x - 4 && x <= r.x + r.w + 4 && y >= r.y - 4 && y <= r.y + r.h + 4);
-    if (want === taking) return;
-    taking = want;
+    if (want === overlayTaking) return;
+    overlayTaking = want;
     if (want) overlay.setIgnoreMouseEvents(false);
     else overlay.setIgnoreMouseEvents(true, { forward: true });
   }, 40);
@@ -154,8 +156,16 @@ async function openOverlay(matchId: string, route = `overlay/${encodeURIComponen
   if (dev) overlay.loadURL(`${dev}#${hash}`);
   else overlay.loadFile(path.join(__dirname, "../../dist-renderer/index.html"), { hash });
   overlay.once("ready-to-show", () => overlay?.showInactive());
+  const self = overlay;
   overlay.on("closed", () => {
+    // However it closed (closeOverlay, a crash, a newer overlay replacing it): no poll and no
+    // answer keys left behind, or 1-4 would stay taken from every other app.
+    if (overlay !== self) return;
     overlay = null;
+    if (overlayHit) clearInterval(overlayHit);
+    overlayHit = null;
+    overlayRects = [];
+    setOverlayModal(false, []);
   });
   win?.minimize();
   // The overlay sits over the replay window: when the replay closes (or another game's replay
@@ -815,16 +825,20 @@ app.whenReady().then(async () => {
   // One finding shown as a card over the replay, after Jump has put the replay on its moment.
   handle("overlay:finding", (matchId: string, findingId: string) => openOverlay(matchId, `finding/${encodeURIComponent(matchId)}/${encodeURIComponent(findingId)}`));
   handle("overlay:close", (finished: boolean) => closeOverlay(!!finished));
-  handle("overlay:interactive", (on: boolean) => overlay?.setIgnoreMouseEvents(!on, { forward: true }));
+  handle("overlay:interactive", (on: boolean) => {
+    overlay?.setIgnoreMouseEvents(!on, { forward: true });
+    overlayTaking = null;
+  });
   handle("overlay:rects", (rects: { x: number; y: number; w: number; h: number }[]) => {
     overlayRects = Array.isArray(rects) ? rects.slice(0, 20) : [];
   });
   handle("overlay:modal", (on: boolean, keys: string[]) => setOverlayModal(!!on, Array.isArray(keys) ? keys : []));
   handle("overlay:focus", () => {
     if (!overlay) return;
-    overlay.setIgnoreMouseEvents(false);
+    // Focus only: whether it takes the mouse is the cursor poll's to decide. Setting it here
+    // left the window click-through while the poll thought it was taking the mouse.
     overlay.focus();
-    overlay.setIgnoreMouseEvents(true, { forward: true });
+    overlayTaking = null;
   });
   handle("replay:read", (matchId: string) => readReplay(matchId));
   handle("replay:readCancel", () => {
@@ -945,6 +959,7 @@ app.whenReady().then(async () => {
   app.on("activate", () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 
+app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("before-quit", () => {
   watcher?.stop();
   mind?.stop();

@@ -280,6 +280,14 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
     } else startChapter(idx + 1);
   }, [ch, idx, chapters.length, award, startChapter, clock, onFinished]);
 
+  // Skipping a question moves on without counting it as reviewed (no XP for it).
+  const skip = useCallback(() => {
+    if (idx + 1 >= chapters.length) {
+      clock.set({ paused: true });
+      onFinished();
+    } else startChapter(idx + 1);
+  }, [idx, chapters.length, startChapter, clock, onFinished]);
+
   const togglePause = useCallback(() => {
     if (phase === "decide" || phase === "reveal" || phase === "intro") return;
     if (phase === "debrief") return startChapter(idx);
@@ -341,7 +349,7 @@ export function Walkthrough({ r, source, onExit, onFinished }: { r: GameReport; 
           idx={idx}
           count={chapters.length}
         >
-          {phase === "decide" && <DecisionCard ch={ch} onPick={choose} onSkip={next} />}
+          {phase === "decide" && <DecisionCard ch={ch} onPick={choose} onSkip={skip} />}
           {phase === "reveal" && pick !== null && <RevealCard ch={ch} pick={pick} onPlay={playOut} />}
           {phase === "debrief" && <DebriefCard ch={ch} last={idx + 1 >= chapters.length} onReplay={() => startChapter(idx)} onNext={next} />}
         </Stage>
