@@ -123,7 +123,8 @@ function recallFinding(c: Ctx, v: Trip, k: number): Finding | null {
     `Recall began at ${fmtTime(v.start)} ${v.from ? c.where(v.from) : ""}${v.channelSeen ? ` (stood still for the ${s(RECALL_MS)} s channel)` : ""}; in the fountain ${fmtTime(v.arrive)}${v.leave !== null ? ` to ${fmtTime(v.leave)}` : ""}.`,
     v.back !== null ? `Last in XP range of the ${lane} wave at ${fmtTime(v.away)}, back in range at ${fmtTime(v.back)}: ${s(gone)} s away.` : `Last in XP range of the ${lane} wave at ${fmtTime(v.away)} and not back within 150 s; cost counted to ${fmtTime(v.until)}, the earliest a walk from the fountain gets there.`,
   ];
-  if (v.state) proof.push(`When you left: ${v.state.theirs} enemy minions against your ${v.state.mine} at the front${v.state.toMyTower !== null ? `, ${units(Math.max(0, v.state.toMyTower))} from your tower` : ""}.`);
+  // The count of minions at the front when leaving is not quoted: against frame dumps on three scans it was wrong
+  // whenever laners stood on the wave or the wave walked strung out (Trip.state stays for the engine's own use).
   proof.push(lossLine(v.loss, lane));
   for (const w of v.loss.cannonWaves) proof.push(`Wave ${w} was a cannon wave: alive when you left, dead when you got back.`);
   let fix: string;
@@ -132,7 +133,6 @@ function recallFinding(c: Ctx, v: Trip, k: number): Finding | null {
     const crash = c.waveEvents.find((e) => e.kind === "crash" && e.reliable && !e.inferred && e.side === "mine" && e.lane === v.lane && Math.abs(e.t0 - best.at) <= 8 * SEC);
     const when = d < 0 ? `${-d} s earlier, leaving the wave at ${fmtTime(best.at)}` : `${d} s later, leaving the wave at ${fmtTime(best.at)}`;
     fix = `Start this recall ${when}${crash ? `, as your ${crash.size}-minion wave reached their tower at ${fmtTime(crash.t0)}` : ""}. The same ${s(gone)} s trip then loses ${plural(best.loss.minions, "minion")} instead of ${n1(v.loss.minions)}: ${v.loss.xp - best.loss.xp} XP and ${v.loss.gold - best.loss.gold} gold kept.`;
-    if (d > 0 && v.state && v.state.theirs > 0) fix += ` That means killing the ${v.state.theirs} enemy minions at the front first; they died at your tower without you.`;
   } else {
     // No better moment within the window: the trip itself was too long.
     const walk = v.leave !== null && v.back !== null ? s(v.back - v.leave) : null;
@@ -241,7 +241,7 @@ function fightFinding(c: Ctx, f: Fight, k: number): Finding | null {
   const W = champName(worst.champion);
   const death = f.died !== null ? c.trips.find((v) => v.kind === "death" && Math.abs(v.start - f.died!) <= 2000) : undefined;
   const unspent = goldModel(c.timeline, c.items).at(c.id, f.t0);
-  const proof = [`Fight began at ${fmtTime(f.t0)}${f.at ? ` ${c.where(f.at)}` : ""}: ${f.opponents.length} of them in it (${f.opponents.map((o) => champName(o.champion)).join(", ")}), by ${f.kind === "kill" ? "the kill's damage and assist lists" : "who stood within 1200 units when your health dropped"}; on your side you${f.allies.length ? ` and ${f.allies.length} more in those lists or within 1200 units of you (${f.allies.map((a) => champName(c.match.info.participants.find((p) => p.participantId === a)?.championName ?? "")).join(", ")})` : " alone"}.`];
+  const proof = [`Fight began at ${fmtTime(f.t0)}${f.at ? ` ${c.where(f.at)}` : ""}: ${f.opponents.length} of them in it (${f.opponents.map((o) => champName(o.champion)).join(", ")}), by ${f.kind === "kill" ? `the killer, victim, assist and damage lists of the ${f.kills} kill${f.kills === 1 ? "" : "s"} in it` : "who stood within 1200 units when your health dropped"}; on your side you${f.allies.length ? ` and ${f.allies.length} more in those lists or within 1200 units of you (${f.allies.map((a) => champName(c.match.info.participants.find((p) => p.participantId === a)?.championName ?? "")).join(", ")})` : " alone"}.`];
   for (const o of f.opponents) {
     const bits = [`level ${o.level} to your ${f.me.level}`];
     if (o.breakpoint !== null) {
@@ -401,14 +401,13 @@ function deathFinding(c: Ctx, v: Trip, k: number): Finding | null {
     proof: [
       `Killed at ${fmtTime(v.start)}${v.from ? ` ${c.where(v.from)}` : ""}${kill?.killerId ? ` by ${c.name(kill.killerId)}` : ""}; respawned ${fmtTime(v.arrive)}, back in XP range of the ${lane} wave at ${fmtTime(v.until)}: ${s(v.until - v.start)} s out.`,
       lossLine(v.loss, lane),
-      ...(v.state ? [`At the kill: ${v.state.theirs} enemy minions against your ${v.state.mine} at the front.`] : []),
     ],
     cost: `${bounty} gold to them, plus ${lossCost(v.loss)}.${alsoLost(v)}`,
     gold: bounty + v.loss.gold,
     xp: v.loss.xp,
     minions: v.loss.minions,
     fix: first
-      ? `Wave ${first.wave} spawned at ${fmtTime(first.spawnedAt)} and was ${v.state && v.state.theirs > v.state.mine ? "already the bigger wave" : "on its way"} when you took this fight. A death here always costs the ${s(v.arrive - v.start)} s timer plus a ${s(v.until - v.arrive)} s walk; ${n1(v.loss.minions)} minions die in that time. Take the fight only after the wave in front of you is dead: ${v.state ? `${v.state.theirs} minions were still up` : "it was still up"}.`
+      ? `Wave ${first.wave} spawned at ${fmtTime(first.spawnedAt)} and was on its way when you took this fight. A death here always costs the ${s(v.arrive - v.start)} s timer plus a ${s(v.until - v.arrive)} s walk; ${n1(v.loss.minions)} minions die in that time. Take the fight only after the wave in front of you is dead: it was still up.`
       : `A death here costs the ${s(v.arrive - v.start)} s timer plus a ${s(v.until - v.arrive)} s walk.`,
     jump: { t: Math.max(0, v.start - 12 * SEC), follow: c.me.championName },
     score: bounty + v.loss.gold + v.loss.xp * XP_GOLD,

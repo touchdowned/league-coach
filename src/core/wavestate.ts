@@ -483,7 +483,10 @@ const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.le
  * NA1_5686039660 and NA1_5686076870 (see the comment on each). Under 80% right is not reliable:
  * findings leave those kinds out.
  */
-export const RELIABLE: Record<WaveEventKind, boolean> = { crash: true, bounce: true, freeze: true, "slow push": true, "fast push": true };
+// crash: guarded by the evidence rule and the plate check (92.3%, 75% and 90% of readable plates on three scans).
+// bounce, freeze, slow push, fast push: none has been shown right against the dumps yet (before the
+// evidence rule 1 of 6 hand-checked events was right), so they stay out of findings until one is.
+export const RELIABLE: Record<WaveEventKind, boolean> = { crash: true, bounce: false, freeze: false, "slow push": false, "fast push": false };
 
 const CRASH_READS = 2;
 const APPROACH = 1500;
